@@ -27,7 +27,7 @@ import {
 } from "fs";
 import { dirname, join, resolve, basename } from "path";
 import { homedir } from "os";
-import { execSync } from "child_process";
+import { execSync, spawnSync } from "child_process";
 import { Command } from "commander";
 import type {
   HookInput,
@@ -116,7 +116,13 @@ function writeState(statePath: string, state: State): void {
 // ─── Markdown rendering ───────────────────────────────────────────────────────
 
 function fmt(iso: string): string {
-  return iso.replace("T", " ").slice(0, 19);
+  const d = new Date(iso);
+  const dd  = String(d.getDate()).padStart(2, "0");
+  const mm  = String(d.getMonth() + 1).padStart(2, "0");
+  const yy  = String(d.getFullYear()).slice(2);
+  const hh  = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm}/${yy} ${hh}:${min}`;
 }
 
 function escapeCell(s: string): string {
@@ -125,7 +131,7 @@ function escapeCell(s: string): string {
 
 function renderMarkdown(state: State): string {
   const sessions = Object.values(state.sessions).sort((a, b) =>
-    a.startedAt.localeCompare(b.startedAt),
+    b.updatedAt.localeCompare(a.updatedAt),
   );
 
   const updatedAt = `${fmt(new Date().toISOString())} UTC`;
@@ -166,6 +172,69 @@ function writeMarkdown(sessionsPath: string, state: State): void {
   const tmp = sessionsPath + ".tmp";
   writeFileSync(tmp, renderMarkdown(state), "utf8");
   renameSync(tmp, sessionsPath);
+}
+
+// ─── Git history ──────────────────────────────────────────────────────────────
+
+function ensureRepo(dir: string, sessionsFilename: string): void {
+  try {
+    execSync("git rev-parse --git-dir", { cwd: dir, stdio: "ignore" });
+  } catch {
+    // Not a git repo — initialise one and add a .gitignore that tracks only
+    // the sessions file so we don't accidentally sweep up other ~/.claude data.
+    execSync("git init", { cwd: dir, stdio: "ignore" });
+    const gitignore = join(dir, ".gitignore");
+    try { readFileSync(gitignore, "utf8"); } catch {
+      writeFileSync(
+        gitignore,
+        `# Managed by claude-hook-handler — only track the sessions log\n*\n!.gitignore\n!${sessionsFilename}\n`,
+        "utf8",
+      );
+    }
+  }
+}
+
+function commitSessions(sessionsPath: string, message: string): void {
+  const dir = dirname(sessionsPath);
+  ensureRepo(dir, basename(sessionsPath));
+
+  spawnSync("git", ["add", sessionsPath], { cwd: dir });
+
+  // Skip if nothing is staged (file content unchanged)
+  const diff = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: dir });
+  if (diff.status === 0) return;
+
+  spawnSync(
+    "git",
+    [
+      "-c", "user.name=claude-hook-handler",
+      "-c", "user.email=noreply@localhost",
+      "commit", "-m", message,
+    ],
+    { cwd: dir },
+  );
+}
+
+function buildCommitMessage(input: HookInput, state: State): string {
+  const id = input.session_id.slice(0, 8);
+  switch (input.hook_event_name) {
+    case "SessionStart": {
+      const rec = state.sessions[input.session_id];
+      const repo = rec?.repoName ? ` (${rec.repoName})` : "";
+      return `session started: ${id}${repo}`;
+    }
+    case "UserPromptSubmit": {
+      const rec = state.sessions[input.session_id];
+      const summary = rec?.summary ?? rec?.prompt?.slice(0, 60) ?? "";
+      return `session prompt: ${id}: ${summary}`;
+    }
+    case "SessionEnd":
+      return `session ended: ${id}`;
+    default: {
+      const count = Object.keys(state.sessions).length;
+      return `sessions: ${count} active`;
+    }
+  }
 }
 
 // ─── Prompt summarisation ─────────────────────────────────────────────────────
@@ -446,6 +515,7 @@ async function main(): Promise<void> {
       await applyEvent(state, input, noSummary);
       writeState(statePath, state);
       writeMarkdown(sessionsPath, state);
+      commitSessions(sessionsPath, buildCommitMessage(input, state));
     } catch (err) {
       process.stderr.write(
         `claude-hook-handler: failed to update sessions table: ${err}\n`,
