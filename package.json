@@ -1,0 +1,25 @@
+{
+  "name": "claude-hooks-listener",
+  "version": "1.0.0",
+  "description": "CLI tool that runs a Claude agent and listens to all hook events in real-time",
+  "type": "module",
+  "bin": {
+    "claude-hooks": "./dist/index.js",
+    "claude-hook-handler": "./dist/handler.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "@anthropic-ai/sdk": "^0.78.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}

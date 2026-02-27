@@ -1,0 +1,480 @@
+#!/usr/bin/env node
+/**
+ * Claude Code stdin hook handler.
+ *
+ * Reads a hook event from stdin, maintains a markdown sessions table, and
+ * writes a JSON response to stdout.
+ *
+ * Configure in ~/.claude/settings.json:
+ *
+ *   {
+ *     "hooks": {
+ *       "PreToolUse": [{
+ *         "matcher": ".*",
+ *         "hooks": [{ "type": "command", "command": "claude-hook-handler --sessions ~/.claude/sessions.md" }]
+ *       }],
+ *       ...
+ *     }
+ *   }
+ */
+import Anthropic from "@anthropic-ai/sdk";
+import {
+  readFileSync,
+  writeFileSync,
+  appendFileSync,
+  mkdirSync,
+  renameSync,
+} from "fs";
+import { dirname, join, resolve, basename } from "path";
+import { homedir } from "os";
+import { execSync } from "child_process";
+import { Command } from "commander";
+import type {
+  HookInput,
+  SyncHookJSONOutput,
+  PreToolUseHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
+
+// ─── Path helpers ─────────────────────────────────────────────────────────────
+
+function expandHome(p: string): string {
+  return p.startsWith("~/") ? join(homedir(), p.slice(2)) : resolve(p);
+}
+
+// ─── Config file ──────────────────────────────────────────────────────────────
+
+const CONFIG_PATH = join(homedir(), ".claude", "hook-handler.json");
+
+interface Config {
+  anthropicApiKey?: string;
+}
+
+function loadConfig(): void {
+  try {
+    const raw = readFileSync(CONFIG_PATH, "utf8");
+    const config = JSON.parse(raw) as Config;
+    if (config.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
+      process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+    }
+  } catch {
+    // Config file is optional — no-op if missing or unreadable
+  }
+}
+
+// ─── Git repo detection ───────────────────────────────────────────────────────
+
+interface RepoInfo {
+  repoRoot: string;
+  repoName: string;
+}
+
+function detectRepo(cwd: string): RepoInfo | undefined {
+  try {
+    const root = execSync("git rev-parse --show-toplevel", {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return { repoRoot: root, repoName: basename(root) };
+  } catch {
+    return undefined;
+  }
+}
+
+// ─── Session state ────────────────────────────────────────────────────────────
+
+interface SessionRecord {
+  sessionId: string;
+  startedAt: string;
+  updatedAt: string;
+  cwd: string;
+  repoRoot?: string;
+  repoName?: string;
+  prompt?: string;
+  summary?: string;
+}
+
+interface State {
+  sessions: Record<string, SessionRecord>;
+}
+
+function readState(statePath: string): State {
+  try {
+    return JSON.parse(readFileSync(statePath, "utf8")) as State;
+  } catch {
+    return { sessions: {} };
+  }
+}
+
+function writeState(statePath: string, state: State): void {
+  mkdirSync(dirname(statePath), { recursive: true });
+  const tmp = statePath + ".tmp";
+  writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
+  renameSync(tmp, statePath); // atomic on same filesystem
+}
+
+// ─── Markdown rendering ───────────────────────────────────────────────────────
+
+function fmt(iso: string): string {
+  return iso.replace("T", " ").slice(0, 19);
+}
+
+function escapeCell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\n/g, " ");
+}
+
+function renderMarkdown(state: State): string {
+  const sessions = Object.values(state.sessions).sort((a, b) =>
+    a.startedAt.localeCompare(b.startedAt),
+  );
+
+  const updatedAt = `${fmt(new Date().toISOString())} UTC`;
+
+  if (sessions.length === 0) {
+    return (
+      `# Claude Code Sessions\n\n` +
+      `*No active sessions.*\n\n` +
+      `*Last updated: ${updatedAt}*\n`
+    );
+  }
+
+  const header = "| Session ID | Repo | Summary | Started | Last Updated |";
+  const divider = "|---|---|---|---|---|";
+  const rows = sessions.map((s) => {
+    const id = `\`${s.sessionId.slice(0, 8)}…\``;
+    const repo = escapeCell(s.repoName ?? s.cwd.split("/").pop() ?? s.cwd);
+    const summary = escapeCell(
+      s.summary ?? s.prompt?.slice(0, 80) ?? "*waiting for prompt…*",
+    );
+    return `| ${id} | ${repo} | ${summary} | ${fmt(s.startedAt)} | ${fmt(s.updatedAt)} |`;
+  });
+
+  return [
+    "# Claude Code Sessions",
+    "",
+    header,
+    divider,
+    ...rows,
+    "",
+    `*Last updated: ${updatedAt}*`,
+    "",
+  ].join("\n");
+}
+
+function writeMarkdown(sessionsPath: string, state: State): void {
+  mkdirSync(dirname(sessionsPath), { recursive: true });
+  const tmp = sessionsPath + ".tmp";
+  writeFileSync(tmp, renderMarkdown(state), "utf8");
+  renameSync(tmp, sessionsPath);
+}
+
+// ─── Prompt summarisation ─────────────────────────────────────────────────────
+
+async function summarise(prompt: string): Promise<string> {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return truncateSummary(prompt);
+  }
+  try {
+    const client = new Anthropic();
+    const response = await client.messages.create({
+      model: "claude-haiku-4-5",
+      max_tokens: 60,
+      messages: [
+        {
+          role: "user",
+          content:
+            `Summarise the following user prompt in one short sentence ` +
+            `(10 words max). Reply with only the sentence, no punctuation at the end.\n\n${prompt}`,
+        },
+      ],
+    });
+    const block = response.content[0];
+    if (block?.type === "text") {
+      return block.text.trim().replace(/[.!?]$/, "");
+    }
+  } catch {
+    // fall through
+  }
+  return truncateSummary(prompt);
+}
+
+function truncateSummary(prompt: string): string {
+  const firstLine = prompt.split("\n")[0]?.trim() ?? prompt;
+  return firstLine.length > 80 ? firstLine.slice(0, 77) + "…" : firstLine;
+}
+
+// ─── State mutation per event ─────────────────────────────────────────────────
+
+async function applyEvent(
+  state: State,
+  input: HookInput,
+  noSummary: boolean,
+): Promise<void> {
+  const { session_id, hook_event_name, cwd } = input;
+  const now = new Date().toISOString();
+
+  switch (hook_event_name) {
+    case "SessionStart": {
+      const repo = detectRepo(cwd);
+      state.sessions[session_id] = {
+        sessionId: session_id,
+        startedAt: now,
+        updatedAt: now,
+        cwd,
+        repoRoot: repo?.repoRoot,
+        repoName: repo?.repoName,
+      };
+      break;
+    }
+
+    case "UserPromptSubmit": {
+      const prompt = "prompt" in input ? String(input.prompt) : "";
+      const existing = state.sessions[session_id];
+      const summary = noSummary ? truncateSummary(prompt) : await summarise(prompt);
+      // Detect repo now if SessionStart was missed
+      const repo = existing?.repoRoot ? undefined : detectRepo(existing?.cwd ?? cwd);
+      state.sessions[session_id] = {
+        sessionId: session_id,
+        startedAt: existing?.startedAt ?? now,
+        updatedAt: now,
+        cwd: existing?.cwd ?? cwd,
+        repoRoot: existing?.repoRoot ?? repo?.repoRoot,
+        repoName: existing?.repoName ?? repo?.repoName,
+        prompt,
+        summary,
+      };
+      break;
+    }
+
+    case "SessionEnd": {
+      delete state.sessions[session_id];
+      break;
+    }
+
+    default: {
+      // Touch updatedAt for any other event
+      const existing = state.sessions[session_id];
+      if (existing) {
+        existing.updatedAt = now;
+      }
+      break;
+    }
+  }
+}
+
+// ─── stderr formatting ────────────────────────────────────────────────────────
+
+const EVENT_SYMBOL: Record<string, string> = {
+  PreToolUse:         "▶",
+  PostToolUse:        "✓",
+  PostToolUseFailure: "✗",
+  SessionStart:       "◉",
+  SessionEnd:         "◎",
+  Stop:               "■",
+  UserPromptSubmit:   "→",
+  Notification:       "◆",
+  Setup:              "⚙",
+  SubagentStart:      "▷",
+  SubagentStop:       "◁",
+  PermissionRequest:  "?",
+  PreCompact:         "⌃",
+};
+
+function formatForStderr(input: HookInput, blocked: boolean): string {
+  const ts = new Date().toISOString().replace("T", " ").slice(0, 23);
+  const name = input.hook_event_name;
+  const sym = EVENT_SYMBOL[name] ?? "◆";
+  const blockTag = blocked ? " \x1b[31m[BLOCKED]\x1b[0m" : "";
+
+  const lines = [`\x1b[1m[${ts}] ${sym} ${name}\x1b[0m${blockTag}`];
+
+  if ("tool_name" in input)
+    lines.push(`  tool:   \x1b[1m${input.tool_name}\x1b[0m`);
+  if ("tool_input" in input && input.tool_input !== undefined) {
+    const s = JSON.stringify(input.tool_input);
+    lines.push(`  input:  ${s.length > 120 ? s.slice(0, 120) + "…" : s}`);
+  }
+  if ("tool_response" in input && input.tool_response !== undefined) {
+    const s = JSON.stringify(input.tool_response);
+    lines.push(`  output: ${s.length > 120 ? s.slice(0, 120) + "…" : s}`);
+  }
+  if ("error" in input && input.error)
+    lines.push(`  error:  \x1b[31m${input.error}\x1b[0m`);
+  if ("prompt" in input && input.prompt)
+    lines.push(`  prompt: ${String(input.prompt).slice(0, 100)}`);
+  if ("message" in input && input.message)
+    lines.push(`  msg:    ${String(input.message)}`);
+  if ("reason" in input && input.reason)
+    lines.push(`  reason: ${String(input.reason)}`);
+  if ("source" in input && input.source)
+    lines.push(`  source: ${String(input.source)}`);
+
+  lines.push(`  session: \x1b[2m${input.session_id.slice(0, 8)}…\x1b[0m`);
+  return lines.join("\n");
+}
+
+// ─── Tool blocking ────────────────────────────────────────────────────────────
+
+function shouldBlock(input: HookInput, patterns: RegExp[]): boolean {
+  if (input.hook_event_name !== "PreToolUse" || patterns.length === 0)
+    return false;
+  const name = (input as PreToolUseHookInput).tool_name ?? "";
+  return patterns.some((re) => re.test(name));
+}
+
+function buildResponse(blocked: boolean, reason: string): SyncHookJSONOutput {
+  return blocked ? { decision: "block", reason } : {};
+}
+
+// ─── NDJSON log ───────────────────────────────────────────────────────────────
+
+function writeLog(logPath: string, input: HookInput, blocked: boolean): void {
+  const absPath = expandHome(logPath);
+  mkdirSync(dirname(absPath), { recursive: true });
+  appendFileSync(
+    absPath,
+    JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event: input.hook_event_name,
+      blocked,
+      data: input,
+    }) + "\n",
+    "utf8",
+  );
+}
+
+// ─── stdin ────────────────────────────────────────────────────────────────────
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    process.stderr.write(
+      "claude-hook-handler: no stdin detected.\n" +
+        "This program is called by Claude Code hooks, not directly.\n" +
+        "Run with --help for configuration instructions.\n",
+    );
+    process.exit(1);
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// ─── CLI ──────────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  loadConfig();
+
+  const program = new Command();
+
+  program
+    .name("claude-hook-handler")
+    .description(
+      "Stdin hook handler for Claude Code's settings-based hook system.\n" +
+        "Maintains a live markdown sessions table and writes a JSON response to stdout.",
+    )
+    .version("1.0.0")
+    .option(
+      "-s, --sessions <file>",
+      "Markdown sessions table to maintain",
+      "~/.claude/sessions.md",
+    )
+    .option(
+      "--state <file>",
+      "JSON state file for session persistence",
+      "~/.claude/sessions-state.json",
+    )
+    .option("-l, --log <file>", "Append NDJSON event records to this file")
+    .option(
+      "-b, --block <pattern>",
+      "Regex of tool names to block (repeatable, PreToolUse only)",
+      (v: string, acc: string[]) => [...acc, v],
+      [] as string[],
+    )
+    .option(
+      "--block-reason <reason>",
+      "Message sent to Claude when a tool is blocked",
+      "Blocked by claude-hook-handler",
+    )
+    .option(
+      "--no-summary",
+      "Skip AI summarisation, use truncated prompt text instead",
+    )
+    .option("--quiet", "Suppress stderr output");
+
+  program.parse();
+
+  const opts = program.opts<{
+    sessions: string;
+    state: string;
+    log?: string;
+    block: string[];
+    blockReason: string;
+    summary: boolean; // commander sets this from --no-summary
+    quiet?: boolean;
+  }>();
+
+  const sessionsPath = expandHome(opts.sessions);
+  const statePath = expandHome(opts.state);
+  const blockPatterns = opts.block.map((p) => new RegExp(p));
+  const noSummary = !opts.summary;
+
+  // Read stdin
+  let raw: string;
+  try {
+    raw = await readStdin();
+  } catch (err) {
+    process.stderr.write(`claude-hook-handler: failed to read stdin: ${err}\n`);
+    process.exit(1);
+  }
+
+  let input: HookInput;
+  try {
+    input = JSON.parse(raw) as HookInput;
+  } catch {
+    process.stderr.write(
+      `claude-hook-handler: invalid JSON on stdin:\n${raw.slice(0, 200)}\n`,
+    );
+    process.exit(1);
+  }
+
+  const blocked = shouldBlock(input, blockPatterns);
+
+  // Update sessions state + markdown (all events except setup noise)
+  if (input.hook_event_name !== "Setup") {
+    try {
+      const state = readState(statePath);
+      await applyEvent(state, input, noSummary);
+      writeState(statePath, state);
+      writeMarkdown(sessionsPath, state);
+    } catch (err) {
+      process.stderr.write(
+        `claude-hook-handler: failed to update sessions table: ${err}\n`,
+      );
+      // Non-fatal
+    }
+  }
+
+  // NDJSON log
+  if (opts.log) {
+    try {
+      writeLog(opts.log, input, blocked);
+    } catch (err) {
+      process.stderr.write(`claude-hook-handler: failed to write log: ${err}\n`);
+    }
+  }
+
+  // stderr summary (visible inside Claude Code)
+  if (!opts.quiet) {
+    process.stderr.write(formatForStderr(input, blocked) + "\n");
+  }
+
+  // JSON response to stdout
+  process.stdout.write(
+    JSON.stringify(buildResponse(blocked, opts.blockReason)) + "\n",
+  );
+}
+
+main().catch((err: Error) => {
+  process.stderr.write(`claude-hook-handler: fatal: ${err.message}\n`);
+  process.exit(1);
+});
