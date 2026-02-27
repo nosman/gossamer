@@ -34,6 +34,7 @@ import type {
   HookInput,
   SyncHookJSONOutput,
   PreToolUseHookInput,
+  SubagentStartHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
@@ -91,19 +92,23 @@ interface SessionRecord {
   cwd: string;
   repoRoot?: string;
   repoName?: string;
+  parentSessionId?: string;
   prompt?: string;
   summary?: string;
 }
 
 interface State {
   sessions: Record<string, SessionRecord>;
+  // Maps agent_id → parent session_id so we can link child SessionStart events
+  agentParents: Record<string, string>;
 }
 
 function readState(statePath: string): State {
   try {
-    return JSON.parse(readFileSync(statePath, "utf8")) as State;
+    const s = JSON.parse(readFileSync(statePath, "utf8")) as Partial<State>;
+    return { sessions: s.sessions ?? {}, agentParents: s.agentParents ?? {} };
   } catch {
-    return { sessions: {} };
+    return { sessions: {}, agentParents: {} };
   }
 }
 
@@ -179,7 +184,7 @@ function writeMarkdown(sessionsPath: string, state: State): void {
 
 const SKIP_FIELDS = new Set(["session_id", "hook_event_name", "transcript_path"]);
 
-function formatEventEntry(input: HookInput): string {
+function formatEventEntry(input: HookInput, childLogRelPath?: string): string {
   const ts = fmt(new Date().toISOString());
   const name = input.hook_event_name;
   const sym = EVENT_SYMBOL[name] ?? "◆";
@@ -195,6 +200,8 @@ function formatEventEntry(input: HookInput): string {
     } else if (key === "tool_input" || key === "tool_response") {
       const s = JSON.stringify(value, null, 2);
       lines.push(`**${key}:**`, "```json", s.length > 600 ? s.slice(0, 600) + "\n…" : s, "```", "");
+    } else if (key === "agent_id" && childLogRelPath) {
+      lines.push(`- **${key}:** [\`${String(value)}\`](${childLogRelPath})`);
     } else {
       lines.push(`- **${key}:** \`${String(value)}\``);
     }
@@ -208,7 +215,7 @@ function sessionLogPath(sessionsPath: string, sessionId: string): string {
   return join(dirname(sessionsPath), "sessions", `${sessionId}.md`);
 }
 
-function appendSessionLog(sessionsPath: string, input: HookInput): string {
+function appendSessionLog(sessionsPath: string, input: HookInput): string[] {
   const logPath = sessionLogPath(sessionsPath, input.session_id);
   mkdirSync(dirname(logPath), { recursive: true });
 
@@ -216,8 +223,29 @@ function appendSessionLog(sessionsPath: string, input: HookInput): string {
     writeFileSync(logPath, `# Session \`${input.session_id}\`\n\n`, "utf8");
   }
 
-  appendFileSync(logPath, formatEventEntry(input), "utf8");
-  return logPath;
+  const changedPaths = [logPath];
+  let childLogRelPath: string | undefined;
+
+  if (input.hook_event_name === "SubagentStart") {
+    const { agent_id, agent_type } = input as SubagentStartHookInput;
+    const childPath = sessionLogPath(sessionsPath, agent_id);
+    mkdirSync(dirname(childPath), { recursive: true });
+    if (!existsSync(childPath)) {
+      const parentLink = `[\`${input.session_id.slice(0, 8)}…\`](${input.session_id}.md)`;
+      writeFileSync(
+        childPath,
+        `# Subagent Session \`${agent_id}\`\n\n` +
+        `**Parent:** ${parentLink}  \n` +
+        `**Type:** \`${agent_type}\`\n\n`,
+        "utf8",
+      );
+      changedPaths.push(childPath);
+    }
+    childLogRelPath = `${agent_id}.md`;
+  }
+
+  appendFileSync(logPath, formatEventEntry(input, childLogRelPath), "utf8");
+  return changedPaths;
 }
 
 // ─── Git history ──────────────────────────────────────────────────────────────
@@ -330,6 +358,7 @@ async function applyEvent(
   switch (hook_event_name) {
     case "SessionStart": {
       const repo = detectRepo(cwd);
+      const parentSessionId = state.agentParents[session_id];
       state.sessions[session_id] = {
         sessionId: session_id,
         startedAt: now,
@@ -337,7 +366,17 @@ async function applyEvent(
         cwd,
         repoRoot: repo?.repoRoot,
         repoName: repo?.repoName,
+        parentSessionId,
       };
+      break;
+    }
+
+    case "SubagentStart": {
+      const { agent_id } = input as SubagentStartHookInput;
+      state.agentParents[agent_id] = session_id;
+      // Touch parent updatedAt
+      const existing = state.sessions[session_id];
+      if (existing) existing.updatedAt = now;
       break;
     }
 
@@ -560,8 +599,8 @@ async function main(): Promise<void> {
       await applyEvent(state, input, noSummary);
       writeState(statePath, state);
       writeMarkdown(sessionsPath, state);
-      const logPath = appendSessionLog(sessionsPath, input);
-      commitFiles(sessionsPath, [sessionsPath, logPath], buildCommitMessage(input, state));
+      const logPaths = appendSessionLog(sessionsPath, input);
+      commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
     } catch (err) {
       process.stderr.write(
         `claude-hook-handler: failed to update sessions table: ${err}\n`,
