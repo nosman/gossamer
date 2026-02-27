@@ -22,6 +22,7 @@ import {
   readFileSync,
   writeFileSync,
   appendFileSync,
+  existsSync,
   mkdirSync,
   renameSync,
 } from "fs";
@@ -147,7 +148,7 @@ function renderMarkdown(state: State): string {
   const header = "| Session ID | Repo | Summary | Started | Last Updated |";
   const divider = "|---|---|---|---|---|";
   const rows = sessions.map((s) => {
-    const id = `\`${s.sessionId.slice(0, 8)}…\``;
+    const id = `[\`${s.sessionId.slice(0, 8)}…\`](sessions/${s.sessionId}.md)`;
     const repo = escapeCell(s.repoName ?? s.cwd.split("/").pop() ?? s.cwd);
     const summary = escapeCell(
       s.summary ?? s.prompt?.slice(0, 80) ?? "*waiting for prompt…*",
@@ -174,33 +175,77 @@ function writeMarkdown(sessionsPath: string, state: State): void {
   renameSync(tmp, sessionsPath);
 }
 
+// ─── Per-session event log ────────────────────────────────────────────────────
+
+const SKIP_FIELDS = new Set(["session_id", "hook_event_name", "transcript_path"]);
+
+function formatEventEntry(input: HookInput): string {
+  const ts = fmt(new Date().toISOString());
+  const name = input.hook_event_name;
+  const sym = EVENT_SYMBOL[name] ?? "◆";
+  const lines: string[] = [`### ${ts} · ${sym} ${name}`, ""];
+
+  for (const [key, value] of Object.entries(input)) {
+    if (SKIP_FIELDS.has(key) || value === undefined) continue;
+
+    if (key === "prompt" || key === "message" || key === "last_assistant_message") {
+      lines.push(`**${key}:**`, "");
+      for (const line of String(value).split("\n")) lines.push(`> ${line}`);
+      lines.push("");
+    } else if (key === "tool_input" || key === "tool_response") {
+      const s = JSON.stringify(value, null, 2);
+      lines.push(`**${key}:**`, "```json", s.length > 600 ? s.slice(0, 600) + "\n…" : s, "```", "");
+    } else {
+      lines.push(`- **${key}:** \`${String(value)}\``);
+    }
+  }
+
+  lines.push("---", "");
+  return lines.join("\n");
+}
+
+function sessionLogPath(sessionsPath: string, sessionId: string): string {
+  return join(dirname(sessionsPath), "sessions", `${sessionId}.md`);
+}
+
+function appendSessionLog(sessionsPath: string, input: HookInput): string {
+  const logPath = sessionLogPath(sessionsPath, input.session_id);
+  mkdirSync(dirname(logPath), { recursive: true });
+
+  if (!existsSync(logPath)) {
+    writeFileSync(logPath, `# Session \`${input.session_id}\`\n\n`, "utf8");
+  }
+
+  appendFileSync(logPath, formatEventEntry(input), "utf8");
+  return logPath;
+}
+
 // ─── Git history ──────────────────────────────────────────────────────────────
 
 function ensureRepo(dir: string, sessionsFilename: string): void {
   try {
     execSync("git rev-parse --git-dir", { cwd: dir, stdio: "ignore" });
   } catch {
-    // Not a git repo — initialise one and add a .gitignore that tracks only
-    // the sessions file so we don't accidentally sweep up other ~/.claude data.
     execSync("git init", { cwd: dir, stdio: "ignore" });
-    const gitignore = join(dir, ".gitignore");
-    try { readFileSync(gitignore, "utf8"); } catch {
-      writeFileSync(
-        gitignore,
-        `# Managed by claude-hook-handler — only track the sessions log\n*\n!.gitignore\n!${sessionsFilename}\n`,
-        "utf8",
-      );
-    }
+  }
+  // Always keep gitignore up to date — may need to add sessions/ on upgrade
+  const gitignore = join(dir, ".gitignore");
+  const desired =
+    `# Managed by claude-hook-handler\n` +
+    `*\n!.gitignore\n!${sessionsFilename}\n!sessions/\n!sessions/*.md\n`;
+  try {
+    if (readFileSync(gitignore, "utf8") !== desired) writeFileSync(gitignore, desired, "utf8");
+  } catch {
+    writeFileSync(gitignore, desired, "utf8");
   }
 }
 
-function commitSessions(sessionsPath: string, message: string): void {
+function commitFiles(sessionsPath: string, paths: string[], message: string): void {
   const dir = dirname(sessionsPath);
   ensureRepo(dir, basename(sessionsPath));
 
-  spawnSync("git", ["add", sessionsPath], { cwd: dir });
+  for (const p of paths) spawnSync("git", ["add", p], { cwd: dir });
 
-  // Skip if nothing is staged (file content unchanged)
   const diff = spawnSync("git", ["diff", "--cached", "--quiet"], { cwd: dir });
   if (diff.status === 0) return;
 
@@ -508,14 +553,15 @@ async function main(): Promise<void> {
 
   const blocked = shouldBlock(input, blockPatterns);
 
-  // Update sessions state + markdown (all events except setup noise)
+  // Update sessions state + markdown + per-session log (all events except setup noise)
   if (input.hook_event_name !== "Setup") {
     try {
       const state = readState(statePath);
       await applyEvent(state, input, noSummary);
       writeState(statePath, state);
       writeMarkdown(sessionsPath, state);
-      commitSessions(sessionsPath, buildCommitMessage(input, state));
+      const logPath = appendSessionLog(sessionsPath, input);
+      commitFiles(sessionsPath, [sessionsPath, logPath], buildCommitMessage(input, state));
     } catch (err) {
       process.stderr.write(
         `claude-hook-handler: failed to update sessions table: ${err}\n`,
