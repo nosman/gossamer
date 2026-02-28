@@ -95,6 +95,7 @@ interface SessionRecord {
   parentSessionId?: string;
   prompt?: string;
   summary?: string;
+  keywords?: string[];
 }
 
 interface State {
@@ -150,15 +151,18 @@ function renderMarkdown(state: State): string {
     );
   }
 
-  const header = "| Session ID | Repo | Summary | Started | Last Updated |";
-  const divider = "|---|---|---|---|---|";
+  const header = "| Session ID | Repo | Summary | Keywords | Started | Last Updated |";
+  const divider = "|---|---|---|---|---|---|";
   const rows = sessions.map((s) => {
     const id = `[\`${s.sessionId.slice(0, 8)}…\`](sessions/${s.sessionId}.md)`;
     const repo = escapeCell(s.repoName ?? s.cwd.split("/").pop() ?? s.cwd);
     const summary = escapeCell(
       s.summary ?? s.prompt?.slice(0, 80) ?? "*waiting for prompt…*",
     );
-    return `| ${id} | ${repo} | ${summary} | ${fmt(s.startedAt)} | ${fmt(s.updatedAt)} |`;
+    const keywords = s.keywords?.length
+      ? s.keywords.map((k) => `\`${escapeCell(k)}\``).join(" ")
+      : "";
+    return `| ${id} | ${repo} | ${summary} | ${keywords} | ${fmt(s.startedAt)} | ${fmt(s.updatedAt)} |`;
   });
 
   return [
@@ -215,12 +219,51 @@ function sessionLogPath(sessionsPath: string, sessionId: string): string {
   return join(dirname(sessionsPath), "sessions", `${sessionId}.md`);
 }
 
-function appendSessionLog(sessionsPath: string, input: HookInput): string[] {
+function updateLogHeader(logPath: string, rec: SessionRecord): void {
+  let content = readFileSync(logPath, "utf8");
+
+  const keywordsLine = rec.keywords?.length
+    ? `**Keywords:** ${rec.keywords.map((k) => `\`${k}\``).join(" ")}`
+    : "";
+  const summaryLine = rec.summary ? `**Summary:** ${rec.summary}` : "";
+  const metaBlock = [summaryLine, keywordsLine].filter(Boolean).join("  \n");
+
+  if (!metaBlock) return;
+
+  // Replace existing meta block (between heading and first event) or insert one
+  const headingRe = /^(# (?:Sub)?agent Session `[^`]+`\n(?:\*\*(?:Parent|Type):[^\n]*\n)*\n)/;
+  if (content.includes("**Keywords:**") || content.includes("**Summary:**")) {
+    // Replace the existing meta block lines
+    content = content.replace(
+      /(?:^\*\*(?:Summary|Keywords):\*\*[^\n]*\n)+/m,
+      metaBlock + "\n",
+    );
+  } else {
+    // Insert after heading (and any Parent/Type lines for subagents)
+    content = content.replace(headingRe, `$1${metaBlock}\n\n`);
+    // Fallback: insert after the plain session heading
+    if (!content.includes(metaBlock)) {
+      content = content.replace(
+        /^(# Session `[^`]+`\n\n)/,
+        `$1${metaBlock}\n\n`,
+      );
+    }
+  }
+  writeFileSync(logPath, content, "utf8");
+}
+
+function appendSessionLog(sessionsPath: string, input: HookInput, state: State): string[] {
   const logPath = sessionLogPath(sessionsPath, input.session_id);
   mkdirSync(dirname(logPath), { recursive: true });
 
   if (!existsSync(logPath)) {
     writeFileSync(logPath, `# Session \`${input.session_id}\`\n\n`, "utf8");
+  }
+
+  // Patch the file header with summary + keywords once we have them
+  if (input.hook_event_name === "UserPromptSubmit") {
+    const rec = state.sessions[input.session_id];
+    if (rec) updateLogHeader(logPath, rec);
   }
 
   const changedPaths = [logPath];
@@ -312,37 +355,56 @@ function buildCommitMessage(input: HookInput, state: State): string {
 
 // ─── Prompt summarisation ─────────────────────────────────────────────────────
 
-async function summarise(prompt: string): Promise<string> {
+interface PromptAnalysis {
+  summary: string;
+  keywords: string[];
+}
+
+async function analyse(prompt: string): Promise<PromptAnalysis> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    return truncateSummary(prompt);
+    return truncateAnalysis(prompt);
   }
   try {
     const client = new Anthropic();
     const response = await client.messages.create({
       model: "claude-haiku-4-5",
-      max_tokens: 60,
+      max_tokens: 120,
       messages: [
         {
           role: "user",
           content:
-            `Summarise the following user prompt in one short sentence ` +
-            `(10 words max). Reply with only the sentence, no punctuation at the end.\n\n${prompt}`,
+            `Analyse the following user prompt. Reply with a JSON object only — no prose, no code fences.\n` +
+            `{\n` +
+            `  "summary": "<one sentence, 10 words max, no trailing punctuation>",\n` +
+            `  "keywords": ["<3-6 keywords: named entities, tools, concepts, actions>"]\n` +
+            `}\n\nPrompt:\n${prompt}`,
         },
       ],
     });
     const block = response.content[0];
     if (block?.type === "text") {
-      return block.text.trim().replace(/[.!?]$/, "");
+      // Strip markdown code fences in case the model wraps its JSON
+      const raw = block.text.trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+      const parsed = JSON.parse(raw) as Partial<PromptAnalysis>;
+      return {
+        summary: String(parsed.summary ?? "").replace(/[.!?]$/, ""),
+        keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
+      };
     }
   } catch {
     // fall through
   }
-  return truncateSummary(prompt);
+  return truncateAnalysis(prompt);
 }
 
-function truncateSummary(prompt: string): string {
+function truncateAnalysis(prompt: string): PromptAnalysis {
   const firstLine = prompt.split("\n")[0]?.trim() ?? prompt;
-  return firstLine.length > 80 ? firstLine.slice(0, 77) + "…" : firstLine;
+  return {
+    summary: firstLine.length > 80 ? firstLine.slice(0, 77) + "…" : firstLine,
+    keywords: [],
+  };
 }
 
 // ─── State mutation per event ─────────────────────────────────────────────────
@@ -383,7 +445,7 @@ async function applyEvent(
     case "UserPromptSubmit": {
       const prompt = "prompt" in input ? String(input.prompt) : "";
       const existing = state.sessions[session_id];
-      const summary = noSummary ? truncateSummary(prompt) : await summarise(prompt);
+      const { summary, keywords } = noSummary ? truncateAnalysis(prompt) : await analyse(prompt);
       // Detect repo now if SessionStart was missed
       const repo = existing?.repoRoot ? undefined : detectRepo(existing?.cwd ?? cwd);
       state.sessions[session_id] = {
@@ -393,8 +455,10 @@ async function applyEvent(
         cwd: existing?.cwd ?? cwd,
         repoRoot: existing?.repoRoot ?? repo?.repoRoot,
         repoName: existing?.repoName ?? repo?.repoName,
+        parentSessionId: existing?.parentSessionId,
         prompt,
         summary,
+        keywords,
       };
       break;
     }
@@ -599,7 +663,7 @@ async function main(): Promise<void> {
       await applyEvent(state, input, noSummary);
       writeState(statePath, state);
       writeMarkdown(sessionsPath, state);
-      const logPaths = appendSessionLog(sessionsPath, input);
+      const logPaths = appendSessionLog(sessionsPath, input, state);
       commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
     } catch (err) {
       process.stderr.write(
