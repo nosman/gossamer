@@ -49,17 +49,28 @@ const CONFIG_PATH = join(homedir(), ".claude", "hook-handler.json");
 
 interface Config {
   anthropicApiKey?: string;
+  /**
+   * Path to a git repository where session logs are committed.
+   * When set, sessions.md and the sessions/ folder are stored inside this
+   * directory instead of the default ~/.claude location.
+   * The --sessions CLI flag still overrides this value.
+   *
+   * Example: { "repository": "~/notes/claude-sessions" }
+   */
+  repository?: string;
 }
 
-function loadConfig(): void {
+function loadConfig(): Config {
   try {
     const raw = readFileSync(CONFIG_PATH, "utf8");
     const config = JSON.parse(raw) as Config;
     if (config.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
       process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
     }
+    return config;
   } catch {
     // Config file is optional — no-op if missing or unreadable
+    return {};
   }
 }
 
@@ -579,7 +590,11 @@ async function readStdin(): Promise<string> {
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  loadConfig();
+  const config = loadConfig();
+
+  const defaultSessionsPath = config.repository
+    ? join(expandHome(config.repository), "sessions.md")
+    : "~/.claude/sessions.md";
 
   const program = new Command();
 
@@ -593,7 +608,7 @@ async function main(): Promise<void> {
     .option(
       "-s, --sessions <file>",
       "Markdown sessions table to maintain",
-      "~/.claude/sessions.md",
+      defaultSessionsPath,
     )
     .option(
       "--state <file>",
