@@ -889,13 +889,15 @@ function writeEventLog(
 
 /**
  * Replay the NDJSON event log and rebuild all markdown files from scratch.
- * Uses stored summary/keywords from each record so AI is never called.
+ * Uses stored summary/keywords from each record; calls AI for any that are missing
+ * unless noSummary is true.
  */
 async function runReconstruct(
   eventsPath: string,
   sessionsPath: string,
   statePath: string,
   maxLogLines: number,
+  noSummary: boolean,
 ): Promise<void> {
   const absEvents = expandHome(eventsPath);
   if (!existsSync(absEvents)) {
@@ -914,33 +916,64 @@ async function runReconstruct(
   if (existsSync(absSessions)) unlinkSync(absSessions);
 
   const state: State = { sessions: {}, agentParents: {}, pendingToolUses: {} };
-  const lines = readFileSync(absEvents, "utf8").split("\n");
+  const rawLines = readFileSync(absEvents, "utf8").split("\n");
+  const updatedLines: string[] = [];
   let replayed = 0;
   let skipped = 0;
+  let filled = 0;
 
-  for (const line of lines) {
-    if (!line.trim()) continue;
+  for (const line of rawLines) {
+    if (!line.trim()) {
+      updatedLines.push(line);
+      continue;
+    }
 
     let record: EventRecord;
     try {
       record = JSON.parse(line) as EventRecord;
     } catch {
       skipped++;
+      updatedLines.push(line);
       continue;
     }
 
     const input = record.data as HookInput;
-    if (!input?.hook_event_name || input.hook_event_name === "Setup") continue;
+    if (!input?.hook_event_name || input.hook_event_name === "Setup") {
+      updatedLines.push(line);
+      continue;
+    }
 
     const precomputed =
       record.summary !== undefined
         ? { summary: record.summary, keywords: record.keywords ?? [] }
         : undefined;
 
-    await applyEvent(state, input, true, precomputed);
+    await applyEvent(state, input, noSummary, precomputed);
+
+    // If AI filled in missing summary/keywords, backfill into the NDJSON record
+    if (!precomputed && input.hook_event_name === "UserPromptSubmit") {
+      const session = state.sessions[input.session_id];
+      if (session?.summary !== undefined) {
+        record.summary = session.summary;
+        record.keywords = session.keywords ?? [];
+        filled++;
+        updatedLines.push(JSON.stringify(record));
+      } else {
+        updatedLines.push(line);
+      }
+    } else {
+      updatedLines.push(line);
+    }
+
     writeMarkdown(absSessions, state);
     appendSessionLog(absSessions, input, state, maxLogLines);
     replayed++;
+  }
+
+  // Write back NDJSON with any newly computed summaries
+  if (filled > 0) {
+    writeFileSync(absEvents, updatedLines.join("\n"), "utf8");
+    process.stderr.write(`claude-hook-handler reconstruct: filled ${filled} missing summaries\n`);
   }
 
   writeState(expandHome(statePath), state);
@@ -1018,13 +1051,15 @@ async function main(): Promise<void> {
       (v: string) => parseInt(v, 10),
       1000,
     )
+    .option("--no-summary", "Skip AI summarisation, use truncated prompt text instead")
     .action(async (opts: {
       events: string;
       sessions: string;
       state: string;
       maxLogLines: number;
+      summary: boolean;
     }) => {
-      await runReconstruct(opts.events, opts.sessions, opts.state, opts.maxLogLines);
+      await runReconstruct(opts.events, opts.sessions, opts.state, opts.maxLogLines, !opts.summary);
     });
 
   // ── default: stdin hook handler ──────────────────────────────────────────
