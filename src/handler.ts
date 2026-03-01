@@ -40,6 +40,17 @@ import type {
   PostToolUseFailureHookInput,
   SubagentStartHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+  getDb,
+  readStateFromDb,
+  writeStateToDb,
+  type State,
+  type SessionRecord,
+  type PendingToolUseRecord,
+} from "./db.js";
+
+// Re-export PendingToolUseRecord under the local alias used throughout
+type PendingToolUse = PendingToolUseRecord;
 
 // ─── Path helpers ─────────────────────────────────────────────────────────────
 
@@ -115,70 +126,6 @@ function detectRepo(cwd: string): RepoInfo | undefined {
   } catch {
     return undefined;
   }
-}
-
-// ─── Session state ────────────────────────────────────────────────────────────
-
-interface SessionRecord {
-  sessionId: string;
-  startedAt: string;
-  updatedAt: string;
-  cwd: string;
-  repoRoot?: string;
-  repoName?: string;
-  parentSessionId?: string;
-  gitUserName?: string;
-  gitUserEmail?: string;
-  prompt?: string;
-  summary?: string;
-  keywords?: string[];
-}
-
-interface PendingToolUse {
-  tool_use_id: string;
-  tool_name: string;
-  tool_input?: unknown;
-  startedAt: string; // pre-formatted timestamp
-}
-
-// ─── Event record (NDJSON primary store) ──────────────────────────────────────
-
-interface EventRecord {
-  timestamp: string;
-  event: string;
-  blocked: boolean;
-  data: HookInput;
-  // Derived fields stored for reconstruction without re-running AI
-  summary?: string;
-  keywords?: string[];
-}
-
-interface State {
-  sessions: Record<string, SessionRecord>;
-  // Maps agent_id → parent session_id so we can link child SessionStart events
-  agentParents: Record<string, string>;
-  // Maps tool_use_id → stashed PreToolUse data, cleared on PostToolUse
-  pendingToolUses: Record<string, PendingToolUse>;
-}
-
-function readState(statePath: string): State {
-  try {
-    const s = JSON.parse(readFileSync(statePath, "utf8")) as Partial<State>;
-    return {
-      sessions: s.sessions ?? {},
-      agentParents: s.agentParents ?? {},
-      pendingToolUses: s.pendingToolUses ?? {},
-    };
-  } catch {
-    return { sessions: {}, agentParents: {}, pendingToolUses: {} };
-  }
-}
-
-function writeState(statePath: string, state: State): void {
-  mkdirSync(dirname(statePath), { recursive: true });
-  const tmp = statePath + ".tmp";
-  writeFileSync(tmp, JSON.stringify(state, null, 2), "utf8");
-  renameSync(tmp, statePath); // atomic on same filesystem
 }
 
 // ─── Markdown rendering ───────────────────────────────────────────────────────
@@ -853,58 +800,50 @@ function buildResponse(blocked: boolean, reason: string): SyncHookJSONOutput {
   return blocked ? { decision: "block", reason } : {};
 }
 
-// ─── NDJSON event log (primary store) ────────────────────────────────────────
+// ─── SQLite event log ─────────────────────────────────────────────────────────
+
+import type { PrismaClient } from "../prisma/generated/client/index.js";
 
 /**
- * Append one event record to the NDJSON event log.
- * For UserPromptSubmit, also embeds `summary` and `keywords` from the already-
- * computed session state so the log is self-contained for reconstruction.
+ * Insert one event record into the SQLite database.
+ * For UserPromptSubmit, also stores summary and keywords from the session state.
  */
-function writeEventLog(
-  eventsPath: string,
+async function writeEventLog(
+  db: PrismaClient,
   input: HookInput,
   blocked: boolean,
   state: State,
-): void {
-  const absPath = expandHome(eventsPath);
-  mkdirSync(dirname(absPath), { recursive: true });
-
-  const record: EventRecord = {
-    timestamp: new Date().toISOString(),
-    event: input.hook_event_name,
-    blocked,
-    data: input,
-  };
-
-  if (input.hook_event_name === "UserPromptSubmit") {
-    const session = state.sessions[input.session_id];
-    if (session?.summary !== undefined) record.summary = session.summary;
-    if (session?.keywords !== undefined) record.keywords = session.keywords;
-  }
-
-  appendFileSync(absPath, JSON.stringify(record) + "\n", "utf8");
+): Promise<void> {
+  const session = state.sessions[input.session_id];
+  await db.event.create({
+    data: {
+      event: input.hook_event_name,
+      sessionId: input.session_id,
+      blocked,
+      data: JSON.stringify(input),
+      summary: input.hook_event_name === "UserPromptSubmit"
+        ? (session?.summary ?? null)
+        : null,
+      keywords: input.hook_event_name === "UserPromptSubmit" && session?.keywords
+        ? JSON.stringify(session.keywords)
+        : null,
+    },
+  });
 }
 
 // ─── Reconstruction ───────────────────────────────────────────────────────────
 
 /**
- * Replay the NDJSON event log and rebuild all markdown files from scratch.
+ * Replay the SQLite event log and rebuild all markdown files from scratch.
  * Uses stored summary/keywords from each record; calls AI for any that are missing
  * unless noSummary is true.
  */
 async function runReconstruct(
-  eventsPath: string,
+  db: PrismaClient,
   sessionsPath: string,
-  statePath: string,
   maxLogLines: number,
   noSummary: boolean,
 ): Promise<void> {
-  const absEvents = expandHome(eventsPath);
-  if (!existsSync(absEvents)) {
-    process.stderr.write(`claude-hook-handler: no event log found at ${absEvents}\n`);
-    process.exit(1);
-  }
-
   // Clear existing markdown output so we start fresh
   const absSessions = expandHome(sessionsPath);
   const sessionsDir = join(dirname(absSessions), "sessions");
@@ -915,54 +854,45 @@ async function runReconstruct(
   }
   if (existsSync(absSessions)) unlinkSync(absSessions);
 
+  const events = await db.event.findMany({ orderBy: { timestamp: "asc" } });
+
   const state: State = { sessions: {}, agentParents: {}, pendingToolUses: {} };
-  const rawLines = readFileSync(absEvents, "utf8").split("\n");
-  const updatedLines: string[] = [];
   let replayed = 0;
   let skipped = 0;
   let filled = 0;
 
-  for (const line of rawLines) {
-    if (!line.trim()) {
-      updatedLines.push(line);
-      continue;
-    }
-
-    let record: EventRecord;
+  for (const event of events) {
+    let input: HookInput;
     try {
-      record = JSON.parse(line) as EventRecord;
+      input = JSON.parse(event.data) as HookInput;
     } catch {
       skipped++;
-      updatedLines.push(line);
       continue;
     }
 
-    const input = record.data as HookInput;
     if (!input?.hook_event_name || input.hook_event_name === "Setup") {
-      updatedLines.push(line);
       continue;
     }
 
-    const precomputed =
-      record.summary !== undefined
-        ? { summary: record.summary, keywords: record.keywords ?? [] }
-        : undefined;
+    const precomputed = event.summary !== null
+      ? { summary: event.summary, keywords: event.keywords ? (JSON.parse(event.keywords) as string[]) : [] }
+      : undefined;
 
     await applyEvent(state, input, noSummary, precomputed);
 
-    // If AI filled in missing summary/keywords, backfill into the NDJSON record
+    // If AI filled in missing summary/keywords, backfill into the DB record
     if (!precomputed && input.hook_event_name === "UserPromptSubmit") {
       const session = state.sessions[input.session_id];
       if (session?.summary !== undefined) {
-        record.summary = session.summary;
-        record.keywords = session.keywords ?? [];
+        await db.event.update({
+          where: { id: event.id },
+          data: {
+            summary: session.summary,
+            keywords: JSON.stringify(session.keywords ?? []),
+          },
+        });
         filled++;
-        updatedLines.push(JSON.stringify(record));
-      } else {
-        updatedLines.push(line);
       }
-    } else {
-      updatedLines.push(line);
     }
 
     writeMarkdown(absSessions, state);
@@ -970,18 +900,90 @@ async function runReconstruct(
     replayed++;
   }
 
-  // Write back NDJSON with any newly computed summaries
+  // Write state back to DB
+  await writeStateToDb(db, state);
+
   if (filled > 0) {
-    writeFileSync(absEvents, updatedLines.join("\n"), "utf8");
     process.stderr.write(`claude-hook-handler reconstruct: filled ${filled} missing summaries\n`);
   }
-
-  writeState(expandHome(statePath), state);
   process.stderr.write(
     `claude-hook-handler reconstruct: replayed ${replayed} events` +
-      (skipped ? `, skipped ${skipped} malformed lines` : "") +
+      (skipped ? `, skipped ${skipped} malformed records` : "") +
       `\n  sessions → ${absSessions}\n`,
   );
+}
+
+// ─── Migration: NDJSON → SQLite ───────────────────────────────────────────────
+
+interface LegacyEventRecord {
+  timestamp: string;
+  event: string;
+  blocked: boolean;
+  data: HookInput;
+  summary?: string;
+  keywords?: string[];
+}
+
+async function runMigrate(
+  eventsPath: string,
+  db: PrismaClient,
+  sessionsPath: string,
+  maxLogLines: number,
+  noSummary: boolean,
+): Promise<void> {
+  const absEvents = expandHome(eventsPath);
+  if (!existsSync(absEvents)) {
+    process.stderr.write(`claude-hook-handler migrate: no NDJSON file found at ${absEvents}\n`);
+    process.exit(1);
+  }
+
+  const rawLines = readFileSync(absEvents, "utf8").split("\n");
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const line of rawLines) {
+    if (!line.trim()) continue;
+
+    let record: LegacyEventRecord;
+    try {
+      record = JSON.parse(line) as LegacyEventRecord;
+    } catch {
+      skipped++;
+      continue;
+    }
+
+    if (!record.data?.hook_event_name) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      await db.event.create({
+        data: {
+          timestamp: new Date(record.timestamp),
+          event: record.event,
+          sessionId: record.data.session_id,
+          blocked: record.blocked ?? false,
+          data: JSON.stringify(record.data),
+          summary: record.summary ?? null,
+          keywords: record.keywords ? JSON.stringify(record.keywords) : null,
+        },
+      });
+      inserted++;
+    } catch {
+      skipped++;
+    }
+  }
+
+  process.stderr.write(
+    `claude-hook-handler migrate: inserted ${inserted} events` +
+      (skipped ? `, skipped ${skipped} lines` : "") +
+      `\n`,
+  );
+
+  // Rebuild sessions/state from the newly inserted events
+  process.stderr.write(`claude-hook-handler migrate: running reconstruct...\n`);
+  await runReconstruct(db, sessionsPath, maxLogLines, noSummary);
 }
 
 // ─── stdin ────────────────────────────────────────────────────────────────────
@@ -1005,12 +1007,12 @@ async function readStdin(): Promise<string> {
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  const defaultEventsPath = config.repository
-    ? join(expandHome(config.repository), "events.ndjson")
-    : "~/.claude/events.ndjson";
+  const defaultDbPath = config.repository
+    ? join(expandHome(config.repository), "hook-handler.db")
+    : expandHome("~/.claude/hook-handler.db");
   const defaultSessionsPath = config.repository
     ? join(expandHome(config.repository), "sessions.md")
-    : "~/.claude/sessions.md";
+    : expandHome("~/.claude/sessions.md");
 
   const program = new Command();
 
@@ -1027,13 +1029,13 @@ async function main(): Promise<void> {
   program
     .command("reconstruct")
     .description(
-      "Rebuild markdown session files from the NDJSON event log.\n" +
+      "Rebuild markdown session files from the SQLite event log.\n" +
         "Clears existing markdown output and replays all recorded events.",
     )
     .option(
-      "--events <file>",
-      "NDJSON event log to read",
-      defaultEventsPath,
+      "--db <file>",
+      "SQLite database file",
+      defaultDbPath,
     )
     .option(
       "-s, --sessions <file>",
@@ -1041,9 +1043,42 @@ async function main(): Promise<void> {
       defaultSessionsPath,
     )
     .option(
-      "--state <file>",
-      "JSON state file to write",
-      "~/.claude/sessions-state.json",
+      "--max-log-lines <n>",
+      "Rotate session log files after this many lines (0 to disable)",
+      (v: string) => parseInt(v, 10),
+      1000,
+    )
+    .option("--no-summary", "Skip AI summarisation, use truncated prompt text instead")
+    .action(async (opts: {
+      db: string;
+      sessions: string;
+      maxLogLines: number;
+      summary: boolean;
+    }) => {
+      const db = await getDb(expandHome(opts.db));
+      await runReconstruct(db, opts.sessions, opts.maxLogLines, !opts.summary);
+    });
+
+  // ── migrate subcommand ───────────────────────────────────────────────────
+  program
+    .command("migrate")
+    .description(
+      "Migrate events from an NDJSON event log into a SQLite database.\n" +
+        "After inserting all events, runs reconstruct to rebuild session markdown.",
+    )
+    .requiredOption(
+      "--events <file>",
+      "Source NDJSON event log to read",
+    )
+    .option(
+      "--db <file>",
+      "Destination SQLite database file",
+      defaultDbPath,
+    )
+    .option(
+      "-s, --sessions <file>",
+      "Markdown sessions table to write",
+      defaultSessionsPath,
     )
     .option(
       "--max-log-lines <n>",
@@ -1054,30 +1089,26 @@ async function main(): Promise<void> {
     .option("--no-summary", "Skip AI summarisation, use truncated prompt text instead")
     .action(async (opts: {
       events: string;
+      db: string;
       sessions: string;
-      state: string;
       maxLogLines: number;
       summary: boolean;
     }) => {
-      await runReconstruct(opts.events, opts.sessions, opts.state, opts.maxLogLines, !opts.summary);
+      const db = await getDb(expandHome(opts.db));
+      await runMigrate(opts.events, db, opts.sessions, opts.maxLogLines, !opts.summary);
     });
 
   // ── default: stdin hook handler ──────────────────────────────────────────
   program
     .option(
-      "--events <file>",
-      "Primary NDJSON event log (written before markdown, enables reconstruction)",
-      defaultEventsPath,
+      "--db <file>",
+      "SQLite database file for event log and session state",
+      defaultDbPath,
     )
     .option(
       "-s, --sessions <file>",
       "Markdown sessions table to maintain",
       defaultSessionsPath,
-    )
-    .option(
-      "--state <file>",
-      "JSON state file for session persistence",
-      "~/.claude/sessions-state.json",
     )
     .option(
       "-b, --block <pattern>",
@@ -1103,9 +1134,8 @@ async function main(): Promise<void> {
     .option("--quiet", "Suppress stderr output")
     .action(async () => {
       const opts = program.opts<{
-        events: string;
+        db: string;
         sessions: string;
-        state: string;
         block: string[];
         blockReason: string;
         summary: boolean; // commander sets this from --no-summary
@@ -1113,9 +1143,7 @@ async function main(): Promise<void> {
         quiet?: boolean;
       }>();
 
-      const eventsPath = expandHome(opts.events);
       const sessionsPath = expandHome(opts.sessions);
-      const statePath = expandHome(opts.state);
       const blockPatterns = opts.block.map((p) => new RegExp(p));
       const noSummary = !opts.summary;
 
@@ -1142,20 +1170,21 @@ async function main(): Promise<void> {
 
       if (input.hook_event_name !== "Setup") {
         try {
-          const state = readState(statePath);
+          const db = await getDb(expandHome(opts.db));
+          const state = await readStateFromDb(db);
 
           // 1. Compute derived state (summary/keywords via AI if needed)
           await applyEvent(state, input, noSummary);
 
-          // 2. Write to NDJSON event log first — primary source of truth
-          writeEventLog(eventsPath, input, blocked, state);
+          // 2. Write to SQLite event log — primary source of truth
+          await writeEventLog(db, input, blocked, state);
 
           // 3. Derive markdown from state
           writeMarkdown(sessionsPath, state);
           const logPaths = appendSessionLog(sessionsPath, input, state, opts.maxLogLines);
 
           // 4. Persist state (after appendSessionLog so pendingToolUses mutations are saved)
-          writeState(statePath, state);
+          await writeStateToDb(db, state);
 
           commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
         } catch (err) {

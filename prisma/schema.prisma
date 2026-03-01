@@ -1,0 +1,49 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../prisma/generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model Event {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  event     String
+  sessionId String
+  blocked   Boolean  @default(false)
+  data      String   // full HookInput as JSON text
+  summary   String?
+  keywords  String?  // JSON array as text: '["a","b"]'
+
+  @@index([sessionId])
+  @@index([timestamp])
+}
+
+model Session {
+  sessionId       String   @id
+  startedAt       DateTime
+  updatedAt       DateTime
+  cwd             String
+  repoRoot        String?
+  repoName        String?
+  parentSessionId String?
+  gitUserName     String?
+  gitUserEmail    String?
+  prompt          String?
+  summary         String?
+  keywords        String?  // JSON array as text
+}
+
+model AgentParent {
+  agentId         String @id
+  parentSessionId String
+}
+
+model PendingToolUse {
+  toolUseId String  @id
+  toolName  String
+  toolInput String? // JSON text
+  startedAt String  // pre-formatted display string from fmt()
+}
