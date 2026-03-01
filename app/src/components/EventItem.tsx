@@ -183,7 +183,6 @@ const s = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 14,
     marginVertical: 4,
-    borderRadius: 4,
   },
   cardHeader: {
     flexDirection: "row",
@@ -213,11 +212,10 @@ const s = StyleSheet.create({
   assistantCard: {
     borderLeftWidth: 4,
     borderLeftColor: "#f59e0b",
-    backgroundColor: "#fffbeb",
+    backgroundColor: "#fff",
     paddingVertical: 10,
     paddingHorizontal: 14,
     marginVertical: 4,
-    borderRadius: 4,
   },
   assistantLabel: {
     fontSize: 12,
