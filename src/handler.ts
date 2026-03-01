@@ -302,7 +302,7 @@ function formatImportantEvent(input: HookInput): string {
   const name = input.hook_event_name;
   const sym = EVENT_SYMBOL[name] ?? "◆";
   const fields = renderFields(input, SKIP_COMMON);
-  return [`## ${ts} · ${sym} ${name}`, "", ...fields, "---", ""].join("\n");
+  return [`## ${sym} ${name}`, "", `<small>${ts}</small>`, "", ...fields, "---", ""].join("\n");
 }
 
 /** UserPromptSubmit: "<User> prompted:" followed by the prompt as a blockquote. */
@@ -310,7 +310,7 @@ function formatPromptEvent(input: HookInput, rec: SessionRecord | undefined): st
   const ts = fmt(new Date().toISOString());
   const user = rec?.gitUserName ?? rec?.gitUserEmail ?? "User";
   const prompt = "prompt" in input ? String(input.prompt) : "";
-  const lines: string[] = [`## ${ts} · → **${user} prompted:**`, ""];
+  const lines: string[] = [`## → **${user} prompted:**`, "", `<small>${ts}</small>`, ""];
   for (const line of prompt.split("\n")) lines.push(`> ${line}`);
   lines.push("", "---", "");
   return lines.join("\n");
@@ -329,7 +329,7 @@ function formatClaudeMessageEvent(input: HookInput): string {
 
   if (!message) return formatImportantEvent(input);
 
-  const lines: string[] = [`## ${ts} · ${sym} **Claude wrote:**`, ""];
+  const lines: string[] = [`## ${sym} **Claude wrote:**`, "", `<small>${ts}</small>`, ""];
   for (const line of message.split("\n")) lines.push(`> ${line}`);
   lines.push("", "---", "");
   return lines.join("\n");
@@ -343,7 +343,9 @@ function formatCollapsibleEvent(input: HookInput, childLogRelPath?: string): str
   const fields = renderFields(input, SKIP_NOISE, childLogRelPath);
   return [
     `<details>`,
-    `<summary>${ts} · ${sym} ${name}</summary>`,
+    `<summary>${sym} ${name}</summary>`,
+    "",
+    `<small>${ts}</small>`,
     "",
     ...fields,
     `</details>`,
@@ -366,6 +368,8 @@ function formatMergedToolUse(
     `<details>`,
     `<summary>▶${statusSym} ${pending.tool_name}${hintStr}</summary>`,
     "",
+    `<small>${pending.startedAt} → ${endTs}</small>`,
+    "",
   ];
 
   if (pending.tool_input !== undefined) {
@@ -383,7 +387,7 @@ function formatMergedToolUse(
     lines.push("**output:**", "```", s.length > 400 ? s.slice(0, 400) + "\n…" : s, "```", "");
   }
 
-  lines.push(`*${pending.startedAt} → ${endTs}*`, "", `</details>`, "");
+  lines.push(`</details>`, "");
   return lines.join("\n");
 }
 
