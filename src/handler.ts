@@ -34,6 +34,8 @@ import type {
   HookInput,
   SyncHookJSONOutput,
   PreToolUseHookInput,
+  PostToolUseHookInput,
+  PostToolUseFailureHookInput,
   SubagentStartHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 
@@ -109,18 +111,31 @@ interface SessionRecord {
   keywords?: string[];
 }
 
+interface PendingToolUse {
+  tool_use_id: string;
+  tool_name: string;
+  tool_input?: unknown;
+  startedAt: string; // pre-formatted timestamp
+}
+
 interface State {
   sessions: Record<string, SessionRecord>;
   // Maps agent_id → parent session_id so we can link child SessionStart events
   agentParents: Record<string, string>;
+  // Maps tool_use_id → stashed PreToolUse data, cleared on PostToolUse
+  pendingToolUses: Record<string, PendingToolUse>;
 }
 
 function readState(statePath: string): State {
   try {
     const s = JSON.parse(readFileSync(statePath, "utf8")) as Partial<State>;
-    return { sessions: s.sessions ?? {}, agentParents: s.agentParents ?? {} };
+    return {
+      sessions: s.sessions ?? {},
+      agentParents: s.agentParents ?? {},
+      pendingToolUses: s.pendingToolUses ?? {},
+    };
   } catch {
-    return { sessions: {}, agentParents: {} };
+    return { sessions: {}, agentParents: {}, pendingToolUses: {} };
   }
 }
 
@@ -197,17 +212,45 @@ function writeMarkdown(sessionsPath: string, state: State): void {
 
 // ─── Per-session event log ────────────────────────────────────────────────────
 
-const SKIP_FIELDS = new Set(["session_id", "hook_event_name", "transcript_path"]);
+// Always omit — structural noise with no reader value
+const SKIP_COMMON = new Set([
+  "session_id", "hook_event_name", "transcript_path", "tool_use_id",
+]);
+// Also omit for collapsed events (same for every tool call — not useful per-event)
+const SKIP_NOISE = new Set([...SKIP_COMMON, "cwd", "permission_mode"]);
 
-function formatEventEntry(input: HookInput, childLogRelPath?: string): string {
-  const ts = fmt(new Date().toISOString());
-  const name = input.hook_event_name;
-  const sym = EVENT_SYMBOL[name] ?? "◆";
-  const lines: string[] = [`### ${ts} · ${sym} ${name}`, ""];
+const IMPORTANT_EVENTS = new Set([
+  "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd",
+]);
 
+/** Extract a short hint string from tool_input for the <summary> line. */
+function toolSummaryHint(toolName: string, toolInput: unknown): string {
+  if (!toolInput || typeof toolInput !== "object") return "";
+  const inp = toolInput as Record<string, unknown>;
+  const str = (k: string): string | undefined =>
+    typeof inp[k] === "string" ? String(inp[k]) : undefined;
+  switch (toolName) {
+    case "Read":      return str("file_path") ?? "";
+    case "Write":     return str("file_path") ?? "";
+    case "Edit":      return str("file_path") ?? "";
+    case "Bash":      return (str("command") ?? "").slice(0, 70);
+    case "Glob":      return str("pattern") ?? "";
+    case "Grep":      return str("pattern") ?? "";
+    case "WebFetch":  return str("url") ?? "";
+    case "WebSearch": return str("query") ?? "";
+    default:          return "";
+  }
+}
+
+/** Render fields for an event, skipping the given skip-set. */
+function renderFields(
+  input: HookInput,
+  skip: Set<string>,
+  childLogRelPath?: string,
+): string[] {
+  const lines: string[] = [];
   for (const [key, value] of Object.entries(input)) {
-    if (SKIP_FIELDS.has(key) || value === undefined) continue;
-
+    if (skip.has(key) || value === undefined) continue;
     if (key === "prompt" || key === "message" || key === "last_assistant_message") {
       lines.push(`**${key}:**`, "");
       for (const line of String(value).split("\n")) lines.push(`> ${line}`);
@@ -221,8 +264,67 @@ function formatEventEntry(input: HookInput, childLogRelPath?: string): string {
       lines.push(`- **${key}:** \`${String(value)}\``);
     }
   }
+  return lines;
+}
 
-  lines.push("---", "");
+/** Important events: H2 heading, full field list, horizontal rule. */
+function formatImportantEvent(input: HookInput): string {
+  const ts = fmt(new Date().toISOString());
+  const name = input.hook_event_name;
+  const sym = EVENT_SYMBOL[name] ?? "◆";
+  const fields = renderFields(input, SKIP_COMMON);
+  return [`## ${ts} · ${sym} ${name}`, "", ...fields, "---", ""].join("\n");
+}
+
+/** Non-critical events: collapsed <details> block. */
+function formatCollapsibleEvent(input: HookInput, childLogRelPath?: string): string {
+  const ts = fmt(new Date().toISOString());
+  const name = input.hook_event_name;
+  const sym = EVENT_SYMBOL[name] ?? "◆";
+  const fields = renderFields(input, SKIP_NOISE, childLogRelPath);
+  return [
+    `<details>`,
+    `<summary>${ts} · ${sym} ${name}</summary>`,
+    "",
+    ...fields,
+    `</details>`,
+    "",
+  ].join("\n");
+}
+
+/** Merged Pre+PostToolUse: collapsed <details> with success/failure indicator. */
+function formatMergedToolUse(
+  pending: PendingToolUse,
+  post: PostToolUseHookInput | PostToolUseFailureHookInput,
+): string {
+  const failed = post.hook_event_name === "PostToolUseFailure";
+  const statusSym = failed ? "✗" : "✓";
+  const hint = toolSummaryHint(pending.tool_name, pending.tool_input);
+  const hintStr = hint ? ` · \`${hint.replace(/`/g, "'")}\`` : "";
+  const endTs = fmt(new Date().toISOString());
+
+  const lines: string[] = [
+    `<details>`,
+    `<summary>▶${statusSym} ${pending.tool_name}${hintStr}</summary>`,
+    "",
+  ];
+
+  if (pending.tool_input !== undefined) {
+    const s = JSON.stringify(pending.tool_input, null, 2);
+    lines.push("**input:**", "```json", s.length > 600 ? s.slice(0, 600) + "\n…" : s, "```", "");
+  }
+
+  if (failed && "error" in post && post.error) {
+    lines.push(`**error:** \`${String(post.error)}\``, "");
+  } else if ("tool_response" in post && post.tool_response !== undefined) {
+    const s =
+      typeof post.tool_response === "string"
+        ? post.tool_response
+        : JSON.stringify(post.tool_response, null, 2);
+    lines.push("**output:**", "```", s.length > 400 ? s.slice(0, 400) + "\n…" : s, "```", "");
+  }
+
+  lines.push(`*${pending.startedAt} → ${endTs}*`, "", `</details>`, "");
   return lines.join("\n");
 }
 
@@ -231,36 +333,23 @@ function sessionLogPath(sessionsPath: string, sessionId: string): string {
 }
 
 function updateLogHeader(logPath: string, rec: SessionRecord): void {
-  let content = readFileSync(logPath, "utf8");
+  const content = readFileSync(logPath, "utf8");
 
+  // Build the new header: AI summary as the H1, session ID in small text beneath
+  const title = rec.summary ?? `Session \`${rec.sessionId}\``;
   const keywordsLine = rec.keywords?.length
     ? `**Keywords:** ${rec.keywords.map((k) => `\`${k}\``).join(" ")}`
     : "";
-  const summaryLine = rec.summary ? `**Summary:** ${rec.summary}` : "";
-  const metaBlock = [summaryLine, keywordsLine].filter(Boolean).join("  \n");
 
-  if (!metaBlock) return;
+  const headerParts = [`# ${title}`, "", `<sub>\`${rec.sessionId}\`</sub>`, ""];
+  if (keywordsLine) headerParts.push(keywordsLine, "");
+  const newHeader = headerParts.join("\n");
 
-  // Replace existing meta block (between heading and first event) or insert one
-  const headingRe = /^(# (?:Sub)?agent Session `[^`]+`\n(?:\*\*(?:Parent|Type):[^\n]*\n)*\n)/;
-  if (content.includes("**Keywords:**") || content.includes("**Summary:**")) {
-    // Replace the existing meta block lines
-    content = content.replace(
-      /(?:^\*\*(?:Summary|Keywords):\*\*[^\n]*\n)+/m,
-      metaBlock + "\n",
-    );
-  } else {
-    // Insert after heading (and any Parent/Type lines for subagents)
-    content = content.replace(headingRe, `$1${metaBlock}\n\n`);
-    // Fallback: insert after the plain session heading
-    if (!content.includes(metaBlock)) {
-      content = content.replace(
-        /^(# Session `[^`]+`\n\n)/,
-        `$1${metaBlock}\n\n`,
-      );
-    }
-  }
-  writeFileSync(logPath, content, "utf8");
+  // Replace everything from the start of file up to the first event entry.
+  // Events start with ## , ### , or <details>.
+  const firstEventIdx = content.search(/^(?:#{2,3} |<details>)/m);
+  const body = firstEventIdx !== -1 ? content.slice(firstEventIdx) : "";
+  writeFileSync(logPath, newHeader + "\n" + body, "utf8");
 }
 
 function appendSessionLog(sessionsPath: string, input: HookInput, state: State): string[] {
@@ -277,7 +366,37 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
     if (rec) updateLogHeader(logPath, rec);
   }
 
-  const changedPaths = [logPath];
+  // ── PreToolUse: stash and write nothing yet ───────────────────────────────
+  if (input.hook_event_name === "PreToolUse") {
+    const pre = input as PreToolUseHookInput;
+    state.pendingToolUses[pre.tool_use_id] = {
+      tool_use_id: pre.tool_use_id,
+      tool_name: pre.tool_name,
+      tool_input: pre.tool_input,
+      startedAt: fmt(new Date().toISOString()),
+    };
+    return []; // nothing written to disk yet
+  }
+
+  // ── PostToolUse / PostToolUseFailure: merge with stashed Pre ─────────────
+  if (
+    input.hook_event_name === "PostToolUse" ||
+    input.hook_event_name === "PostToolUseFailure"
+  ) {
+    const post = input as PostToolUseHookInput | PostToolUseFailureHookInput;
+    const pending = state.pendingToolUses[post.tool_use_id];
+    if (pending) {
+      delete state.pendingToolUses[post.tool_use_id];
+      appendFileSync(logPath, formatMergedToolUse(pending, post), "utf8");
+    } else {
+      // No matching Pre (e.g. state was cleared) — render as collapsible fallback
+      appendFileSync(logPath, formatCollapsibleEvent(input), "utf8");
+    }
+    return [logPath];
+  }
+
+  // ── SubagentStart: create child log file ──────────────────────────────────
+  const changedPaths: string[] = [];
   let childLogRelPath: string | undefined;
 
   if (input.hook_event_name === "SubagentStart") {
@@ -298,7 +417,15 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
     childLogRelPath = `${agent_id}.md`;
   }
 
-  appendFileSync(logPath, formatEventEntry(input, childLogRelPath), "utf8");
+  // ── Important events: prominent H2 rendering ──────────────────────────────
+  if (IMPORTANT_EVENTS.has(input.hook_event_name)) {
+    appendFileSync(logPath, formatImportantEvent(input), "utf8");
+  } else {
+    // ── Everything else: collapsed ────────────────────────────────────────────
+    appendFileSync(logPath, formatCollapsibleEvent(input, childLogRelPath), "utf8");
+  }
+
+  changedPaths.push(logPath);
   return changedPaths;
 }
 
@@ -478,6 +605,10 @@ async function applyEvent(
       delete state.sessions[session_id];
       break;
     }
+
+    case "PreToolUse":
+      // Don't update sessions table — too frequent, makes updatedAt meaningless
+      break;
 
     default: {
       // Touch updatedAt for any other event
@@ -676,9 +807,10 @@ async function main(): Promise<void> {
     try {
       const state = readState(statePath);
       await applyEvent(state, input, noSummary);
-      writeState(statePath, state);
       writeMarkdown(sessionsPath, state);
       const logPaths = appendSessionLog(sessionsPath, input, state);
+      // Write state after appendSessionLog so pendingToolUses mutations are saved
+      writeState(statePath, state);
       commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
     } catch (err) {
       process.stderr.write(
