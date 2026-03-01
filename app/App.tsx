@@ -1,13 +1,16 @@
 import React from "react";
+import { Text, TouchableOpacity } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { ActiveSessions } from "./src/screens/ActiveSessions";
 import { SessionDetail } from "./src/screens/SessionDetail";
+import { SessionTree } from "./src/screens/SessionTree";
 
 export type RootStackParamList = {
   ActiveSessions: undefined;
+  SessionTree: undefined;
   SessionDetail: { sessionId: string; title?: string };
 };
 
@@ -22,7 +25,22 @@ export default function App() {
             <Stack.Screen
               name="ActiveSessions"
               component={ActiveSessions}
-              options={{ title: "Claude Sessions" }}
+              options={({ navigation }) => ({
+                title: "Claude Sessions",
+                headerRight: () => (
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate("SessionTree")}
+                    style={{ marginRight: 14 }}
+                  >
+                    <Text style={{ fontSize: 18 }}>⬡</Text>
+                  </TouchableOpacity>
+                ),
+              })}
+            />
+            <Stack.Screen
+              name="SessionTree"
+              component={SessionTree}
+              options={{ title: "Session Tree" }}
             />
             <Stack.Screen
               name="SessionDetail"

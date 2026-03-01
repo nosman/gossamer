@@ -12,7 +12,7 @@ import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
 import { fetchSession, fetchSessionEvents, type Session, type Event } from "../api";
 import { EventItem } from "../components/EventItem";
-import { ToolUseItem } from "../components/ToolUseItem";
+import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 
 type Props = StackScreenProps<RootStackParamList, "SessionDetail">;
 
@@ -20,9 +20,10 @@ type Props = StackScreenProps<RootStackParamList, "SessionDetail">;
 
 type DisplayItem =
   | { kind: "event"; event: Event }
-  | { kind: "toolUse"; pre: Event; post?: Event; failed: boolean };
+  | { kind: "toolGroup"; tools: ToolUseData[] };
 
 function groupEvents(events: Event[]): DisplayItem[] {
+  // Pass 1: pair PreToolUse with its matching PostToolUse
   const postMap = new Map<string, Event>();
   for (const event of events) {
     if (event.event === "PostToolUse" || event.event === "PostToolUseFailure") {
@@ -32,7 +33,11 @@ function groupEvents(events: Event[]): DisplayItem[] {
     }
   }
 
-  const result: DisplayItem[] = [];
+  type RawItem =
+    | { kind: "event"; event: Event }
+    | { kind: "toolUse"; pre: Event; post?: Event; failed: boolean };
+
+  const raw: RawItem[] = [];
   const consumed = new Set<number>();
 
   for (const event of events) {
@@ -42,17 +47,33 @@ function groupEvents(events: Event[]): DisplayItem[] {
     ) {
       continue;
     }
-
     if (event.event === "PreToolUse") {
       const d = event.data as Record<string, unknown>;
       const toolUseId = typeof d.tool_use_id === "string" ? d.tool_use_id : null;
       const post = toolUseId ? postMap.get(toolUseId) : undefined;
       if (post) consumed.add(post.id);
-      result.push({ kind: "toolUse", pre: event, post, failed: post?.event === "PostToolUseFailure" });
+      raw.push({ kind: "toolUse", pre: event, post, failed: post?.event === "PostToolUseFailure" });
       continue;
     }
+    raw.push({ kind: "event", event });
+  }
 
-    result.push({ kind: "event", event });
+  // Pass 2: collapse consecutive toolUse items into toolGroup
+  const result: DisplayItem[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    if (raw[i].kind === "toolUse") {
+      const group: ToolUseData[] = [];
+      while (i < raw.length && raw[i].kind === "toolUse") {
+        const t = raw[i] as { kind: "toolUse"; pre: Event; post?: Event; failed: boolean };
+        group.push({ pre: t.pre, post: t.post, failed: t.failed });
+        i++;
+      }
+      result.push({ kind: "toolGroup", tools: group });
+    } else {
+      result.push({ kind: "event", event: (raw[i] as { kind: "event"; event: Event }).event });
+      i++;
+    }
   }
 
   return result;
@@ -136,9 +157,9 @@ export function SessionDetail({ route, navigation }: Props) {
           <Text style={styles.emptyText}>No events for this session.</Text>
         </View>
       ) : (
-        items.map((item) =>
-          item.kind === "toolUse" ? (
-            <ToolUseItem key={`tool-${item.pre.id}`} pre={item.pre} post={item.post} failed={item.failed} />
+        items.map((item, idx) =>
+          item.kind === "toolGroup" ? (
+            <ToolGroupItem key={`grp-${idx}`} tools={item.tools} />
           ) : (
             <EventItem key={`evt-${item.event.id}`} event={item.event} />
           )
