@@ -76,6 +76,25 @@ function loadConfig(): Config {
   }
 }
 
+// ─── Git user ─────────────────────────────────────────────────────────────────
+
+interface GitUser {
+  name?: string;
+  email?: string;
+}
+
+function gitUser(): GitUser {
+  const get = (key: string): string | undefined => {
+    try {
+      return execSync(`git config --global ${key}`, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || undefined;
+    } catch { return undefined; }
+  };
+  return { name: get("user.name"), email: get("user.email") };
+}
+
 // ─── Git repo detection ───────────────────────────────────────────────────────
 
 interface RepoInfo {
@@ -106,6 +125,8 @@ interface SessionRecord {
   repoRoot?: string;
   repoName?: string;
   parentSessionId?: string;
+  gitUserName?: string;
+  gitUserEmail?: string;
   prompt?: string;
   summary?: string;
   keywords?: string[];
@@ -177,10 +198,14 @@ function renderMarkdown(state: State): string {
     );
   }
 
-  const header = "| Session ID | Repo | Summary | Keywords | Started | Last Updated |";
-  const divider = "|---|---|---|---|---|---|";
+  const header = "| Session ID | User | Repo | Summary | Keywords | Started | Last Updated |";
+  const divider = "|---|---|---|---|---|---|---|";
   const rows = sessions.map((s) => {
     const id = `[\`${s.sessionId.slice(0, 8)}…\`](sessions/${s.sessionId}.md)`;
+    const user = escapeCell(
+      s.gitUserName && s.gitUserEmail ? `${s.gitUserName} <${s.gitUserEmail}>`
+      : s.gitUserName ?? s.gitUserEmail ?? "",
+    );
     const repo = escapeCell(s.repoName ?? s.cwd.split("/").pop() ?? s.cwd);
     const summary = escapeCell(
       s.summary ?? s.prompt?.slice(0, 80) ?? "*waiting for prompt…*",
@@ -188,7 +213,7 @@ function renderMarkdown(state: State): string {
     const keywords = s.keywords?.length
       ? s.keywords.map((k) => `\`${escapeCell(k)}\``).join(" ")
       : "";
-    return `| ${id} | ${repo} | ${summary} | ${keywords} | ${fmt(s.startedAt)} | ${fmt(s.updatedAt)} |`;
+    return `| ${id} | ${user} | ${repo} | ${summary} | ${keywords} | ${fmt(s.startedAt)} | ${fmt(s.updatedAt)} |`;
   });
 
   return [
@@ -335,13 +360,18 @@ function sessionLogPath(sessionsPath: string, sessionId: string): string {
 function updateLogHeader(logPath: string, rec: SessionRecord): void {
   const content = readFileSync(logPath, "utf8");
 
-  // Build the new header: AI summary as the H1, session ID in small text beneath
+  // Build the new header: AI summary as the H1, session ID + user in small text beneath
   const title = rec.summary ?? `Session \`${rec.sessionId}\``;
   const keywordsLine = rec.keywords?.length
     ? `**Keywords:** ${rec.keywords.map((k) => `\`${k}\``).join(" ")}`
     : "";
 
-  const headerParts = [`# ${title}`, "", `<sub>\`${rec.sessionId}\`</sub>`, ""];
+  const userPart = rec.gitUserName && rec.gitUserEmail
+    ? ` · ${rec.gitUserName} &lt;${rec.gitUserEmail}&gt;`
+    : rec.gitUserName ? ` · ${rec.gitUserName}`
+    : rec.gitUserEmail ? ` · ${rec.gitUserEmail}`
+    : "";
+  const headerParts = [`# ${title}`, "", `<sub>\`${rec.sessionId}\`${userPart}</sub>`, ""];
   if (keywordsLine) headerParts.push(keywordsLine, "");
   const newHeader = headerParts.join("\n");
 
@@ -559,6 +589,7 @@ async function applyEvent(
     case "SessionStart": {
       const repo = detectRepo(cwd);
       const parentSessionId = state.agentParents[session_id];
+      const user = gitUser();
       state.sessions[session_id] = {
         sessionId: session_id,
         startedAt: now,
@@ -567,6 +598,8 @@ async function applyEvent(
         repoRoot: repo?.repoRoot,
         repoName: repo?.repoName,
         parentSessionId,
+        gitUserName: user.name,
+        gitUserEmail: user.email,
       };
       break;
     }
@@ -594,6 +627,8 @@ async function applyEvent(
         repoRoot: existing?.repoRoot ?? repo?.repoRoot,
         repoName: existing?.repoName ?? repo?.repoName,
         parentSessionId: existing?.parentSessionId,
+        gitUserName: existing?.gitUserName,
+        gitUserEmail: existing?.gitUserEmail,
         prompt,
         summary,
         keywords,
