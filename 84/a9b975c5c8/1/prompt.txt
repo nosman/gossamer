@@ -1,0 +1,241 @@
+Implement the following plan:
+
+# Plan: Replace NDJSON event log with SQLite + Prisma
+
+## Context
+Events are currently appended to a flat NDJSON file (`~/claude-hooks.ndjson`) and session
+state is stored in a JSON file (`~/.claude/sessions-state.json`). The goal is to replace
+both with a single SQLite database via Prisma, gaining structured queries, atomic writes,
+and backfill-in-place without rewriting an entire file.
+
+---
+
+## Files to create / modify
+
+| File | Action |
+|---|---|
+| `prisma/schema.prisma` | CREATE |
+| `src/db.ts` | CREATE — DB init + state read/write helpers |
+| `src/handler.ts` | MODIFY — replace NDJSON/JSON logic, update CLI flags |
+| `package.json` | MODIFY — add deps, update build script |
+| `tsconfig.json` | MODIFY — `bundler` → `NodeNext` |
+| `~/.claude/settings.json` | MODIFY — rename `--events` → `--db`, remove `--state` |
+
+---
+
+## 1. Install packages
+
+```
+npm install @prisma/client @prisma/adapter-better-sqlite3 better-sqlite3
+npm install --save-dev prisma @types/better-sqlite3
+```
+
+Add `prisma/generated/` to `.gitignore`.
+
+---
+
+## 2. `prisma/schema.prisma`
+
+```prisma
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../prisma/generated/client"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.db"  // overridden at runtime via driver adapter
+}
+
+model Event {
+  id        Int      @id @default(autoincrement())
+  timestamp DateTime @default(now())
+  event     String
+  sessionId String
+  blocked   Boolean  @default(false)
+  data      String   // full HookInput as JSON text
+  summary   String?
+  keywords  String?  // JSON array as text: '["a","b"]'
+
+  @@index([sessionId])
+  @@index([timestamp])
+}
+
+model Session {
+  sessionId       String   @id
+  startedAt       DateTime
+  updatedAt       DateTime
+  cwd             String
+  repoRoot        String?
+  repoName        String?
+  parentSessionId String?
+  gitUserName     String?
+  gitUserEmail    String?
+  prompt          String?
+  summary         String?
+  keywords        String?  // JSON array as text
+}
+
+model AgentParent {
+  agentId         String @id
+  parentSessionId String
+}
+
+model PendingToolUse {
+  toolUseId String  @id
+  toolName  String
+  toolInput String? // JSON text
+  startedAt String  // pre-formatted display string from fmt()
+}
+```
+
+---
+
+## 3. `tsconfig.json`
+
+Change `module` and `moduleResolution` so the Prisma generated client imports resolve
+correctly at runtime without a bundler:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    ...
+  }
+}
+```
+
+No existing imports in `handler.ts` / `index.ts` use local relative paths, so no `.js`
+extension changes are needed in those files. The new `src/db.ts` will use a relative import
+for the generated client and must include the `.js` extension:
+```ts
+import { PrismaClient } from "../prisma/generated/client/index.js";
+```
+
+---
+
+## 4. `package.json` changes
+
+- Build script: `"build": "prisma generate && tsc"`
+- Add scripts: `"db:push": "prisma db push"`, `"db:studio": "prisma studio"`
+- Dependencies: add `@prisma/client`, `@prisma/adapter-better-sqlite3`, `better-sqlite3`
+- DevDependencies: add `prisma`, `@types/better-sqlite3`
+
+---
+
+## 5. `src/db.ts` (new file)
+
+Exports:
+- `getDb(dbPath: string): PrismaClient` — opens `better-sqlite3` connection, wraps with
+  Prisma adapter, returns singleton client. Also calls `prisma.$executeRaw` to run
+  `PRAGMA journal_mode=WAL` for safe concurrent writes.
+- `readStateFromDb(db: PrismaClient): Promise<State>` — fetches all 3 tables in parallel
+  (`Promise.all`), assembles the in-memory `State` object (deserialising JSON fields).
+- `writeStateToDb(db: PrismaClient, state: State): Promise<void>` — upserts sessions,
+  replaces agentParents and pendingToolUses with `deleteMany` + `createMany`.
+
+The `SessionRecord` ↔ `Session` model mapping converts `startedAt`/`updatedAt`
+`DateTime` ↔ `string` (ISO) and `keywords` `string?` ↔ `string[]?` (JSON parse/stringify).
+
+---
+
+## 6. `src/handler.ts` changes
+
+### Remove
+- `readState`, `writeState` functions
+- `writeEventLog` (NDJSON version)
+- All `fs` imports used only for state/events (`appendFileSync` is still needed for session
+  log files)
+
+### Replace `writeEventLog` with DB insert
+```ts
+async function writeEventLog(db, input, blocked, state): Promise<void> {
+  const session = state.sessions[input.session_id];
+  await db.event.create({ data: {
+    event: input.hook_event_name,
+    sessionId: input.session_id,
+    blocked,
+    data: JSON.stringify(input),
+    summary: input.hook_event_name === "UserPromptSubmit" ? session?.summary ?? null : null,
+    keywords: input.hook_event_name === "UserPromptSubmit" && session?.keywords
+      ? JSON.stringify(session.keywords) : null,
+  }});
+}
+```
+
+### Replace `runReconstruct` event source
+```ts
+// Before: readFileSync + split("\n")
+// After:
+const events = await db.event.findMany({ orderBy: { timestamp: "asc" } });
+```
+
+Loop body changes:
+- `record.data` becomes the parsed `JSON.parse(event.data) as HookInput`
+- `precomputed` from `event.summary` / `event.keywords`
+- Backfill update: `await db.event.update({ where: { id: event.id }, data: { summary, keywords: JSON.stringify(keywords) } })`
+- Remove the `updatedLines` array / `writeFileSync` rewrite — no longer needed
+
+### CLI flag changes
+- Rename `--events` → `--db` on both the default command and reconstruct subcommand
+- Remove `--state` from both
+- Default db path: `config.repository ? join(..., "hook-handler.db") : "~/.claude/hook-handler.db"`
+- Pass `db` (opened via `getDb(dbPath)`) instead of `eventsPath`/`statePath`
+
+### Add `migrate` subcommand
+```
+claude-hook-handler migrate --events <ndjson-file> --db <sqlite-file>
+```
+Reads NDJSON line by line, inserts each valid record into `db.event.create()` preserving
+original `timestamp`. After inserting all events, runs reconstruct to rebuild sessions/
+agentParents/pendingToolUses in the DB. Reports inserted/skipped counts to stderr.
+
+---
+
+## 7. `~/.claude/settings.json` update
+
+All 7 hook commands change from:
+```
+claude-hook-handler --sessions ~/.claude/sessions.md --events ~/claude-hooks.ndjson
+```
+to:
+```
+claude-hook-handler --sessions ~/.claude/sessions.md --db ~/.claude/hook-handler.db
+```
+
+---
+
+## Verification
+
+1. `npm run build` — must compile without errors (Prisma generates, then tsc)
+2. `npx prisma db push --schema prisma/schema.prisma` — creates `~/.claude/hook-handler.db`
+3. `claude-hook-handler migrate --events ~/claude-hooks.ndjson --db ~/.claude/hook-handler.db`
+   — imports existing events
+4. `claude-hook-handler reconstruct --db ~/.claude/hook-handler.db --sessions ~/.claude/sessions.md`
+   — rebuilds markdown; confirm output matches pre-migration content
+5. Send a test hook event manually via `echo '{...}' | claude-hook-handler --db ...` and
+   confirm the event appears in the DB (`npx prisma studio` or sqlite3 CLI) and in the
+   session markdown
+6. Reload Claude Code and verify live hooks fire successfully (check system reminder)
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/stephanostsoucas/.claude/projects/-Users-stephanostsoucas-gossamer/8995a262-801e-4e29-bcf8-d64c24412c37.jsonl
+
+---
+
+migrate --events ~/claude-hooks.ndjson --db ~/.claude/hook-handler.db
+
+---
+
+Recontruct the markdown from the database
+
+---
+
+Now that we are storing our data in sqlite, we can add more interactivity. Instead of generating markdown files, let's display the data in a react-native app. Create an ActiveSessions compontent to display active sessions. Clicking a row on the active sessions table should open a scrollable view of the single session.
+
+---
+
+[Request interrupted by user for tool use]

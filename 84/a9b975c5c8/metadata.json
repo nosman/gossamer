@@ -3,7 +3,7 @@
   "checkpoint_id": "84a9b975c5c8",
   "strategy": "manual-commit",
   "branch": "react-native",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "app/.expo/README.md",
     "app/.expo/devices.json",
@@ -29,13 +29,20 @@
       "context": "/84/a9b975c5c8/0/context.md",
       "content_hash": "/84/a9b975c5c8/0/content_hash.txt",
       "prompt": "/84/a9b975c5c8/0/prompt.txt"
+    },
+    {
+      "metadata": "/84/a9b975c5c8/1/metadata.json",
+      "transcript": "/84/a9b975c5c8/1/full.jsonl",
+      "context": "/84/a9b975c5c8/1/context.md",
+      "content_hash": "/84/a9b975c5c8/1/content_hash.txt",
+      "prompt": "/84/a9b975c5c8/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 93,
-    "cache_creation_tokens": 55686,
-    "cache_read_tokens": 3013250,
-    "output_tokens": 20848,
-    "api_call_count": 51
+    "input_tokens": 228,
+    "cache_creation_tokens": 146462,
+    "cache_read_tokens": 8118094,
+    "output_tokens": 62631,
+    "api_call_count": 131
   }
 }
