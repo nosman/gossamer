@@ -395,6 +395,64 @@ function sessionLogPath(sessionsPath: string, sessionId: string): string {
   return join(dirname(sessionsPath), "sessions", `${sessionId}.md`);
 }
 
+// ─── Log rotation ─────────────────────────────────────────────────────────────
+
+function archiveTimestamp(): string {
+  const d = new Date();
+  return (
+    String(d.getFullYear()) +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    String(d.getDate()).padStart(2, "0") +
+    "-" +
+    String(d.getHours()).padStart(2, "0") +
+    String(d.getMinutes()).padStart(2, "0")
+  );
+}
+
+/**
+ * If `logPath` exceeds `maxLines` lines, rename it to a timestamped archive,
+ * then write a fresh file containing only the header (with an "← prev" link).
+ * Returns the archive path if rotation happened, undefined otherwise.
+ */
+function rotateSessionLog(logPath: string, maxLines: number): string | undefined {
+  if (!existsSync(logPath)) return undefined;
+
+  const content = readFileSync(logPath, "utf8");
+  if (content.split("\n").length <= maxLines) return undefined;
+
+  // Build archive filename next to the current file
+  const dir = dirname(logPath);
+  const base = basename(logPath, ".md");
+  const archiveName = `${base}-${archiveTimestamp()}.md`;
+  const archivePath = join(dir, archiveName);
+
+  // Rename current file → archive
+  renameSync(logPath, archivePath);
+
+  // Extract header: everything before the first event entry
+  const firstEventIdx = content.search(/^(?:## |<details>)/m);
+  let header = firstEventIdx !== -1 ? content.slice(0, firstEventIdx) : content;
+
+  // Inject / update the "← prev" link next to the session ID in the <sub> line
+  const prevLink = `[← prev](${archiveName})`;
+  if (header.includes("[← prev]")) {
+    // Update existing link to point to the new archive
+    header = header.replace(/\[← prev\]\([^)]*\)/, prevLink);
+  } else if (header.includes("<sub>")) {
+    // Insert after the backtick-wrapped session ID
+    header = header.replace(/(<sub>)(`[^`]+`)/, `$1$2 · ${prevLink}`);
+  } else {
+    // Fallback for bare initial header (pre-UserPromptSubmit)
+    header = header.replace(
+      /^(# Session `[^`]+`\n\n)/m,
+      `$1<small>${prevLink}</small>\n\n`,
+    );
+  }
+
+  writeFileSync(logPath, header, "utf8");
+  return archivePath;
+}
+
 function updateLogHeader(logPath: string, rec: SessionRecord): void {
   const content = readFileSync(logPath, "utf8");
 
@@ -420,7 +478,7 @@ function updateLogHeader(logPath: string, rec: SessionRecord): void {
   writeFileSync(logPath, newHeader + "\n" + body, "utf8");
 }
 
-function appendSessionLog(sessionsPath: string, input: HookInput, state: State): string[] {
+function appendSessionLog(sessionsPath: string, input: HookInput, state: State, maxLogLines: number): string[] {
   const logPath = sessionLogPath(sessionsPath, input.session_id);
   mkdirSync(dirname(logPath), { recursive: true });
 
@@ -451,6 +509,13 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
     return []; // nothing written to disk yet
   }
 
+  // ── Log rotation (before any write) ──────────────────────────────────────
+  const rotatedPaths: string[] = [];
+  if (maxLogLines > 0) {
+    const archived = rotateSessionLog(logPath, maxLogLines);
+    if (archived) rotatedPaths.push(archived);
+  }
+
   // ── PostToolUse / PostToolUseFailure: merge with stashed Pre ─────────────
   if (
     input.hook_event_name === "PostToolUse" ||
@@ -465,11 +530,11 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
       // No matching Pre (e.g. state was cleared) — render as collapsible fallback
       appendFileSync(logPath, formatCollapsibleEvent(input), "utf8");
     }
-    return [logPath];
+    return [...rotatedPaths, logPath];
   }
 
   // ── SubagentStart: create child log file ──────────────────────────────────
-  const changedPaths: string[] = [];
+  const changedPaths: string[] = [...rotatedPaths];
   let childLogRelPath: string | undefined;
 
   if (input.hook_event_name === "SubagentStart") {
@@ -844,6 +909,12 @@ async function main(): Promise<void> {
       "--no-summary",
       "Skip AI summarisation, use truncated prompt text instead",
     )
+    .option(
+      "--max-log-lines <n>",
+      "Rotate session log files after this many lines (0 to disable)",
+      (v: string) => parseInt(v, 10),
+      1000,
+    )
     .option("--quiet", "Suppress stderr output");
 
   program.parse();
@@ -855,6 +926,7 @@ async function main(): Promise<void> {
     block: string[];
     blockReason: string;
     summary: boolean; // commander sets this from --no-summary
+    maxLogLines: number;
     quiet?: boolean;
   }>();
 
@@ -890,7 +962,7 @@ async function main(): Promise<void> {
       const state = readState(statePath);
       await applyEvent(state, input, noSummary);
       writeMarkdown(sessionsPath, state);
-      const logPaths = appendSessionLog(sessionsPath, input, state);
+      const logPaths = appendSessionLog(sessionsPath, input, state, opts.maxLogLines);
       // Write state after appendSessionLog so pendingToolUses mutations are saved
       writeState(statePath, state);
       commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
