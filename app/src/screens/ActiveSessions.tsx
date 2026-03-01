@@ -2,12 +2,11 @@ import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
   Text,
-  FlatList,
-  RefreshControl,
   StyleSheet,
-  ScrollView,
   ActivityIndicator,
+  useWindowDimensions,
 } from "react-native";
+import { useHeaderHeight } from "@react-navigation/elements";
 import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
@@ -25,11 +24,16 @@ const COLUMNS: { label: string; width: number }[] = [
   { label: "Updated",  width: COL_WIDTHS.updated  },
 ];
 
+const TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
+
 export function ActiveSessions({ navigation }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const { height } = useWindowDimensions();
+  const headerHeight = useHeaderHeight();
+  const contentHeight = height - headerHeight;
 
   const load = useCallback(async () => {
     try {
@@ -47,11 +51,6 @@ export function ActiveSessions({ navigation }: Props) {
       load().catch(() => undefined);
     });
     return unsubscribe;
-  }, [load]);
-
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    load().finally(() => setRefreshing(false));
   }, [load]);
 
   if (loading) {
@@ -76,25 +75,26 @@ export function ActiveSessions({ navigation }: Props) {
   }
 
   return (
-    <ScrollView horizontal contentContainerStyle={styles.tableWrapper}>
-      <View style={styles.table}>
-        {/* Header row */}
-        <View style={[styles.row, styles.headerRow]}>
-          {COLUMNS.map(({ label, width }) => (
-            <Text
-              key={label}
-              style={[styles.headerCell, { width }]}
-            >
-              {label}
-            </Text>
-          ))}
-        </View>
+    <View style={[styles.scroll, { height: contentHeight }]}>
+      {/* Sticky header — outside the scroll so it doesn't move vertically */}
+      <View style={[styles.row, styles.headerRow]}>
+        {COLUMNS.map(({ label, width }) => (
+          <Text key={label} style={[styles.headerCell, { width }]}>
+            {label}
+          </Text>
+        ))}
+      </View>
 
-        <FlatList
-          data={sessions}
-          keyExtractor={(item) => item.sessionId}
-          renderItem={({ item }) => (
+      {/* Rows — scrollable both horizontally and vertically */}
+      <View style={styles.rowsScroll}>
+        {sessions.length === 0 ? (
+          <View style={styles.centered}>
+            <Text style={styles.emptyText}>No sessions yet.</Text>
+          </View>
+        ) : (
+          sessions.map((item) => (
             <SessionRow
+              key={item.sessionId}
               session={item}
               onPress={() =>
                 navigation.navigate("SessionDetail", {
@@ -103,36 +103,23 @@ export function ActiveSessions({ navigation }: Props) {
                 })
               }
             />
-          )}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-          }
-          ListEmptyComponent={
-            <View style={styles.centered}>
-              <Text style={styles.emptyText}>No sessions yet.</Text>
-            </View>
-          }
-        />
+          ))
+        )}
       </View>
-    </ScrollView>
+    </View>
   );
 }
 
-const TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16; // +16 for row padding
-
 const styles = StyleSheet.create({
+  scroll: {
+    overflow: "scroll",
+    minWidth: TOTAL_WIDTH,
+  },
   centered: {
-    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: 24,
-  },
-  tableWrapper: {
-    flexGrow: 1,
-  },
-  table: {
-    flex: 1,
-    minWidth: TOTAL_WIDTH,
+    minHeight: 80,
   },
   row: {
     flexDirection: "row",
@@ -143,6 +130,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e5e7eb",
     paddingVertical: 8,
     paddingHorizontal: 8,
+    minWidth: TOTAL_WIDTH,
   },
   headerCell: {
     fontSize: 12,
@@ -151,6 +139,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     textTransform: "uppercase",
     letterSpacing: 0.5,
+  },
+  rowsScroll: {
+    minWidth: TOTAL_WIDTH,
   },
   errorTitle: {
     fontSize: 18,
