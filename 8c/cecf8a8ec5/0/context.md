@@ -1,0 +1,70 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+This is a tool to track claude hook calls, write them to a log, then create markdown files from the log so that users can keep track of the ai context as they develop. We still need to improve the ui. Make the tool call events small and don't add an icon next to them since the collapsed description tags already have their own icon
+
+### Prompt 2
+
+reinstall the CLI globally using NPM
+
+### Prompt 3
+
+test it out
+
+### Prompt 4
+
+The hooks are failing, unknown option --log. This is code that you recently wrote, can you fix it?
+
+### Prompt 5
+
+test it out
+
+### Prompt 6
+
+Where is the json file where the raw events get logged?
+
+### Prompt 7
+
+show me the last few events in that file
+
+### Prompt 8
+
+reconstruct the markdown from the json log
+
+### Prompt 9
+
+where is the new markdown file?
+
+### Prompt 10
+
+How come the current session doesn't show the username?
+
+### Prompt 11
+
+There is a bug for rendering events with a last_message saying "claude wrote". Something is broken with the markdown formatting because i am seeing ## instead of the h2 being formatted properly. Please fix this
+
+### Prompt 12
+
+how come the keywords don't show up anymore for many of the sessions in sessions.md? We should add them back in
+
+### Prompt 13
+
+There is a small bug: Some of the tool use events don't properly enclose the text in the summary and description tags. This results in the raw json tool call being displayed and not being hidden. Example tool call: "✓ Bash · `grep -n "Claude wrote\|
+\|^##\|^---" ~/.claude/sessions/8995a`
+01/03/26 01:34 → 01/03/26 01:34"
+
+### Prompt 14
+
+reconstruct the markdown
+
+### Prompt 15
+
+Let's do a significant refactor. Instead of logging events to a raw json file, let's keep them in a sqlite database. Let's use prisma as our ORM and create a table that can store the claude code events we track.
+
+### Prompt 16
+
+[Request interrupted by user for tool use]
+
