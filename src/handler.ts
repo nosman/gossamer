@@ -1098,6 +1098,17 @@ async function main(): Promise<void> {
       await runMigrate(opts.events, db, opts.sessions, opts.maxLogLines, !opts.summary);
     });
 
+  // ── serve subcommand ─────────────────────────────────────────────────────
+  program
+    .command("serve")
+    .description("Start the HTTP + WebSocket API server.")
+    .option("--db <file>", "SQLite database file", defaultDbPath)
+    .option("--port <n>", "Port to listen on", (v: string) => parseInt(v, 10), 3000)
+    .action(async (opts: { db: string; port: number }) => {
+      const { startServer } = await import("./server.js");
+      await startServer(expandHome(opts.db), opts.port);
+    });
+
   // ── default: stdin hook handler ──────────────────────────────────────────
   program
     .option(
