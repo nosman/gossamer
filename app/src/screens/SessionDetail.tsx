@@ -58,18 +58,29 @@ function groupEvents(events: Event[]): DisplayItem[] {
     raw.push({ kind: "event", event });
   }
 
-  // Pass 2: collapse consecutive toolUse items into toolGroup
+  // Pass 2: collapse consecutive toolUse + Notification items into toolGroup.
+  // Notifications are absorbed silently (they're mostly "permission needed" noise).
+  const isGroupable = (item: RawItem) =>
+    item.kind === "toolUse" ||
+    (item.kind === "event" && item.event.event === "Notification");
+
   const result: DisplayItem[] = [];
   let i = 0;
   while (i < raw.length) {
-    if (raw[i].kind === "toolUse") {
+    if (isGroupable(raw[i])) {
       const group: ToolUseData[] = [];
-      while (i < raw.length && raw[i].kind === "toolUse") {
-        const t = raw[i] as { kind: "toolUse"; pre: Event; post?: Event; failed: boolean };
-        group.push({ pre: t.pre, post: t.post, failed: t.failed });
+      while (i < raw.length && isGroupable(raw[i])) {
+        const item = raw[i];
+        if (item.kind === "toolUse") {
+          group.push({ pre: item.pre, post: item.post, failed: item.failed });
+        }
+        // Notifications are swallowed — don't add to group
         i++;
       }
-      result.push({ kind: "toolGroup", tools: group });
+      if (group.length > 0) {
+        result.push({ kind: "toolGroup", tools: group });
+      }
+      // If the run was notifications-only, they're silently dropped
     } else {
       result.push({ kind: "event", event: (raw[i] as { kind: "event"; event: Event }).event });
       i++;
