@@ -376,7 +376,7 @@ function formatMergedToolUse(
   const failed = post.hook_event_name === "PostToolUseFailure";
   const statusSym = failed ? "✗" : "✓";
   const hint = toolSummaryHint(pending.tool_name, pending.tool_input);
-  const hintStr = hint ? ` · \`${hint.replace(/`/g, "'")}\`` : "";
+  const hintStr = hint ? ` · \`${hint.replace(/`/g, "'").replace(/\s+/g, " ")}\`` : "";
   const endTs = fmt(new Date().toISOString());
 
   const lines: string[] = [
