@@ -11,11 +11,19 @@ import {
 import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
-import { SessionRow } from "../components/SessionRow";
+import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 
 type Props = StackScreenProps<RootStackParamList, "ActiveSessions">;
 
-const HEADERS = ["Session", "User", "Repo", "Summary", "Keywords", "Started", "Updated"];
+const COLUMNS: { label: string; width: number }[] = [
+  { label: "Session",  width: COL_WIDTHS.session  },
+  { label: "User",     width: COL_WIDTHS.user     },
+  { label: "Repo",     width: COL_WIDTHS.repo     },
+  { label: "Summary",  width: COL_WIDTHS.summary  },
+  { label: "Keywords", width: COL_WIDTHS.keywords },
+  { label: "Started",  width: COL_WIDTHS.started  },
+  { label: "Updated",  width: COL_WIDTHS.updated  },
+];
 
 export function ActiveSessions({ navigation }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -72,12 +80,12 @@ export function ActiveSessions({ navigation }: Props) {
       <View style={styles.table}>
         {/* Header row */}
         <View style={[styles.row, styles.headerRow]}>
-          {HEADERS.map((h, i) => (
+          {COLUMNS.map(({ label, width }) => (
             <Text
-              key={h}
-              style={[styles.headerCell, i === 3 && styles.summaryCell]}
+              key={label}
+              style={[styles.headerCell, { width }]}
             >
-              {h}
+              {label}
             </Text>
           ))}
         </View>
@@ -110,8 +118,7 @@ export function ActiveSessions({ navigation }: Props) {
   );
 }
 
-const CELL_WIDTH = 140;
-const SUMMARY_CELL_WIDTH = 260;
+const TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16; // +16 for row padding
 
 const styles = StyleSheet.create({
   centered: {
@@ -125,7 +132,7 @@ const styles = StyleSheet.create({
   },
   table: {
     flex: 1,
-    minWidth: CELL_WIDTH * 6 + SUMMARY_CELL_WIDTH,
+    minWidth: TOTAL_WIDTH,
   },
   row: {
     flexDirection: "row",
@@ -138,16 +145,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   headerCell: {
-    width: CELL_WIDTH,
     fontSize: 12,
     fontWeight: "700",
     color: "#6b7280",
     paddingHorizontal: 4,
     textTransform: "uppercase",
     letterSpacing: 0.5,
-  },
-  summaryCell: {
-    width: SUMMARY_CELL_WIDTH,
   },
   errorTitle: {
     fontSize: 18,
