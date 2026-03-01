@@ -245,7 +245,11 @@ const SKIP_COMMON = new Set([
 const SKIP_NOISE = new Set([...SKIP_COMMON, "cwd", "permission_mode"]);
 
 const IMPORTANT_EVENTS = new Set([
-  "SessionStart", "UserPromptSubmit", "Stop", "SessionEnd",
+  "UserPromptSubmit", "Stop", "SessionEnd",
+]);
+
+const SKIP_EVENTS = new Set([
+  "SessionStart",
 ]);
 
 /** Extract a short hint string from tool_input for the <summary> line. */
@@ -299,6 +303,36 @@ function formatImportantEvent(input: HookInput): string {
   const sym = EVENT_SYMBOL[name] ?? "◆";
   const fields = renderFields(input, SKIP_COMMON);
   return [`## ${ts} · ${sym} ${name}`, "", ...fields, "---", ""].join("\n");
+}
+
+/** UserPromptSubmit: "<User> prompted:" followed by the prompt as a blockquote. */
+function formatPromptEvent(input: HookInput, rec: SessionRecord | undefined): string {
+  const ts = fmt(new Date().toISOString());
+  const user = rec?.gitUserName ?? rec?.gitUserEmail ?? "User";
+  const prompt = "prompt" in input ? String(input.prompt) : "";
+  const lines: string[] = [`## ${ts} · → **${user} prompted:**`, ""];
+  for (const line of prompt.split("\n")) lines.push(`> ${line}`);
+  lines.push("", "---", "");
+  return lines.join("\n");
+}
+
+/** Stop / Notification: "Claude wrote:" followed by the message as a blockquote. */
+function formatClaudeMessageEvent(input: HookInput): string {
+  const ts = fmt(new Date().toISOString());
+  const sym = EVENT_SYMBOL[input.hook_event_name] ?? "◆";
+  const message =
+    "last_assistant_message" in input && input.last_assistant_message
+      ? String(input.last_assistant_message)
+      : "message" in input && input.message
+      ? String(input.message)
+      : "";
+
+  if (!message) return formatImportantEvent(input);
+
+  const lines: string[] = [`## ${ts} · ${sym} **Claude wrote:**`, ""];
+  for (const line of message.split("\n")) lines.push(`> ${line}`);
+  lines.push("", "---", "");
+  return lines.join("\n");
 }
 
 /** Non-critical events: collapsed <details> block. */
@@ -396,6 +430,11 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
     if (rec) updateLogHeader(logPath, rec);
   }
 
+  // ── Events to skip entirely ───────────────────────────────────────────────
+  if (SKIP_EVENTS.has(input.hook_event_name)) {
+    return [];
+  }
+
   // ── PreToolUse: stash and write nothing yet ───────────────────────────────
   if (input.hook_event_name === "PreToolUse") {
     const pre = input as PreToolUseHookInput;
@@ -448,7 +487,11 @@ function appendSessionLog(sessionsPath: string, input: HookInput, state: State):
   }
 
   // ── Important events: prominent H2 rendering ──────────────────────────────
-  if (IMPORTANT_EVENTS.has(input.hook_event_name)) {
+  if (input.hook_event_name === "UserPromptSubmit") {
+    appendFileSync(logPath, formatPromptEvent(input, state.sessions[input.session_id]), "utf8");
+  } else if (input.hook_event_name === "Stop" || input.hook_event_name === "Notification") {
+    appendFileSync(logPath, formatClaudeMessageEvent(input), "utf8");
+  } else if (IMPORTANT_EVENTS.has(input.hook_event_name)) {
     appendFileSync(logPath, formatImportantEvent(input), "utf8");
   } else {
     // ── Everything else: collapsed ────────────────────────────────────────────
