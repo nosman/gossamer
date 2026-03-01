@@ -9,6 +9,7 @@ export interface Session {
   repoRoot: string | null;
   repoName: string | null;
   parentSessionId: string | null;
+  childSessionIds: string[];
   gitUserName: string | null;
   gitUserEmail: string | null;
   prompt: string | null;

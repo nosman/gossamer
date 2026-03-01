@@ -14,6 +14,7 @@ interface SessionResponse {
   repoRoot: string | null;
   repoName: string | null;
   parentSessionId: string | null;
+  childSessionIds: string[];
   gitUserName: string | null;
   gitUserEmail: string | null;
   prompt: string | null;
@@ -34,20 +35,23 @@ interface EventResponse {
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
 
-function mapSession(s: {
-  sessionId: string;
-  startedAt: Date;
-  updatedAt: Date;
-  cwd: string;
-  repoRoot: string | null;
-  repoName: string | null;
-  parentSessionId: string | null;
-  gitUserName: string | null;
-  gitUserEmail: string | null;
-  prompt: string | null;
-  summary: string | null;
-  keywords: string | null;
-}): SessionResponse {
+function mapSession(
+  s: {
+    sessionId: string;
+    startedAt: Date;
+    updatedAt: Date;
+    cwd: string;
+    repoRoot: string | null;
+    repoName: string | null;
+    parentSessionId: string | null;
+    gitUserName: string | null;
+    gitUserEmail: string | null;
+    prompt: string | null;
+    summary: string | null;
+    keywords: string | null;
+  },
+  childSessionIds: string[] = [],
+): SessionResponse {
   return {
     sessionId: s.sessionId,
     startedAt: s.startedAt.toISOString(),
@@ -56,6 +60,7 @@ function mapSession(s: {
     repoRoot: s.repoRoot,
     repoName: s.repoName,
     parentSessionId: s.parentSessionId,
+    childSessionIds,
     gitUserName: s.gitUserName,
     gitUserEmail: s.gitUserEmail,
     prompt: s.prompt,
@@ -107,7 +112,16 @@ export async function startServer(dbPath: string, port: number): Promise<void> {
       const sessions = await db.session.findMany({
         orderBy: { updatedAt: "desc" },
       });
-      res.json(sessions.map(mapSession));
+      // Build parent → children map in memory (no extra queries)
+      const childMap = new Map<string, string[]>();
+      for (const s of sessions) {
+        if (s.parentSessionId) {
+          const arr = childMap.get(s.parentSessionId) ?? [];
+          arr.push(s.sessionId);
+          childMap.set(s.parentSessionId, arr);
+        }
+      }
+      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [])));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -116,14 +130,18 @@ export async function startServer(dbPath: string, port: number): Promise<void> {
   // GET /api/sessions/:id
   app.get("/api/sessions/:id", async (req, res) => {
     try {
-      const session = await db.session.findUnique({
-        where: { sessionId: req.params.id },
-      });
+      const [session, children] = await Promise.all([
+        db.session.findUnique({ where: { sessionId: req.params.id } }),
+        db.session.findMany({
+          where: { parentSessionId: req.params.id },
+          select: { sessionId: true },
+        }),
+      ]);
       if (!session) {
         res.status(404).json({ error: "Session not found" });
         return;
       }
-      res.json(mapSession(session));
+      res.json(mapSession(session, children.map((c) => c.sessionId)));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

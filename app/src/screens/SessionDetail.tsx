@@ -115,6 +115,22 @@ export function SessionDetail({ route, navigation }: Props) {
         </TouchableOpacity>
       )}
 
+      {session?.childSessionIds?.map((childId) => (
+        <TouchableOpacity
+          key={childId}
+          style={styles.childBanner}
+          onPress={() =>
+            navigation.push("SessionDetail", {
+              sessionId: childId,
+              title: childId.slice(0, 8) + "…",
+            })
+          }
+        >
+          <Text style={styles.childLabel}>↓ Continued as</Text>
+          <Text style={styles.childId}>{childId.slice(0, 8)}…</Text>
+        </TouchableOpacity>
+      ))}
+
       {items.length === 0 ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>No events for this session.</Text>
@@ -160,6 +176,27 @@ const styles = StyleSheet.create({
   parentId: {
     fontSize: 12,
     color: "#0369a1",
+    fontFamily: "monospace",
+    fontWeight: "600",
+    textDecorationLine: "underline",
+  },
+  childBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: "#f0fdf4",
+    borderBottomWidth: 1,
+    borderBottomColor: "#bbf7d0",
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  childLabel: {
+    fontSize: 12,
+    color: "#15803d",
+  },
+  childId: {
+    fontSize: 12,
+    color: "#15803d",
     fontFamily: "monospace",
     fontWeight: "600",
     textDecorationLine: "underline",
