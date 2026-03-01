@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "550fe9a8f7da",
+  "session_id": "163b15a3-57bf-42c8-9c44-504cd6d72a26",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T23:13:48.797169Z",
+  "branch": "react-native",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "app/src/components/EventItem.tsx",
+    "app/src/components/MarkdownView.tsx",
+    "app/src/components/ToolUseItem.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "124ae38097ff",
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 210986,
+    "cache_read_tokens": 10975972,
+    "output_tokens": 122265,
+    "api_call_count": 126
+  },
+  "summary": {
+    "intent": "Build a React Native/Expo web app with an Express+WebSocket API server for the Gossamer project, displaying Claude Code sessions and events from a local SQLite database in real time, then iteratively improve the UI.",
+    "outcome": "Fully implemented the backend API server, Expo web frontend, session linking (bidirectional plan→implementation), scrolling, PreToolUse+PostToolUse collapsing, and importance-weighted event rendering with a custom markdown renderer.",
+    "learnings": {
+      "repo": [
+        "Gossamer uses Prisma 7 + better-sqlite3 for SQLite; all local imports in src/ require `.js` extensions due to NodeNext module resolution",
+        "Two separate tsconfigs must be maintained: root (NodeNext) for src/ and app/tsconfig.json (expo/tsconfig.base) — they must not be merged",
+        "state.agentParents is the existing mechanism for parent session tracking; plan→implementation linking hooks into this same map",
+        "When Claude Code approves a plan, it fires SessionEnd on the plan session and SessionStart on the new implementation session but never fires UserPromptSubmit for the approval message — the initial prompt is permanently missing from the DB",
+        "Plan→implementation session links can be detected by finding a SessionEnd in the same cwd within 30 seconds before a SessionStart",
+        "childSessionIds is derived at query time from parentSessionId — no schema change needed; GET /api/sessions builds a childMap in one in-memory pass"
+      ],
+      "code": [
+        {
+          "path": "app/src/screens/SessionDetail.tsx",
+          "finding": "Must use session?.childSessionIds?.map() not session?.childSessionIds.map() — optional chaining must guard all levels including array fields that may be absent in stale API responses"
+        },
+        {
+          "path": "app/src/screens/ActiveSessions.tsx",
+          "finding": "useWindowDimensions().height - useHeaderHeight() provides the exact bounded height needed for scrollable containers inside @react-navigation/stack screens on web; combined with overflow:'scroll' on a plain View"
+        },
+        {
+          "path": "app/src/components/SessionRow.tsx",
+          "finding": "COL_WIDTHS must be exported from SessionRow and imported by the header in ActiveSessions to keep columns aligned — mixing flex:1 rows with fixed-pixel headers causes misalignment"
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "GET /api/sessions/:id requires a parallel Promise.all query for children (db.session.findMany where parentSessionId matches) to populate childSessionIds on the single-session endpoint"
+        }
+      ],
+      "workflow": [
+        "@react-navigation/stack renders screens in absolute-positioned divs on web; flex:1 inside resolves to 0 height so ScrollView and FlatList never get a bounded viewport and don't scroll — fix requires explicit pixel height via useWindowDimensions + useHeaderHeight",
+        "react@18.3.2 does not exist on npm; Expo 52 requires 18.3.1",
+        "@expo/metro-runtime is required for Expo web but is not included in the base package.json — must be added via npx expo install",
+        "The API server must be restarted after a rebuild to pick up new response fields; stale servers silently return old shapes causing runtime crashes in the UI",
+        "Dynamic import of server.ts from handler.ts (serve subcommand) prevents express/ws from loading on every hook invocation — important for hook performance"
+      ]
+    },
+    "friction": [
+      "react@18.3.2 was specified in the plan but does not exist on npm; caused npm install failure",
+      "@expo/metro-runtime was missing from the initial app/package.json and caused Expo web to fail silently",
+      "Scrolling required three separate attempts: FlatList swap failed, nested ScrollView swap failed, root cause (absolute-positioned stack screens on web) only identified on third attempt",
+      "Port 3000 already in use during smoke-testing caused confusing EADDRINUSE errors that masked successful server startup on a different port",
+      "Stale API server (pre-rebuild) caused a crash in SessionDetail because childSessionIds was undefined; the optional chaining bug (?.map vs .map) was subtle and only caught after the server was rebuilt"
+    ],
+    "open_items": [
+      "MarkdownView.tsx is a hand-rolled renderer using only RN primitives; a proper library (e.g. react-native-markdown-display) would handle edge cases better",
+      "ToolUseItem falls back to raw JSON (capped at 1200 chars) for unknown tool types — per-tool rendering only covers Edit, Write, Read, Bash, Glob, Grep",
+      "The first UserPromptSubmit of any implementation session started via plan approval is permanently absent from the DB and cannot be recovered — the session's summary/prompt will remain null until a subsequent message fires",
+      "RefreshControl pull-to-refresh in ActiveSessions was mentioned in the plan but may not be functional on web (RN web doesn't support native pull-to-refresh gesture)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T23:13:01.650689Z",
+    "agent_lines": 694,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 694,
+    "agent_percentage": 100
+  }
+}
