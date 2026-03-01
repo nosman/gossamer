@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "8ccecf8a8ec5",
+  "session_id": "f6ec58ae-25bb-47f5-bed6-57a8b32b7a4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T20:31:45.403821Z",
+  "branch": "react-native",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "package-lock.json",
+    "package.json",
+    "prisma.config.ts",
+    "prisma/schema.prisma",
+    "src/handler.ts",
+    "tsconfig.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e9389f0ed208",
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 64935,
+    "cache_read_tokens": 4093663,
+    "output_tokens": 31307,
+    "api_call_count": 69
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T20:31:45.266741Z",
+    "agent_lines": 1806,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1806,
+    "agent_percentage": 100
+  }
+}
