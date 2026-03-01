@@ -429,6 +429,10 @@ function rotateSessionLog(logPath: string, maxLines: number): string | undefined
   // Rename current file → archive
   renameSync(logPath, archivePath);
 
+  // Append a forward link to the bottom of the archived file
+  const nextName = basename(logPath);
+  appendFileSync(archivePath, `\n---\n\n<small>[→ next](${nextName})</small>\n`, "utf8");
+
   // Extract header: everything before the first event entry
   const firstEventIdx = content.search(/^(?:## |<details>)/m);
   let header = firstEventIdx !== -1 ? content.slice(0, firstEventIdx) : content;
