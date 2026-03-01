@@ -364,6 +364,7 @@ function formatCollapsibleEvent(input: HookInput, childLogRelPath?: string): str
     ...fields,
     `</details>`,
     "",
+    "",
   ].join("\n");
 }
 
@@ -401,7 +402,7 @@ function formatMergedToolUse(
     lines.push("**output:**", "```", s.length > 400 ? s.slice(0, 400) + "\n…" : s, "```", "");
   }
 
-  lines.push(`</details>`, "");
+  lines.push(`</details>`, "", "");
   return lines.join("\n");
 }
 
