@@ -357,7 +357,7 @@ function formatCollapsibleEvent(input: HookInput, childLogRelPath?: string): str
   const fields = renderFields(input, SKIP_NOISE, childLogRelPath);
   return [
     `<details>`,
-    `<summary>${sym} ${name}</summary>`,
+    `<summary><small>${name}</small></summary>`,
     "",
     `<small>${ts}</small>`,
     "",
@@ -380,7 +380,7 @@ function formatMergedToolUse(
 
   const lines: string[] = [
     `<details>`,
-    `<summary>▶${statusSym} ${pending.tool_name}${hintStr}</summary>`,
+    `<summary><small>${statusSym} ${pending.tool_name}${hintStr}</small></summary>`,
     "",
     `<small>${pending.startedAt} → ${endTs}</small>`,
     "",
@@ -748,8 +748,9 @@ async function applyEvent(
       const prompt = "prompt" in input ? String(input.prompt) : "";
       const existing = state.sessions[session_id];
       const { summary, keywords } = precomputed ?? (noSummary ? truncateAnalysis(prompt) : await analyse(prompt));
-      // Detect repo now if SessionStart was missed
+      // Detect repo/user now if SessionStart was missed
       const repo = existing?.repoRoot ? undefined : detectRepo(existing?.cwd ?? cwd);
+      const user = (existing?.gitUserName ?? existing?.gitUserEmail) ? undefined : gitUser();
       state.sessions[session_id] = {
         sessionId: session_id,
         startedAt: existing?.startedAt ?? now,
@@ -758,8 +759,8 @@ async function applyEvent(
         repoRoot: existing?.repoRoot ?? repo?.repoRoot,
         repoName: existing?.repoName ?? repo?.repoName,
         parentSessionId: existing?.parentSessionId,
-        gitUserName: existing?.gitUserName,
-        gitUserEmail: existing?.gitUserEmail,
+        gitUserName: existing?.gitUserName ?? user?.name,
+        gitUserEmail: existing?.gitUserEmail ?? user?.email,
         prompt,
         summary,
         keywords,
@@ -985,7 +986,8 @@ async function main(): Promise<void> {
       "Stdin hook handler for Claude Code's settings-based hook system.\n" +
         "Maintains a live markdown sessions table and writes a JSON response to stdout.",
     )
-    .version("1.0.0");
+    .version("1.0.0")
+    .enablePositionalOptions();
 
   // ── reconstruct subcommand ───────────────────────────────────────────────
   program
