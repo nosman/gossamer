@@ -25,6 +25,8 @@ import {
   existsSync,
   mkdirSync,
   renameSync,
+  readdirSync,
+  unlinkSync,
 } from "fs";
 import { dirname, join, resolve, basename } from "path";
 import { homedir } from "os";
@@ -137,6 +139,18 @@ interface PendingToolUse {
   tool_name: string;
   tool_input?: unknown;
   startedAt: string; // pre-formatted timestamp
+}
+
+// ─── Event record (NDJSON primary store) ──────────────────────────────────────
+
+interface EventRecord {
+  timestamp: string;
+  event: string;
+  blocked: boolean;
+  data: HookInput;
+  // Derived fields stored for reconstruction without re-running AI
+  summary?: string;
+  keywords?: string[];
 }
 
 interface State {
@@ -697,6 +711,7 @@ async function applyEvent(
   state: State,
   input: HookInput,
   noSummary: boolean,
+  precomputed?: { summary: string; keywords: string[] },
 ): Promise<void> {
   const { session_id, hook_event_name, cwd } = input;
   const now = new Date().toISOString();
@@ -732,7 +747,7 @@ async function applyEvent(
     case "UserPromptSubmit": {
       const prompt = "prompt" in input ? String(input.prompt) : "";
       const existing = state.sessions[session_id];
-      const { summary, keywords } = noSummary ? truncateAnalysis(prompt) : await analyse(prompt);
+      const { summary, keywords } = precomputed ?? (noSummary ? truncateAnalysis(prompt) : await analyse(prompt));
       // Detect repo now if SessionStart was missed
       const repo = existing?.repoRoot ? undefined : detectRepo(existing?.cwd ?? cwd);
       state.sessions[session_id] = {
@@ -836,20 +851,101 @@ function buildResponse(blocked: boolean, reason: string): SyncHookJSONOutput {
   return blocked ? { decision: "block", reason } : {};
 }
 
-// ─── NDJSON log ───────────────────────────────────────────────────────────────
+// ─── NDJSON event log (primary store) ────────────────────────────────────────
 
-function writeLog(logPath: string, input: HookInput, blocked: boolean): void {
-  const absPath = expandHome(logPath);
+/**
+ * Append one event record to the NDJSON event log.
+ * For UserPromptSubmit, also embeds `summary` and `keywords` from the already-
+ * computed session state so the log is self-contained for reconstruction.
+ */
+function writeEventLog(
+  eventsPath: string,
+  input: HookInput,
+  blocked: boolean,
+  state: State,
+): void {
+  const absPath = expandHome(eventsPath);
   mkdirSync(dirname(absPath), { recursive: true });
-  appendFileSync(
-    absPath,
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      event: input.hook_event_name,
-      blocked,
-      data: input,
-    }) + "\n",
-    "utf8",
+
+  const record: EventRecord = {
+    timestamp: new Date().toISOString(),
+    event: input.hook_event_name,
+    blocked,
+    data: input,
+  };
+
+  if (input.hook_event_name === "UserPromptSubmit") {
+    const session = state.sessions[input.session_id];
+    if (session?.summary !== undefined) record.summary = session.summary;
+    if (session?.keywords !== undefined) record.keywords = session.keywords;
+  }
+
+  appendFileSync(absPath, JSON.stringify(record) + "\n", "utf8");
+}
+
+// ─── Reconstruction ───────────────────────────────────────────────────────────
+
+/**
+ * Replay the NDJSON event log and rebuild all markdown files from scratch.
+ * Uses stored summary/keywords from each record so AI is never called.
+ */
+async function runReconstruct(
+  eventsPath: string,
+  sessionsPath: string,
+  statePath: string,
+  maxLogLines: number,
+): Promise<void> {
+  const absEvents = expandHome(eventsPath);
+  if (!existsSync(absEvents)) {
+    process.stderr.write(`claude-hook-handler: no event log found at ${absEvents}\n`);
+    process.exit(1);
+  }
+
+  // Clear existing markdown output so we start fresh
+  const absSessions = expandHome(sessionsPath);
+  const sessionsDir = join(dirname(absSessions), "sessions");
+  if (existsSync(sessionsDir)) {
+    for (const f of readdirSync(sessionsDir)) {
+      if (f.endsWith(".md")) unlinkSync(join(sessionsDir, f));
+    }
+  }
+  if (existsSync(absSessions)) unlinkSync(absSessions);
+
+  const state: State = { sessions: {}, agentParents: {}, pendingToolUses: {} };
+  const lines = readFileSync(absEvents, "utf8").split("\n");
+  let replayed = 0;
+  let skipped = 0;
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    let record: EventRecord;
+    try {
+      record = JSON.parse(line) as EventRecord;
+    } catch {
+      skipped++;
+      continue;
+    }
+
+    const input = record.data as HookInput;
+    if (!input?.hook_event_name || input.hook_event_name === "Setup") continue;
+
+    const precomputed =
+      record.summary !== undefined
+        ? { summary: record.summary, keywords: record.keywords ?? [] }
+        : undefined;
+
+    await applyEvent(state, input, true, precomputed);
+    writeMarkdown(absSessions, state);
+    appendSessionLog(absSessions, input, state, maxLogLines);
+    replayed++;
+  }
+
+  writeState(expandHome(statePath), state);
+  process.stderr.write(
+    `claude-hook-handler reconstruct: replayed ${replayed} events` +
+      (skipped ? `, skipped ${skipped} malformed lines` : "") +
+      `\n  sessions → ${absSessions}\n`,
   );
 }
 
@@ -874,6 +970,9 @@ async function readStdin(): Promise<string> {
 async function main(): Promise<void> {
   const config = loadConfig();
 
+  const defaultEventsPath = config.repository
+    ? join(expandHome(config.repository), "events.ndjson")
+    : "~/.claude/events.ndjson";
   const defaultSessionsPath = config.repository
     ? join(expandHome(config.repository), "sessions.md")
     : "~/.claude/sessions.md";
@@ -886,7 +985,52 @@ async function main(): Promise<void> {
       "Stdin hook handler for Claude Code's settings-based hook system.\n" +
         "Maintains a live markdown sessions table and writes a JSON response to stdout.",
     )
-    .version("1.0.0")
+    .version("1.0.0");
+
+  // ── reconstruct subcommand ───────────────────────────────────────────────
+  program
+    .command("reconstruct")
+    .description(
+      "Rebuild markdown session files from the NDJSON event log.\n" +
+        "Clears existing markdown output and replays all recorded events.",
+    )
+    .option(
+      "--events <file>",
+      "NDJSON event log to read",
+      defaultEventsPath,
+    )
+    .option(
+      "-s, --sessions <file>",
+      "Markdown sessions table to write",
+      defaultSessionsPath,
+    )
+    .option(
+      "--state <file>",
+      "JSON state file to write",
+      "~/.claude/sessions-state.json",
+    )
+    .option(
+      "--max-log-lines <n>",
+      "Rotate session log files after this many lines (0 to disable)",
+      (v: string) => parseInt(v, 10),
+      1000,
+    )
+    .action(async (opts: {
+      events: string;
+      sessions: string;
+      state: string;
+      maxLogLines: number;
+    }) => {
+      await runReconstruct(opts.events, opts.sessions, opts.state, opts.maxLogLines);
+    });
+
+  // ── default: stdin hook handler ──────────────────────────────────────────
+  program
+    .option(
+      "--events <file>",
+      "Primary NDJSON event log (written before markdown, enables reconstruction)",
+      defaultEventsPath,
+    )
     .option(
       "-s, --sessions <file>",
       "Markdown sessions table to maintain",
@@ -897,7 +1041,6 @@ async function main(): Promise<void> {
       "JSON state file for session persistence",
       "~/.claude/sessions-state.json",
     )
-    .option("-l, --log <file>", "Append NDJSON event records to this file")
     .option(
       "-b, --block <pattern>",
       "Regex of tool names to block (repeatable, PreToolUse only)",
@@ -919,83 +1062,84 @@ async function main(): Promise<void> {
       (v: string) => parseInt(v, 10),
       1000,
     )
-    .option("--quiet", "Suppress stderr output");
+    .option("--quiet", "Suppress stderr output")
+    .action(async () => {
+      const opts = program.opts<{
+        events: string;
+        sessions: string;
+        state: string;
+        block: string[];
+        blockReason: string;
+        summary: boolean; // commander sets this from --no-summary
+        maxLogLines: number;
+        quiet?: boolean;
+      }>();
 
-  program.parse();
+      const eventsPath = expandHome(opts.events);
+      const sessionsPath = expandHome(opts.sessions);
+      const statePath = expandHome(opts.state);
+      const blockPatterns = opts.block.map((p) => new RegExp(p));
+      const noSummary = !opts.summary;
 
-  const opts = program.opts<{
-    sessions: string;
-    state: string;
-    log?: string;
-    block: string[];
-    blockReason: string;
-    summary: boolean; // commander sets this from --no-summary
-    maxLogLines: number;
-    quiet?: boolean;
-  }>();
+      // Read stdin
+      let raw: string;
+      try {
+        raw = await readStdin();
+      } catch (err) {
+        process.stderr.write(`claude-hook-handler: failed to read stdin: ${err}\n`);
+        process.exit(1);
+      }
 
-  const sessionsPath = expandHome(opts.sessions);
-  const statePath = expandHome(opts.state);
-  const blockPatterns = opts.block.map((p) => new RegExp(p));
-  const noSummary = !opts.summary;
+      let input: HookInput;
+      try {
+        input = JSON.parse(raw) as HookInput;
+      } catch {
+        process.stderr.write(
+          `claude-hook-handler: invalid JSON on stdin:\n${raw.slice(0, 200)}\n`,
+        );
+        process.exit(1);
+      }
 
-  // Read stdin
-  let raw: string;
-  try {
-    raw = await readStdin();
-  } catch (err) {
-    process.stderr.write(`claude-hook-handler: failed to read stdin: ${err}\n`);
-    process.exit(1);
-  }
+      const blocked = shouldBlock(input, blockPatterns);
 
-  let input: HookInput;
-  try {
-    input = JSON.parse(raw) as HookInput;
-  } catch {
-    process.stderr.write(
-      `claude-hook-handler: invalid JSON on stdin:\n${raw.slice(0, 200)}\n`,
-    );
-    process.exit(1);
-  }
+      if (input.hook_event_name !== "Setup") {
+        try {
+          const state = readState(statePath);
 
-  const blocked = shouldBlock(input, blockPatterns);
+          // 1. Compute derived state (summary/keywords via AI if needed)
+          await applyEvent(state, input, noSummary);
 
-  // Update sessions state + markdown + per-session log (all events except setup noise)
-  if (input.hook_event_name !== "Setup") {
-    try {
-      const state = readState(statePath);
-      await applyEvent(state, input, noSummary);
-      writeMarkdown(sessionsPath, state);
-      const logPaths = appendSessionLog(sessionsPath, input, state, opts.maxLogLines);
-      // Write state after appendSessionLog so pendingToolUses mutations are saved
-      writeState(statePath, state);
-      commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
-    } catch (err) {
-      process.stderr.write(
-        `claude-hook-handler: failed to update sessions table: ${err}\n`,
+          // 2. Write to NDJSON event log first — primary source of truth
+          writeEventLog(eventsPath, input, blocked, state);
+
+          // 3. Derive markdown from state
+          writeMarkdown(sessionsPath, state);
+          const logPaths = appendSessionLog(sessionsPath, input, state, opts.maxLogLines);
+
+          // 4. Persist state (after appendSessionLog so pendingToolUses mutations are saved)
+          writeState(statePath, state);
+
+          commitFiles(sessionsPath, [sessionsPath, ...logPaths], buildCommitMessage(input, state));
+        } catch (err) {
+          process.stderr.write(
+            `claude-hook-handler: failed to update sessions table: ${err}\n`,
+          );
+          // Non-fatal — Claude Code must still get a response
+        }
+      }
+
+      // stderr summary (visible inside Claude Code)
+      if (!opts.quiet) {
+        process.stderr.write(formatForStderr(input, blocked) + "\n");
+      }
+
+      // JSON response to stdout
+      process.stdout.write(
+        JSON.stringify(buildResponse(blocked, opts.blockReason)) + "\n",
       );
-      // Non-fatal
-    }
-  }
+    });
 
-  // NDJSON log
-  if (opts.log) {
-    try {
-      writeLog(opts.log, input, blocked);
-    } catch (err) {
-      process.stderr.write(`claude-hook-handler: failed to write log: ${err}\n`);
-    }
-  }
-
-  // stderr summary (visible inside Claude Code)
-  if (!opts.quiet) {
-    process.stderr.write(formatForStderr(input, blocked) + "\n");
-  }
-
-  // JSON response to stdout
-  process.stdout.write(
-    JSON.stringify(buildResponse(blocked, opts.blockReason)) + "\n",
-  );
+  await program.parseAsync();
 }
 
 main().catch((err: Error) => {
