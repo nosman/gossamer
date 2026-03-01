@@ -33,6 +33,12 @@ export async function fetchSessions(): Promise<Session[]> {
   return res.json() as Promise<Session[]>;
 }
 
+export async function fetchSession(id: string): Promise<Session> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<Session>;
+}
+
 export async function fetchSessionEvents(id: string): Promise<Event[]> {
   const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/events`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

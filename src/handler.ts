@@ -860,6 +860,7 @@ async function runReconstruct(
   let replayed = 0;
   let skipped = 0;
   let filled = 0;
+  let lastEnded: { sessionId: string; cwd: string; ts: number } | undefined;
 
   for (const event of events) {
     let input: HookInput;
@@ -872,6 +873,23 @@ async function runReconstruct(
 
     if (!input?.hook_event_name || input.hook_event_name === "Setup") {
       continue;
+    }
+
+    // Track last ended session (before applyEvent removes it from state)
+    if (input.hook_event_name === "SessionEnd") {
+      const cur = state.sessions[input.session_id];
+      if (cur) lastEnded = { sessionId: input.session_id, cwd: cur.cwd, ts: event.timestamp.getTime() };
+    }
+
+    // Auto-link plan→implementation sessions during replay
+    if (
+      input.hook_event_name === "SessionStart" &&
+      !state.agentParents[input.session_id] &&
+      lastEnded &&
+      event.timestamp.getTime() - lastEnded.ts < 30_000 &&
+      lastEnded.cwd === input.cwd
+    ) {
+      state.agentParents[input.session_id] = lastEnded.sessionId;
     }
 
     const precomputed = event.summary !== null
@@ -1183,6 +1201,24 @@ async function main(): Promise<void> {
         try {
           const db = await getDb(expandHome(opts.db));
           const state = await readStateFromDb(db);
+
+          // Auto-link plan→implementation sessions: a SessionStart that fires within
+          // 30 s of a SessionEnd in the same cwd is treated as a continuation.
+          if (input.hook_event_name === "SessionStart" && !state.agentParents[input.session_id]) {
+            const recentEnd = await db.event.findFirst({
+              where: { event: "SessionEnd", timestamp: { gte: new Date(Date.now() - 30_000) } },
+              orderBy: { timestamp: "desc" },
+            });
+            if (recentEnd) {
+              const prev = await db.session.findUnique({
+                where: { sessionId: recentEnd.sessionId },
+                select: { cwd: true },
+              });
+              if (prev?.cwd === input.cwd) {
+                state.agentParents[input.session_id] = recentEnd.sessionId;
+              }
+            }
+          }
 
           // 1. Compute derived state (summary/keywords via AI if needed)
           await applyEvent(state, input, noSummary);

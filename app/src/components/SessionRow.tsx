@@ -35,9 +35,14 @@ export function SessionRow({ session, onPress }: Props) {
   return (
     <TouchableOpacity onPress={onPress} style={styles.row}>
       {/* Session ID */}
-      <Text style={[styles.cell, styles.idCell, { width: COL_WIDTHS.session }]} numberOfLines={1}>
-        {session.sessionId.slice(0, 8)}…
-      </Text>
+      <View style={[styles.cell, styles.idCellWrap, { width: COL_WIDTHS.session }]}>
+        {session.parentSessionId && (
+          <Text style={styles.continuationMark}>↳</Text>
+        )}
+        <Text style={styles.idCell} numberOfLines={1}>
+          {session.sessionId.slice(0, 8)}…
+        </Text>
+      </View>
 
       {/* User — name only, mailto link if email available */}
       <View style={[styles.cell, { width: COL_WIDTHS.user }]}>
@@ -107,10 +112,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: "#374151",
   },
+  idCellWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+  },
   idCell: {
     fontFamily: "monospace",
     fontSize: 13,
     color: "#6366f1",
+    flexShrink: 1,
+  },
+  continuationMark: {
+    fontSize: 11,
+    color: "#0369a1",
+    fontWeight: "700",
   },
   userLink: {
     fontSize: 13,
