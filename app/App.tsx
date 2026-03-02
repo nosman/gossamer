@@ -7,11 +7,15 @@ import { createStackNavigator } from "@react-navigation/stack";
 import { ActiveSessions } from "./src/screens/ActiveSessions";
 import { SessionDetail } from "./src/screens/SessionDetail";
 import { SessionTree } from "./src/screens/SessionTree";
+import { Checkpoints } from "./src/screens/Checkpoints";
+import { CheckpointDetail } from "./src/screens/CheckpointDetail";
 
 export type RootStackParamList = {
   ActiveSessions: undefined;
   SessionTree: undefined;
   SessionDetail: { sessionId: string; title?: string };
+  Checkpoints: undefined;
+  CheckpointDetail: { checkpointId: string; title?: string };
 };
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -28,12 +32,20 @@ export default function App() {
               options={({ navigation }) => ({
                 title: "Claude Sessions",
                 headerRight: () => (
-                  <TouchableOpacity
-                    onPress={() => navigation.navigate("SessionTree")}
-                    style={{ marginRight: 14 }}
-                  >
-                    <Text style={{ fontSize: 18 }}>⬡</Text>
-                  </TouchableOpacity>
+                  <React.Fragment>
+                    <TouchableOpacity
+                      onPress={() => navigation.navigate("Checkpoints")}
+                      style={{ marginRight: 10 }}
+                    >
+                      <Text style={{ fontSize: 16 }}>⬛</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      onPress={() => navigation.navigate("SessionTree")}
+                      style={{ marginRight: 14 }}
+                    >
+                      <Text style={{ fontSize: 18 }}>⬡</Text>
+                    </TouchableOpacity>
+                  </React.Fragment>
                 ),
               })}
             />
@@ -47,6 +59,18 @@ export default function App() {
               component={SessionDetail}
               options={({ route }) => ({
                 title: route.params.title ?? route.params.sessionId.slice(0, 8) + "…",
+              })}
+            />
+            <Stack.Screen
+              name="Checkpoints"
+              component={Checkpoints}
+              options={{ title: "Checkpoints" }}
+            />
+            <Stack.Screen
+              name="CheckpointDetail"
+              component={CheckpointDetail}
+              options={({ route }) => ({
+                title: route.params.title ?? route.params.checkpointId,
               })}
             />
           </Stack.Navigator>

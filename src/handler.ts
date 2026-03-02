@@ -1232,6 +1232,34 @@ async function main(): Promise<void> {
       await runMigrate(opts.events, db, opts.sessions, opts.maxLogLines, !opts.summary);
     });
 
+  // ── index-checkpoints subcommand ─────────────────────────────────────────
+  program
+    .command("index-checkpoints")
+    .description(
+      "Index Entire CLI checkpoints from a checkout of the entire/checkpoints/v1 branch.\n" +
+        "Walks the shard tree (<root>/<2-hex>/<10-hex>/) and writes\n" +
+        "Checkpoint, CheckpointSession, and CheckpointMessage records to the DB.",
+    )
+    .requiredOption(
+      "--dir <path>",
+      "Path to the checkpoints root directory (checkout of entire/checkpoints/v1)",
+    )
+    .option("--db <file>", "SQLite database file", defaultDbPath)
+    .action(async (opts: { dir: string; db: string }) => {
+      const { indexAllCheckpoints } = await import("./indexer.js");
+      const db = await getDb(expandHome(opts.db));
+      const { checkpoints, newMessages } = await indexAllCheckpoints(
+        db,
+        expandHome(opts.dir),
+        (id, n) => {
+          if (n > 0) process.stderr.write(`  ${id}: +${n} messages\n`);
+        },
+      );
+      process.stderr.write(
+        `index-checkpoints: done — ${newMessages} new messages across ${checkpoints} checkpoint(s)\n`,
+      );
+    });
+
   // ── backfill-overviews subcommand ────────────────────────────────────────
   program
     .command("backfill-overviews")

@@ -43,6 +43,27 @@ interface OverviewResponse {
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
 
+function mapSummary(s: {
+  intent: string;
+  outcome: string;
+  learningsRepo: string | null;
+  learningsCode: string | null;
+  learningsWorkflow: string | null;
+  friction: string | null;
+  openItems: string | null;
+}) {
+  return {
+    intent: s.intent,
+    outcome: s.outcome,
+    learningsRepo:     s.learningsRepo     ? (JSON.parse(s.learningsRepo)     as string[]) : [],
+    learningsCode:     s.learningsCode     ? (JSON.parse(s.learningsCode)     as Array<{ path: string; finding: string }>) : [],
+    learningsWorkflow: s.learningsWorkflow ? (JSON.parse(s.learningsWorkflow) as string[]) : [],
+    friction:          s.friction          ? (JSON.parse(s.friction)          as string[]) : [],
+    openItems:         s.openItems         ? (JSON.parse(s.openItems)         as string[]) : [],
+  };
+}
+
+
 function mapSession(
   s: {
     sessionId: string;
@@ -186,6 +207,146 @@ export async function startServer(dbPath: string, port: number): Promise<void> {
         orderBy: { timestamp: "asc" },
       });
       res.json(events.map(mapEvent));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/checkpoints
+  app.get("/api/checkpoints", async (_req, res) => {
+    try {
+      const checkpoints = await db.checkpoint.findMany({
+        include: {
+          sessions: {
+            select: { sessionId: true, summary: true },
+            orderBy: { sessionIndex: "asc" },
+          },
+        },
+        orderBy: { indexedAt: "desc" },
+      });
+      res.json(checkpoints.map((c) => {
+        const firstSummary = c.sessions.find((s) => s.summary)?.summary ?? null;
+        return {
+          checkpointId: c.checkpointId,
+          branch: c.branch,
+          cliVersion: c.cliVersion,
+          strategy: c.strategy,
+          filesTouched: c.filesTouched ? (JSON.parse(c.filesTouched) as string[]) : [],
+          tokenUsage: c.tokenUsage ? (JSON.parse(c.tokenUsage) as Record<string, unknown>) : null,
+          indexedAt: c.indexedAt.toISOString(),
+          sessionCount: c.sessions.length,
+          summary: firstSummary ? mapSummary(firstSummary) : null,
+        };
+      }));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/checkpoints/:id
+  app.get("/api/checkpoints/:id", async (req, res) => {
+    try {
+      const checkpoint = await db.checkpoint.findUnique({
+        where: { checkpointId: req.params.id },
+        include: {
+          sessions: {
+            include: { summary: true },
+            orderBy: { sessionIndex: "asc" },
+          },
+        },
+      });
+      if (!checkpoint) { res.status(404).json({ error: "Not found" }); return; }
+      res.json({
+        checkpointId: checkpoint.checkpointId,
+        branch: checkpoint.branch,
+        cliVersion: checkpoint.cliVersion,
+        strategy: checkpoint.strategy,
+        filesTouched: checkpoint.filesTouched ? (JSON.parse(checkpoint.filesTouched) as string[]) : [],
+        tokenUsage: checkpoint.tokenUsage ? (JSON.parse(checkpoint.tokenUsage) as Record<string, unknown>) : null,
+        indexedAt: checkpoint.indexedAt.toISOString(),
+        sessionCount: checkpoint.sessions.length,
+        summary: checkpoint.sessions.find((s) => s.summary)?.summary
+          ? mapSummary(checkpoint.sessions.find((s) => s.summary)!.summary!)
+          : null,
+        sessions: checkpoint.sessions.map((s) => ({
+          sessionId: s.sessionId,
+          sessionIndex: s.sessionIndex,
+          agent: s.agent,
+          createdAt: s.createdAt?.toISOString() ?? null,
+          filesTouched: s.filesTouched ? (JSON.parse(s.filesTouched) as string[]) : [],
+          tokenUsage: s.tokenUsage ? (JSON.parse(s.tokenUsage) as Record<string, unknown>) : null,
+          summary: s.summary ? mapSummary(s.summary) : null,
+        })),
+      });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/sessions/:sessionId/checkpoints
+  app.get("/api/sessions/:sessionId/checkpoints", async (req, res) => {
+    try {
+      const links = await db.checkpointSessionLink.findMany({
+        where: { sessionId: req.params.sessionId },
+        select: { checkpointId: true },
+      });
+      if (links.length === 0) { res.json([]); return; }
+      const checkpointIds = links.map((l) => l.checkpointId);
+      const checkpoints = await db.checkpoint.findMany({
+        where: { checkpointId: { in: checkpointIds } },
+        include: {
+          sessions: {
+            where: { sessionId: req.params.sessionId },
+            include: { summary: true },
+          },
+        },
+        orderBy: { indexedAt: "asc" },
+      });
+      res.json(checkpoints.map((c) => {
+        const session = c.sessions[0] ?? null;
+        return {
+          checkpointId: c.checkpointId,
+          branch: c.branch,
+          cliVersion: c.cliVersion,
+          filesTouched: c.filesTouched ? (JSON.parse(c.filesTouched) as string[]) : [],
+          tokenUsage: c.tokenUsage ? (JSON.parse(c.tokenUsage) as Record<string, unknown>) : null,
+          indexedAt: c.indexedAt.toISOString(),
+          createdAt: session?.createdAt?.toISOString() ?? null,
+          summary: session?.summary ? mapSummary(session.summary) : null,
+        };
+      }));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/checkpoints/:id/messages
+  app.get("/api/checkpoints/:id/messages", async (req, res) => {
+    try {
+      const sessions = await db.checkpointSession.findMany({
+        where: { checkpointId: req.params.id },
+        select: { sessionId: true },
+      });
+      const sessionIds = sessions.map((s) => s.sessionId);
+      if (sessionIds.length === 0) { res.json([]); return; }
+      const messages = await db.checkpointMessage.findMany({
+        where: { sessionId: { in: sessionIds } },
+        orderBy: { timestamp: "asc" },
+      });
+      res.json(messages.map((m) => ({
+        id: m.id,
+        uuid: m.uuid,
+        sessionId: m.sessionId,
+        parentUuid: m.parentUuid,
+        type: m.type,
+        timestamp: m.timestamp?.toISOString() ?? null,
+        gitBranch: m.gitBranch,
+        slug: m.slug,
+        planContent: m.planContent,
+        toolUseId: m.toolUseId,
+        parentToolUseId: m.parentToolUseId,
+        data: JSON.parse(m.data) as unknown,
+      })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

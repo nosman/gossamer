@@ -61,6 +61,61 @@ export async function fetchSessionEvents(id: string): Promise<Event[]> {
   return res.json() as Promise<Event[]>;
 }
 
+export interface CheckpointSummary {
+  intent: string;
+  outcome: string;
+  learningsRepo: string[];
+  learningsCode: Array<{ path: string; finding: string }>;
+  learningsWorkflow: string[];
+  friction: string[];
+  openItems: string[];
+}
+
+export interface Checkpoint {
+  checkpointId: string;
+  branch: string | null;
+  cliVersion: string | null;
+  strategy: string | null;
+  filesTouched: string[];
+  tokenUsage: { input_tokens?: number; output_tokens?: number; cache_creation_tokens?: number; cache_read_tokens?: number; api_call_count?: number } | null;
+  indexedAt: string;
+  sessionCount: number;
+  summary: CheckpointSummary | null;
+}
+
+export interface CheckpointMessage {
+  id: number;
+  uuid: string;
+  sessionId: string;
+  parentUuid: string | null;
+  type: string;
+  timestamp: string | null;
+  gitBranch: string | null;
+  slug: string | null;
+  planContent: string | null;
+  toolUseId: string | null;
+  parentToolUseId: string | null;
+  data: unknown;
+}
+
+export async function fetchCheckpoint(id: string): Promise<Checkpoint> {
+  const res = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<Checkpoint>;
+}
+
+export async function fetchCheckpoints(): Promise<Checkpoint[]> {
+  const res = await fetch(`${API_BASE}/checkpoints`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<Checkpoint[]>;
+}
+
+export async function fetchCheckpointMessages(checkpointId: string): Promise<CheckpointMessage[]> {
+  const res = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(checkpointId)}/messages`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<CheckpointMessage[]>;
+}
+
 export function subscribeToUpdates(onUpdate: () => void): () => void {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
