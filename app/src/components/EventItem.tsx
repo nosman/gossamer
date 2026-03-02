@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import type { Event } from "../api";
-import { MarkdownView } from "./MarkdownView";
+import { MarkdownView, InlineMarkdown } from "./MarkdownView";
 
 interface Props {
   event: Event;
@@ -26,6 +26,52 @@ function data(event: Event): Record<string, unknown> {
   return (event.data ?? {}) as Record<string, unknown>;
 }
 
+// Split text into an inline header and a remaining body.
+// The header always shows at least HEADER_MIN chars (ignoring sentence
+// boundaries that fall before that). The first sentence boundary after
+// HEADER_MIN is used as the natural split point, up to HEADER_MAX.
+const HEADER_MIN = 75;
+const HEADER_MAX = 120;
+
+function splitHeader(text: string): { header: string; body: string } {
+  // Strip leading markdown heading markers for a cleaner one-liner
+  const trimmed = text.trimStart().replace(/^#{1,3}\s+/, "");
+
+  if (trimmed.length <= HEADER_MIN) {
+    return { header: trimmed, body: "" };
+  }
+
+  // Find first sentence boundary at or after HEADER_MIN
+  let end = trimmed.length;
+  for (let i = HEADER_MIN; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (c === "\n") { end = i; break; }
+    if (
+      (c === "." || c === "!" || c === "?") &&
+      (i + 1 >= trimmed.length || trimmed[i + 1] === " " || trimmed[i + 1] === "\n")
+    ) {
+      end = i + 1;
+      break;
+    }
+  }
+
+  const sentence = trimmed.slice(0, end).trim();
+  const after    = trimmed.slice(end).trimStart();
+
+  if (sentence.length <= HEADER_MAX) {
+    return { header: sentence, body: after };
+  }
+
+  // Sentence is very long — truncate at a word boundary near HEADER_MAX
+  const cut = sentence.lastIndexOf(" ", HEADER_MAX);
+  const breakAt = cut > HEADER_MAX * 0.6 ? cut : HEADER_MAX;
+  const overflow = sentence.slice(breakAt).trimStart();
+  return {
+    header: sentence.slice(0, breakAt),
+    body: (overflow ? "…" + overflow : "") + (after ? "\n\n" + after : ""),
+  };
+}
+
 // ─── Blocked badge ────────────────────────────────────────────────────────────
 
 function BlockedBadge() {
@@ -40,14 +86,16 @@ function BlockedBadge() {
 
 function UserPromptCard({ event }: { event: Event }) {
   const prompt = str(data(event).prompt);
+  const { header, body } = splitHeader(prompt || "(no prompt)");
   return (
     <View style={s.userCard}>
-      <View style={s.cardHeader}>
+      <View style={[s.cardHeader, !body && s.cardHeaderFlush]}>
         <Text style={s.userLabel}>→ User</Text>
+        <InlineMarkdown text={header} style={s.headerSentence} numberOfLines={1} />
         <Text style={s.cardTime}>{fmt(event.timestamp)}</Text>
         {event.blocked && <BlockedBadge />}
       </View>
-      <Text style={s.promptText} selectable>{prompt || "(no prompt)"}</Text>
+      {body ? <Text style={s.promptText} selectable>{body}</Text> : null}
     </View>
   );
 }
@@ -58,17 +106,17 @@ function AssistantCard({ event }: { event: Event }) {
   const d = data(event);
   const msg = str(d.last_assistant_message);
   const reason = str(d.reason);
+  const { header, body } = splitHeader(msg || "(no message)");
   return (
     <View style={s.assistantCard}>
-      <View style={s.cardHeader}>
+      <View style={[s.cardHeader, !body && s.cardHeaderFlush]}>
         <Text style={s.assistantLabel}>■ Assistant</Text>
+        <InlineMarkdown text={header} style={s.headerSentence} numberOfLines={1} />
         {reason ? <Text style={s.reasonBadge}>{reason}</Text> : null}
         <Text style={s.cardTime}>{fmt(event.timestamp)}</Text>
         {event.blocked && <BlockedBadge />}
       </View>
-      {msg
-        ? <MarkdownView text={msg} />
-        : <Text style={s.emptyMsg}>(no message)</Text>}
+      {body ? <MarkdownView text={body} /> : null}
     </View>
   );
 }
@@ -182,13 +230,21 @@ const s = StyleSheet.create({
     backgroundColor: "#f5f3ff",
     paddingVertical: 10,
     paddingHorizontal: 14,
-    marginVertical: 4,
   },
   cardHeader: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     marginBottom: 6,
+  },
+  cardHeaderFlush: {
+    marginBottom: 0,
+  },
+  headerSentence: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "#111827",
+    flex: 1,
   },
   userLabel: {
     fontSize: 12,
@@ -215,7 +271,6 @@ const s = StyleSheet.create({
     backgroundColor: "#fff",
     paddingVertical: 10,
     paddingHorizontal: 14,
-    marginVertical: 4,
   },
   assistantLabel: {
     fontSize: 12,

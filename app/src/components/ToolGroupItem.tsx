@@ -76,8 +76,9 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
 
 const s = StyleSheet.create({
   wrapper: {
-    borderBottomWidth: 1,
-    borderBottomColor: "#e5e7eb",
+    borderLeftWidth: 4,
+    borderLeftColor: "#9ca3af",
+    backgroundColor: "#f8fafc",
   },
   header: {
     flexDirection: "row",
@@ -85,7 +86,6 @@ const s = StyleSheet.create({
     gap: 6,
     paddingVertical: 6,
     paddingHorizontal: 12,
-    backgroundColor: "#f8fafc",
   },
   sym: {
     fontSize: 12,

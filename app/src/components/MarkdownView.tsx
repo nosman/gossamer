@@ -1,5 +1,5 @@
 import React, { useMemo } from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, type TextStyle } from "react-native";
 
 // ─── Inline types ─────────────────────────────────────────────────────────────
 
@@ -135,7 +135,25 @@ function Inline({ nodes }: { nodes: InlineNode[] }) {
   );
 }
 
-// ─── Public component ─────────────────────────────────────────────────────────
+// ─── Public components ────────────────────────────────────────────────────────
+
+// Renders a single line of inline markdown (bold, italic, code) inside a Text.
+export function InlineMarkdown({
+  text,
+  style,
+  numberOfLines,
+}: {
+  text: string;
+  style?: TextStyle;
+  numberOfLines?: number;
+}) {
+  const nodes = useMemo(() => parseInline(text), [text]);
+  return (
+    <Text style={style} numberOfLines={numberOfLines}>
+      <Inline nodes={nodes} />
+    </Text>
+  );
+}
 
 export function MarkdownView({ text }: { text: string }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
