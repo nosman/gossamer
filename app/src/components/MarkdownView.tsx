@@ -35,6 +35,7 @@ type Block =
   | { kind: "bullets"; items: InlineNode[][] }
   | { kind: "numbered"; items: InlineNode[][] }
   | { kind: "hr" }
+  | { kind: "table"; headers: InlineNode[][]; rows: InlineNode[][][] }
   | { kind: "para"; inline: InlineNode[] };
 
 function parseBlocks(md: string): Block[] {
@@ -85,13 +86,26 @@ function parseBlocks(md: string): Block[] {
     // Numbered list
     if (/^\d+\. /.test(line)) {
       const items: InlineNode[][] = [];
-      let num = 1;
       while (i < lines.length && /^\d+\. /.test(lines[i])) {
         items.push(parseInline(lines[i].replace(/^\d+\. /, "")));
         i++;
-        num++;
       }
       out.push({ kind: "numbered", items });
+      continue;
+    }
+
+    // GFM table — header row followed by separator row (|---|---|)
+    if (line.includes("|") && i + 1 < lines.length && /^\|?[\s|:=-]*-+[\s|:=-]*\|?$/.test(lines[i + 1])) {
+      const parseCells = (l: string): InlineNode[][] =>
+        l.replace(/^\|/, "").replace(/\|$/, "").split("|").map((c) => parseInline(c.trim()));
+      const headers = parseCells(line);
+      i += 2; // skip separator
+      const rows: InlineNode[][][] = [];
+      while (i < lines.length && lines[i].includes("|")) {
+        rows.push(parseCells(lines[i]));
+        i++;
+      }
+      out.push({ kind: "table", headers, rows });
       continue;
     }
 
@@ -99,6 +113,10 @@ function parseBlocks(md: string): Block[] {
     if (line.trim() === "") { i++; continue; }
 
     // Paragraph — accumulate until empty line or block-level element
+    const isTableStart = (j: number) =>
+      lines[j].includes("|") &&
+      j + 1 < lines.length &&
+      /^\|?[\s|:=-]*-+[\s|:=-]*\|?$/.test(lines[j + 1]);
     const paraLines: string[] = [];
     while (
       i < lines.length &&
@@ -107,7 +125,8 @@ function parseBlocks(md: string): Block[] {
       !/^#{1,3} /.test(lines[i]) &&
       !/^[-*+] /.test(lines[i]) &&
       !/^\d+\. /.test(lines[i]) &&
-      !/^([-*_])\1{2,}$/.test(lines[i].trim())
+      !/^([-*_])\1{2,}$/.test(lines[i].trim()) &&
+      !isTableStart(i)
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -183,6 +202,30 @@ export function MarkdownView({ text }: { text: string }) {
           return <View key={idx} style={s.hr} />;
         }
 
+        if (block.kind === "table") {
+          const colCount = block.headers.length;
+          return (
+            <View key={idx} style={s.table}>
+              <View style={[s.tableRow, s.tableHeaderRow]}>
+                {block.headers.map((h, j) => (
+                  <Text key={j} style={[s.tableCell, s.tableHeaderCell, { flex: 1 / colCount }]}>
+                    <Inline nodes={h} />
+                  </Text>
+                ))}
+              </View>
+              {block.rows.map((row, j) => (
+                <View key={j} style={[s.tableRow, j % 2 === 1 && s.tableRowAlt]}>
+                  {row.map((cell, k) => (
+                    <Text key={k} selectable style={[s.tableCell, { flex: 1 / colCount }]}>
+                      <Inline nodes={cell} />
+                    </Text>
+                  ))}
+                </View>
+              ))}
+            </View>
+          );
+        }
+
         if (block.kind === "bullets" || block.kind === "numbered") {
           return (
             <View key={idx} style={s.list}>
@@ -249,6 +292,12 @@ const s = StyleSheet.create({
     backgroundColor: "#e5e7eb",
     marginVertical: 10,
   },
+  table: { marginVertical: 6, borderWidth: 1, borderColor: "#e5e7eb", borderRadius: 4, overflow: "hidden" },
+  tableRow: { flexDirection: "row", borderBottomWidth: 1, borderBottomColor: "#e5e7eb" },
+  tableHeaderRow: { backgroundColor: "#f3f4f6" },
+  tableRowAlt: { backgroundColor: "#f9fafb" },
+  tableCell: { fontSize: 12, color: "#374151", lineHeight: 18, padding: 6 },
+  tableHeaderCell: { fontWeight: "700", color: "#111827" },
   list: { marginBottom: 6 },
   listItem: { flexDirection: "row", gap: 6, marginBottom: 3, alignItems: "flex-start" },
   marker: { fontSize: 13, color: "#6b7280", lineHeight: 20, minWidth: 16 },

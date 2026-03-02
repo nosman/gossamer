@@ -33,6 +33,14 @@ interface EventResponse {
   keywords: string[];
 }
 
+interface OverviewResponse {
+  sessionId: string;
+  summary: string;
+  keywords: string[];
+  startedAt: string;
+  endedAt: string;
+}
+
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
 
 function mapSession(
@@ -142,6 +150,29 @@ export async function startServer(dbPath: string, port: number): Promise<void> {
         return;
       }
       res.json(mapSession(session, children.map((c) => c.sessionId)));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/sessions/:id/overview
+  app.get("/api/sessions/:id/overview", async (req, res) => {
+    try {
+      const overview = await db.interactionOverview.findUnique({
+        where: { sessionId: req.params.id },
+      });
+      if (!overview) {
+        res.status(404).json({ error: "No overview for this session" });
+        return;
+      }
+      const result: OverviewResponse = {
+        sessionId: overview.sessionId,
+        summary: overview.summary,
+        keywords: overview.keywords ? (JSON.parse(overview.keywords) as string[]) : [],
+        startedAt: overview.startedAt.toISOString(),
+        endedAt: overview.endedAt.toISOString(),
+      };
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

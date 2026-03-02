@@ -831,6 +831,122 @@ async function writeEventLog(
   });
 }
 
+// ─── Interaction overview ─────────────────────────────────────────────────────
+
+/**
+ * Generate (or update) an InteractionOverview for the given session.
+ * Collects all events from SessionStart through the most recent Stop, builds a
+ * compact text representation, and calls the AI to produce a summary and keywords.
+ * Upserts the record so repeated Stop events refine the overview.
+ */
+async function generateInteractionOverview(
+  db: PrismaClient,
+  sessionId: string,
+  noSummary: boolean,
+): Promise<void> {
+  const events = await db.event.findMany({
+    where: { sessionId },
+    orderBy: { timestamp: "asc" },
+  });
+
+  const stopEvents = events.filter((e) => e.event === "Stop");
+  if (stopEvents.length === 0) return;
+
+  const startEvent = events.find((e) => e.event === "SessionStart");
+  const startedAt = startEvent ? startEvent.timestamp : events[0].timestamp;
+  const endedAt = stopEvents[stopEvents.length - 1].timestamp;
+
+  // Build a compact text for AI consumption
+  const parts: string[] = [];
+  const toolCounts = new Map<string, number>();
+
+  for (const ev of events) {
+    let d: Record<string, unknown>;
+    try { d = JSON.parse(ev.data) as Record<string, unknown>; } catch { continue; }
+
+    if (ev.event === "UserPromptSubmit" && typeof d.prompt === "string") {
+      parts.push(`User: ${d.prompt.slice(0, 600)}`);
+    } else if (ev.event === "Stop" && typeof d.last_assistant_message === "string") {
+      parts.push(`Assistant: ${d.last_assistant_message.slice(0, 600)}`);
+    } else if (ev.event === "PreToolUse" && typeof d.tool_name === "string") {
+      toolCounts.set(d.tool_name, (toolCounts.get(d.tool_name) ?? 0) + 1);
+    }
+  }
+
+  if (toolCounts.size > 0) {
+    const toolSummary = [...toolCounts.entries()]
+      .map(([n, c]) => (c > 1 ? `${n} ×${c}` : n))
+      .join(", ");
+    parts.push(`Tools used: ${toolSummary}`);
+  }
+
+  const text = parts.join("\n\n");
+
+  let analysis: { summary: string; keywords: string[] };
+
+  if (noSummary || !process.env.ANTHROPIC_API_KEY) {
+    // Fallback: derive from first user prompt
+    const firstPrompt = events.find((e) => e.event === "UserPromptSubmit");
+    let prompt = "";
+    try {
+      const d = firstPrompt ? JSON.parse(firstPrompt.data) as Record<string, unknown> : {};
+      prompt = typeof d.prompt === "string" ? d.prompt : "";
+    } catch { /* ignore */ }
+    analysis = truncateAnalysis(prompt || sessionId);
+  } else {
+    try {
+      const client = new Anthropic();
+      const response = await client.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: 250,
+        messages: [{
+          role: "user",
+          content:
+            `Summarise this Claude Code session. Reply with JSON only — no prose, no code fences.\n` +
+            `{\n` +
+            `  "summary": "<2-3 sentences describing what was accomplished, what tools were used, and the outcome>",\n` +
+            `  "keywords": ["<5-8 keywords: file names, tools, languages, concepts, actions>"]\n` +
+            `}\n\nSession:\n${text.slice(0, 3000)}`,
+        }],
+      });
+      const block = response.content[0];
+      if (block?.type !== "text") throw new Error("unexpected response");
+      const raw = block.text.trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
+      const parsed = JSON.parse(raw) as Partial<{ summary: string; keywords: string[] }>;
+      analysis = {
+        summary: String(parsed.summary ?? ""),
+        keywords: Array.isArray(parsed.keywords) ? parsed.keywords.map(String) : [],
+      };
+    } catch {
+      const firstPrompt = events.find((e) => e.event === "UserPromptSubmit");
+      let prompt = "";
+      try {
+        const d = firstPrompt ? JSON.parse(firstPrompt.data) as Record<string, unknown> : {};
+        prompt = typeof d.prompt === "string" ? d.prompt : "";
+      } catch { /* ignore */ }
+      analysis = truncateAnalysis(prompt || sessionId);
+    }
+  }
+
+  await db.interactionOverview.upsert({
+    where: { sessionId },
+    create: {
+      sessionId,
+      summary: analysis.summary,
+      keywords: JSON.stringify(analysis.keywords),
+      startedAt,
+      endedAt,
+    },
+    update: {
+      summary: analysis.summary,
+      keywords: JSON.stringify(analysis.keywords),
+      endedAt,
+    },
+  });
+}
+
 // ─── Reconstruction ───────────────────────────────────────────────────────────
 
 /**
@@ -1116,6 +1232,38 @@ async function main(): Promise<void> {
       await runMigrate(opts.events, db, opts.sessions, opts.maxLogLines, !opts.summary);
     });
 
+  // ── backfill-overviews subcommand ────────────────────────────────────────
+  program
+    .command("backfill-overviews")
+    .description(
+      "Generate InteractionOverview records for all historical sessions.\n" +
+        "Iterates every session that has at least one Stop event and upserts its overview.",
+    )
+    .option("--db <file>", "SQLite database file", defaultDbPath)
+    .option("--no-summary", "Skip AI summarisation, use truncated prompt text instead")
+    .action(async (opts: { db: string; summary: boolean }) => {
+      const db = await getDb(expandHome(opts.db));
+      const noSummary = !opts.summary;
+
+      const groups = await db.event.groupBy({
+        by: ["sessionId"],
+        where: { event: "Stop" },
+      });
+
+      process.stderr.write(
+        `claude-hook-handler backfill-overviews: ${groups.length} session(s) to process\n`,
+      );
+
+      let done = 0;
+      for (const { sessionId } of groups) {
+        await generateInteractionOverview(db, sessionId, noSummary);
+        done++;
+        process.stderr.write(`  [${done}/${groups.length}] ${sessionId.slice(0, 8)}…\n`);
+      }
+
+      process.stderr.write(`claude-hook-handler backfill-overviews: done\n`);
+    });
+
   // ── serve subcommand ─────────────────────────────────────────────────────
   program
     .command("serve")
@@ -1225,6 +1373,13 @@ async function main(): Promise<void> {
 
           // 2. Write to SQLite event log — primary source of truth
           await writeEventLog(db, input, blocked, state);
+
+          // 2a. On Stop, generate/update interaction overview (non-fatal)
+          if (input.hook_event_name === "Stop") {
+            generateInteractionOverview(db, input.session_id, noSummary).catch((err) => {
+              process.stderr.write(`claude-hook-handler: overview generation failed: ${err}\n`);
+            });
+          }
 
           // 3. Derive markdown from state
           writeMarkdown(sessionsPath, state);

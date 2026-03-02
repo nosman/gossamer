@@ -28,6 +28,14 @@ export interface Event {
   keywords: string[];
 }
 
+export interface InteractionOverview {
+  sessionId: string;
+  summary: string;
+  keywords: string[];
+  startedAt: string;
+  endedAt: string;
+}
+
 export async function fetchSessions(): Promise<Session[]> {
   const res = await fetch(`${API_BASE}/sessions`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -38,6 +46,13 @@ export async function fetchSession(id: string): Promise<Session> {
   const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Session>;
+}
+
+export async function fetchSessionOverview(id: string): Promise<InteractionOverview | null> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/overview`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<InteractionOverview>;
 }
 
 export async function fetchSessionEvents(id: string): Promise<Event[]> {

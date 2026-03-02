@@ -10,7 +10,7 @@ import {
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
-import { fetchSession, fetchSessionEvents, type Session, type Event } from "../api";
+import { fetchSession, fetchSessionEvents, fetchSessionOverview, type Session, type Event, type InteractionOverview } from "../api";
 import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 
@@ -95,6 +95,7 @@ function groupEvents(events: Event[]): DisplayItem[] {
 export function SessionDetail({ route, navigation }: Props) {
   const { sessionId } = route.params;
   const [session, setSession] = useState<Session | null>(null);
+  const [overview, setOverview] = useState<InteractionOverview | null>(null);
   const [items, setItems] = useState<DisplayItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,10 +105,15 @@ export function SessionDetail({ route, navigation }: Props) {
   const contentHeight = height - headerHeight;
 
   useEffect(() => {
-    Promise.all([fetchSession(sessionId), fetchSessionEvents(sessionId)])
-      .then(([s, evs]) => {
+    Promise.all([
+      fetchSession(sessionId),
+      fetchSessionEvents(sessionId),
+      fetchSessionOverview(sessionId),
+    ])
+      .then(([s, evs, ov]) => {
         setSession(s);
         setItems(groupEvents(evs));
+        setOverview(ov);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
@@ -162,6 +168,25 @@ export function SessionDetail({ route, navigation }: Props) {
           <Text style={styles.childId}>{childId.slice(0, 8)}…</Text>
         </TouchableOpacity>
       ))}
+
+      {overview && (
+        <View style={styles.overviewCard}>
+          <Text style={styles.overviewLabel}>Overview</Text>
+          <Text style={styles.overviewSummary}>{overview.summary}</Text>
+          {overview.keywords.length > 0 && (
+            <View style={styles.overviewKeywords}>
+              {overview.keywords.map((kw) => (
+                <View key={kw} style={styles.keyword}>
+                  <Text style={styles.keywordText}>{kw}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+          <Text style={styles.overviewTime}>
+            {new Date(overview.startedAt).toLocaleString()} → {new Date(overview.endedAt).toLocaleString()}
+          </Text>
+        </View>
+      )}
 
       {items.length === 0 ? (
         <View style={styles.centered}>
@@ -241,5 +266,45 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 14,
     color: "#9ca3af",
+  },
+  overviewCard: {
+    backgroundColor: "#fafaf9",
+    borderBottomWidth: 1,
+    borderBottomColor: "#e7e5e4",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 6,
+  },
+  overviewLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#78716c",
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  overviewSummary: {
+    fontSize: 13,
+    color: "#292524",
+    lineHeight: 20,
+  },
+  overviewKeywords: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 5,
+  },
+  keyword: {
+    backgroundColor: "#e7e5e4",
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  keywordText: {
+    fontSize: 11,
+    color: "#57534e",
+    fontFamily: "monospace",
+  },
+  overviewTime: {
+    fontSize: 10,
+    color: "#a8a29e",
   },
 });

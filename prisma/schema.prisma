@@ -47,3 +47,12 @@ model PendingToolUse {
   toolInput String? // JSON text
   startedAt String  // pre-formatted display string from fmt()
 }
+
+model InteractionOverview {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @unique
+  summary   String
+  keywords  String   // JSON array as text: '["a","b"]'
+  startedAt DateTime
+  endedAt   DateTime
+}
