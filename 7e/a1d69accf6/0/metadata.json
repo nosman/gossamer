@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "7ea1d69accf6",
+  "session_id": "4528cc4b-fcd7-4559-ba14-8d7028703934",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T05:38:22.464035Z",
+  "branch": "react-native",
+  "checkpoints_count": 8,
+  "files_touched": [
+    "app/App.tsx",
+    "app/src/api.ts",
+    "app/src/components/CheckpointMessageItem.tsx",
+    "app/src/screens/CheckpointDetail.tsx",
+    "app/src/screens/Checkpoints.tsx",
+    "prisma/schema.prisma",
+    "src/handler.ts",
+    "src/indexer.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e87a3958b5a8",
+  "checkpoint_transcript_start": 394,
+  "transcript_lines_at_start": 394,
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 319606,
+    "cache_read_tokens": 10204017,
+    "output_tokens": 51593,
+    "api_call_count": 86
+  },
+  "summary": {
+    "intent": "Integrate the Entire CLI checkpoint system as a new data source for the Gossamer project: index checkpoint files into SQLite, expose them via REST API, and display them in the React Native UI with rich summary data.",
+    "outcome": "Fully implemented end-to-end: a checkpoint indexer (src/indexer.ts) that parses full.jsonl and metadata.json into 5 normalized Prisma models, REST API routes including a many-to-many session→checkpoints lookup, and two new UI screens (Checkpoints list + CheckpointDetail) with collapsible summary cards. 2,400 messages across 12 checkpoints indexed; CheckpointSessionLink populated via re-index.",
+    "learnings": {
+      "repo": [
+        "Gossamer uses Prisma 7 + better-sqlite3 adapter (PrismaBetterSqlite3) with NodeNext module resolution requiring .js extensions on imports.",
+        "The Express API server and WebSocket server share port 3000; restart requires `lsof -ti :3000 | xargs kill -9` before relaunching.",
+        "Entire CLI checkpoint shard tree layout: \u003croot\u003e/\u003c2hex\u003e/\u003c10hex\u003e/ with root metadata.json and session subdirs 0/, 1/, each containing metadata.json + full.jsonl.",
+        "full.jsonl event types are 'user', 'assistant', 'progress', 'file-history-snapshot', 'system' with fields uuid, parentUuid, sessionId, timestamp, cwd, gitBranch, slug, version, planContent, toolUseID, parentToolUseID, message/data.",
+        "Session metadata.json summary shape: { intent, outcome, learnings: { repo[], code[{path,finding}], workflow[] }, friction[], open_items[] } — present only in newer Entire CLI versions.",
+        "The app uses React Navigation stack; new screens require entries in both RootStackParamList type and Stack.Navigator in App.tsx.",
+        "AI summarization for InteractionOverview uses claude-haiku-4-5 via Anthropic SDK, called non-blockingly on Stop events."
+      ],
+      "code": [
+        {
+          "path": "src/indexer.ts",
+          "finding": "Uses findUnique + conditional create instead of upsert for CheckpointMessage to avoid unexpected upsert behavior on uuid-keyed records."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "indexCheckpoint upsert order matters: Checkpoint → CheckpointSession → CheckpointSessionLink → CheckpointSummary → CheckpointMessage. Re-indexing skips existing UUIDs but always re-upserts session/summary records to pick up new fields."
+        },
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "GFM table detection requires isTableStart(j) guard in the paragraph accumulator — using !line.includes('|') breaks paragraphs containing pipe characters. Separator row regex: /^\\|?[\\s|:=-]*-+[\\s|:=-]*\\|?$/."
+        },
+        {
+          "path": "app/src/components/EventItem.tsx",
+          "finding": "splitHeader() uses HEADER_MIN=75, HEADER_MAX=120 character thresholds to split card content into a collapsible header/body for user and assistant events."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CheckpointSession.sessionId is @unique (canonical latest-state record per session), so many-to-many history is tracked via a separate CheckpointSessionLink table with @@unique([checkpointId, sessionId]) and @@index([sessionId])."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "mapSummary() helper normalizes CheckpointSummary DB records (JSON string fields) into typed arrays for API responses across all checkpoint endpoints."
+        }
+      ],
+      "workflow": [
+        "Use `git worktree add /tmp/entire-checkpoints entire/checkpoints/v1` to access files from a branch without switching; remove with `git worktree remove` after indexing.",
+        "When re-indexing after schema changes, existing CheckpointMessage UUIDs are skipped but CheckpointSession and CheckpointSummary records are upserted — allows backfilling new fields without duplicating messages.",
+        "User explicitly rejected storing nested JSON as a blob field on CheckpointSession; always prefer normalized relational tables for structured nested data (CheckpointSummary pattern).",
+        "Prisma schema edits can fail if old_string doesn't match due to prior modifications in the same session — always re-read the file before editing."
+      ]
+    },
+    "friction": [
+      "CheckpointSession.sessionId being @unique prevented tracking the same session across multiple checkpoints, requiring a retroactive CheckpointSessionLink junction table.",
+      "User rejected the initial JSON blob approach for summary fields; required rework to a normalized CheckpointSummary relation table.",
+      "Port 3000 EADDRINUSE on server restart required manual kill before relaunching.",
+      "Prisma schema Edit tool calls failed when old_string didn't match due to prior in-session edits; required re-reading the file first.",
+      "GFM table fix initially broke paragraphs containing pipe characters — the isTableStart() guard needed a lookahead for a separator row rather than a simple pipe check.",
+      "The entire/checkpoints/v1 branch data is only accessible via git worktree (not a live API), requiring a temporary checkout for each index run."
+    ],
+    "open_items": [
+      "No UI built yet for GET /api/sessions/:sessionId/checkpoints — the route is live but there is no screen that surfaces 'which checkpoints was this session part of' from within SessionDetail.",
+      "CheckpointTranscriptStart and transcriptLinesAtStart fields on CheckpointSession are always null in current data (version-dependent field not present in local checkpoints).",
+      "Only 3 of 4 CheckpointSessions have summaries — one session's metadata.json lacks a summary field; no fallback or alert when summary is absent.",
+      "The indexer must be re-run manually via git worktree each time new checkpoints are created; no automated watch/polling mechanism exists yet.",
+      "InteractionOverview backfill and checkpoint indexing are separate pipelines with no unified re-index command."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T05:37:33.371079Z",
+    "agent_lines": 1529,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1529,
+    "agent_percentage": 100
+  }
+}
