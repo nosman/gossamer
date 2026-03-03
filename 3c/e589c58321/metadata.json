@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "3ce589c58321",
+  "strategy": "manual-commit",
+  "branch": "react-native",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "app/src/components/EventItem.tsx",
+    "app/src/components/MarkdownView.tsx",
+    "app/src/screens/SessionDetail.tsx",
+    "src/handler.ts",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3c/e589c58321/0/metadata.json",
+      "transcript": "/3c/e589c58321/0/full.jsonl",
+      "context": "/3c/e589c58321/0/context.md",
+      "content_hash": "/3c/e589c58321/0/content_hash.txt",
+      "prompt": "/3c/e589c58321/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 356,
+    "cache_creation_tokens": 618411,
+    "cache_read_tokens": 26160556,
+    "output_tokens": 129906,
+    "api_call_count": 278
+  }
+}

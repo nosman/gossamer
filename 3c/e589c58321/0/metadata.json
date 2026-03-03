@@ -1,0 +1,103 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "3ce589c58321",
+  "session_id": "4528cc4b-fcd7-4559-ba14-8d7028703934",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T05:09:34.09637Z",
+  "branch": "react-native",
+  "checkpoints_count": 16,
+  "files_touched": [
+    "app/src/components/EventItem.tsx",
+    "app/src/components/MarkdownView.tsx",
+    "app/src/screens/SessionDetail.tsx",
+    "src/handler.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b92ca9a48210",
+  "token_usage": {
+    "input_tokens": 356,
+    "cache_creation_tokens": 618411,
+    "cache_read_tokens": 26160556,
+    "output_tokens": 129906,
+    "api_call_count": 278
+  },
+  "summary": {
+    "intent": "Build out the Gossamer session-monitoring app with AI-generated interaction overviews, Entire CLI checkpoint indexing with a full UI, and iterative UI polish across event rendering and markdown display.",
+    "outcome": "All features were shipped: InteractionOverview generation (AI + backfill), Entire CLI checkpoint indexing with normalized schema (Checkpoint/CheckpointSession/CheckpointSummary/CheckpointSessionLink/CheckpointMessage), checkpoint list and detail screens, checkpoint rows interleaved into the session event log, automatic polling-based re-indexing in the server, and multiple rounds of markdown and event-row UI fixes.",
+    "learnings": {
+      "repo": [
+        "The project uses Prisma 7 + better-sqlite3 adapter (PrismaBetterSqlite3) with NodeNext module resolution requiring .js extensions on imports.",
+        "The API server (src/server.ts) and WebSocket broadcast share a single port; a git worktree of the entire/checkpoints/v1 branch is the canonical way to access checkpoint files for indexing.",
+        "Expo dev server runs on port 19006 (not the default 8081) for this project.",
+        "CheckpointSession.sessionId is @unique representing the canonical latest state; CheckpointSessionLink is the many-to-many table needed to track all checkpoints a session appears in across time.",
+        "AI summarization uses claude-haiku-4-5 via the Anthropic SDK; truncateAnalysis is the no-API-key fallback used throughout handler.ts."
+      ],
+      "code": [
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "GFM table detection requires checking the line after the header row for a separator regex /^\\|?[\\s|:=-]*-+[\\s|:=-]*\\|?$/; without this, table lines fall through to the paragraph accumulator and render as raw text."
+        },
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "The paragraph accumulator must use an isTableStart(j) guard rather than a bare includes('|') check; the latter breaks any paragraph containing a pipe character."
+        },
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "Bold/italic nodes must recursively call parseInline on their content; without recursion, nested spans like **`word`** render the backticks literally inside the bold text."
+        },
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "Fenced code block detection must use trimStart() on each line to handle indented fences; the paragraph accumulator guard must use the same trimmed check."
+        },
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "Double-backtick spans (``code``) must be matched before single-backtick spans in the inline regex to avoid the leading backtick being consumed as a separate token."
+        },
+        {
+          "path": "app/src/components/EventItem.tsx",
+          "line": 71,
+          "finding": "The splitHeader function was prepending '…' to the body text when the header was hard-cut at a word boundary; this caused visible ellipses in collapsed cards."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "Skipping already-indexed CheckpointMessages uses findUnique + conditional create rather than upsert with update:{} to avoid unintended overwrites on the unique uuid field."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CheckpointSessionLink uses @@unique([checkpointId, sessionId]) and @@index([sessionId]) to enable efficient lookup of all checkpoints containing a given session ID."
+        }
+      ],
+      "workflow": [
+        "Use 'git worktree add /tmp/name branch-name' to access files on another branch without switching; always clean up with 'git worktree remove' afterward.",
+        "Prisma schema edits fail if the file hasn't been read in the current context; always Read the schema before attempting an Edit.",
+        "When a server uses a compiled dist/, any code changes require both 'npm run build' and a server restart before they take effect in the running API.",
+        "Re-indexing after a schema change (to backfill new columns) is safe because new messages are skipped via findUnique; only upserted records (sessions, summaries, links) are updated."
+      ]
+    },
+    "friction": [
+      "Port 3000 EADDRINUSE on server restarts required 'lsof -ti :3000 | xargs kill -9' before relaunching.",
+      "Expo was accidentally started on port 8081 (the default) instead of the project's configured port 19006.",
+      "First attempt stored the checkpoint summary as a JSON blob on CheckpointSession; user rejected this and required a normalized CheckpointSummary relation table, requiring a schema re-design.",
+      "Prisma Edit calls failed multiple times because the schema file was not re-read before editing after prior modifications, causing old_string mismatches.",
+      "The server silently failed to stay up after one restart attempt; a foreground run was needed to capture stderr and confirm it was actually running.",
+      "Markdown rendering required three separate fix iterations: (1) missing table support, (2) double-backtick and indented fence handling, (3) nested inline parsing inside bold/italic nodes."
+    ],
+    "open_items": [
+      "The checkpoint polling loop in server.ts runs git reset --hard HEAD every 30 seconds; this assumes the worktree is always on the correct branch and HEAD is always updated by Entire CLI — no error handling for git failures or stale worktrees.",
+      "InteractionOverview generation fires non-blockingly on Stop events but there is no retry or error logging if the AI call fails silently.",
+      "The CheckpointDetail screen fetches all messages for a checkpoint in a single query with no pagination; large checkpoints (2400+ messages) may cause performance issues.",
+      "The 'show system events' toggle in CheckpointDetail hides progress/system/file-history-snapshot rows by default; there is no persistent preference for this setting.",
+      "Workflow learnings, friction, and open_items in CheckpointSummary are stored as JSON text arrays; there is no UI for searching or filtering across these fields."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T05:08:26.811009Z",
+    "agent_lines": 86,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 86,
+    "agent_percentage": 100
+  }
+}
