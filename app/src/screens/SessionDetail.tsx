@@ -100,33 +100,104 @@ function CheckpointRow({
   checkpoint: SessionCheckpoint;
   onPress: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const outTokens = checkpoint.tokenUsage?.output_tokens ?? 0;
   const fileCount = checkpoint.filesTouched.length;
+  const s = checkpoint.summary;
+
   return (
-    <TouchableOpacity onPress={onPress} style={styles.cpRow}>
-      <Text style={styles.cpIcon}>⬛</Text>
-      <View style={styles.cpBody}>
-        <View style={styles.cpTop}>
-          <Text style={styles.cpId}>{checkpoint.checkpointId}</Text>
-          {checkpoint.branch && (
-            <Text style={styles.cpBranch}>{checkpoint.branch}</Text>
+    <View style={styles.cpWrapper}>
+      <TouchableOpacity onPress={() => setExpanded((v) => !v)} style={styles.cpRow}>
+        <Text style={styles.cpIcon}>{expanded ? "▼" : "▶"}</Text>
+        <View style={styles.cpBody}>
+          <View style={styles.cpTop}>
+            <Text style={styles.cpLabel}>Checkpoint</Text>
+            <Text style={styles.cpId}>{checkpoint.checkpointId}</Text>
+            {checkpoint.branch && (
+              <Text style={styles.cpBranch}>{checkpoint.branch}</Text>
+            )}
+          </View>
+          {s?.intent ? (
+            <Text style={styles.cpIntent} numberOfLines={expanded ? undefined : 1}>
+              {s.intent}
+            </Text>
+          ) : null}
+        </View>
+        <View style={styles.cpMeta}>
+          {fileCount > 0 && (
+            <Text style={styles.cpMetaText}>{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>
+          )}
+          {outTokens > 0 && (
+            <Text style={styles.cpMetaText}>{outTokens.toLocaleString()} tok</Text>
           )}
         </View>
-        {checkpoint.summary?.intent ? (
-          <Text style={styles.cpIntent} numberOfLines={1}>
-            {checkpoint.summary.intent}
-          </Text>
-        ) : null}
-      </View>
-      <View style={styles.cpMeta}>
-        {fileCount > 0 && (
-          <Text style={styles.cpMetaText}>{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>
-        )}
-        {outTokens > 0 && (
-          <Text style={styles.cpMetaText}>{outTokens.toLocaleString()} tok</Text>
-        )}
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+
+      {expanded && (
+        <View style={styles.cpDropdown}>
+          {s?.outcome ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>✓ Outcome</Text>
+              <Text style={styles.cpSectionText} selectable>{s.outcome}</Text>
+            </View>
+          ) : null}
+          {s?.learningsRepo && s.learningsRepo.length > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>◎ Repo learnings</Text>
+              {s.learningsRepo.map((item, i) => (
+                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              ))}
+            </View>
+          ) : null}
+          {s?.learningsCode && s.learningsCode.length > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>{"</>"} Code learnings</Text>
+              {s.learningsCode.map((item, i) => (
+                <View key={i} style={styles.cpCodeLearning}>
+                  <Text style={styles.cpCodePath}>{item.path}</Text>
+                  <Text style={styles.cpBullet} selectable>{item.finding}</Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+          {s?.learningsWorkflow && s.learningsWorkflow.length > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>↺ Workflow learnings</Text>
+              {s.learningsWorkflow.map((item, i) => (
+                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              ))}
+            </View>
+          ) : null}
+          {s?.friction && s.friction.length > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>△ Friction</Text>
+              {s.friction.map((item, i) => (
+                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              ))}
+            </View>
+          ) : null}
+          {s?.openItems && s.openItems.length > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>◇ Open items</Text>
+              {s.openItems.map((item, i) => (
+                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              ))}
+            </View>
+          ) : null}
+          {fileCount > 0 ? (
+            <View style={styles.cpSection}>
+              <Text style={styles.cpSectionLabel}>Files touched</Text>
+              {checkpoint.filesTouched.map((f, i) => (
+                <Text key={i} style={styles.cpFilePath}>{f}</Text>
+              ))}
+            </View>
+          ) : null}
+          <TouchableOpacity onPress={onPress} style={styles.cpOpenBtn}>
+            <Text style={styles.cpOpenBtnText}>Open checkpoint →</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -397,18 +468,28 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: "#a8a29e",
   },
+  cpWrapper: {
+    borderLeftWidth: 4,
+    borderLeftColor: "#059669",
+  },
   cpRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
-    backgroundColor: "#0f172a",
-    borderBottomWidth: 1,
-    borderBottomColor: "#1e293b",
+    backgroundColor: "#f0fdf4",
   },
   cpIcon: {
-    fontSize: 13,
+    fontSize: 10,
+    color: "#059669",
+    width: 10,
+  },
+  cpLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#059669",
+    textTransform: "uppercase",
   },
   cpBody: {
     flex: 1,
@@ -422,20 +503,20 @@ const styles = StyleSheet.create({
   cpId: {
     fontFamily: "monospace",
     fontSize: 12,
-    color: "#34d399",
+    color: "#065f46",
     fontWeight: "600",
   },
   cpBranch: {
     fontSize: 11,
-    color: "#94a3b8",
-    backgroundColor: "#1e293b",
+    color: "#059669",
+    backgroundColor: "#d1fae5",
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: 3,
   },
   cpIntent: {
     fontSize: 11,
-    color: "#64748b",
+    color: "#6b7280",
     fontStyle: "italic",
   },
   cpMeta: {
@@ -444,7 +525,67 @@ const styles = StyleSheet.create({
   },
   cpMetaText: {
     fontSize: 10,
-    color: "#475569",
+    color: "#6b7280",
+    fontFamily: "monospace",
+  },
+  cpDropdown: {
+    backgroundColor: "#f8fffe",
+    borderTopWidth: 1,
+    borderTopColor: "#d1fae5",
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  cpSection: {
+    gap: 3,
+  },
+  cpSectionLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "#6b7280",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  cpSectionText: {
+    fontSize: 12,
+    color: "#374151",
+    lineHeight: 18,
+  },
+  cpBullet: {
+    fontSize: 12,
+    color: "#374151",
+    lineHeight: 18,
+    paddingLeft: 4,
+  },
+  cpCodeLearning: {
+    paddingLeft: 4,
+    gap: 1,
+    marginBottom: 2,
+  },
+  cpCodePath: {
+    fontFamily: "monospace",
+    fontSize: 11,
+    color: "#4338ca",
+    fontWeight: "600",
+  },
+  cpFilePath: {
+    fontFamily: "monospace",
+    fontSize: 11,
+    color: "#6b7280",
+    paddingLeft: 4,
+  },
+  cpOpenBtn: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: "#bbf7d0",
+  },
+  cpOpenBtnText: {
+    fontSize: 11,
+    color: "#059669",
     fontFamily: "monospace",
   },
 });
