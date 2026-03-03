@@ -10,7 +10,7 @@ import {
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
-import { fetchSession, fetchSessionEvents, fetchSessionOverview, type Session, type Event, type InteractionOverview } from "../api";
+import { fetchSession, fetchSessionEvents, fetchSessionOverview, fetchSessionCheckpoints, type Session, type Event, type InteractionOverview, type SessionCheckpoint } from "../api";
 import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 
@@ -20,7 +20,8 @@ type Props = StackScreenProps<RootStackParamList, "SessionDetail">;
 
 type DisplayItem =
   | { kind: "event"; event: Event }
-  | { kind: "toolGroup"; tools: ToolUseData[] };
+  | { kind: "toolGroup"; tools: ToolUseData[] }
+  | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
 function groupEvents(events: Event[]): DisplayItem[] {
   // Pass 1: pair PreToolUse with its matching PostToolUse
@@ -90,6 +91,45 @@ function groupEvents(events: Event[]): DisplayItem[] {
   return result;
 }
 
+// ─── Checkpoint row ───────────────────────────────────────────────────────────
+
+function CheckpointRow({
+  checkpoint,
+  onPress,
+}: {
+  checkpoint: SessionCheckpoint;
+  onPress: () => void;
+}) {
+  const outTokens = checkpoint.tokenUsage?.output_tokens ?? 0;
+  const fileCount = checkpoint.filesTouched.length;
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.cpRow}>
+      <Text style={styles.cpIcon}>⬛</Text>
+      <View style={styles.cpBody}>
+        <View style={styles.cpTop}>
+          <Text style={styles.cpId}>{checkpoint.checkpointId}</Text>
+          {checkpoint.branch && (
+            <Text style={styles.cpBranch}>{checkpoint.branch}</Text>
+          )}
+        </View>
+        {checkpoint.summary?.intent ? (
+          <Text style={styles.cpIntent} numberOfLines={1}>
+            {checkpoint.summary.intent}
+          </Text>
+        ) : null}
+      </View>
+      <View style={styles.cpMeta}>
+        {fileCount > 0 && (
+          <Text style={styles.cpMetaText}>{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>
+        )}
+        {outTokens > 0 && (
+          <Text style={styles.cpMetaText}>{outTokens.toLocaleString()} tok</Text>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export function SessionDetail({ route, navigation }: Props) {
@@ -109,11 +149,48 @@ export function SessionDetail({ route, navigation }: Props) {
       fetchSession(sessionId),
       fetchSessionEvents(sessionId),
       fetchSessionOverview(sessionId),
+      fetchSessionCheckpoints(sessionId),
     ])
-      .then(([s, evs, ov]) => {
+      .then(([s, evs, ov, checkpoints]) => {
         setSession(s);
-        setItems(groupEvents(evs));
         setOverview(ov);
+
+        // Merge events and checkpoints in chronological order
+        const grouped = groupEvents(evs);
+        const merged: DisplayItem[] = [];
+        let cpIdx = 0;
+        const sortedCps = [...checkpoints].sort((a, b) => {
+          const ta = a.createdAt ?? a.indexedAt;
+          const tb = b.createdAt ?? b.indexedAt;
+          return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
+
+        for (const item of grouped) {
+          const itemTime =
+            item.kind === "event"
+              ? item.event.timestamp
+              : item.kind === "toolGroup"
+              ? item.tools[0]?.pre.timestamp ?? ""
+              : "";
+          // Insert any checkpoints whose createdAt falls before this item
+          while (cpIdx < sortedCps.length) {
+            const cp = sortedCps[cpIdx];
+            const cpTime = cp.createdAt ?? cp.indexedAt;
+            if (cpTime <= itemTime) {
+              merged.push({ kind: "checkpoint", checkpoint: cp });
+              cpIdx++;
+            } else {
+              break;
+            }
+          }
+          merged.push(item);
+        }
+        // Append any remaining checkpoints
+        while (cpIdx < sortedCps.length) {
+          merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
+        }
+
+        setItems(merged);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
@@ -196,6 +273,19 @@ export function SessionDetail({ route, navigation }: Props) {
         items.map((item, idx) =>
           item.kind === "toolGroup" ? (
             <ToolGroupItem key={`grp-${idx}`} tools={item.tools} />
+          ) : item.kind === "checkpoint" ? (
+            <CheckpointRow
+              key={`cp-${item.checkpoint.checkpointId}`}
+              checkpoint={item.checkpoint}
+              onPress={() =>
+                navigation.navigate("CheckpointDetail", {
+                  checkpointId: item.checkpoint.checkpointId,
+                  title: item.checkpoint.branch
+                    ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}`
+                    : item.checkpoint.checkpointId,
+                })
+              }
+            />
           ) : (
             <EventItem key={`evt-${item.event.id}`} event={item.event} />
           )
@@ -306,5 +396,55 @@ const styles = StyleSheet.create({
   overviewTime: {
     fontSize: 10,
     color: "#a8a29e",
+  },
+  cpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#0f172a",
+    borderBottomWidth: 1,
+    borderBottomColor: "#1e293b",
+  },
+  cpIcon: {
+    fontSize: 13,
+  },
+  cpBody: {
+    flex: 1,
+    gap: 2,
+  },
+  cpTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  cpId: {
+    fontFamily: "monospace",
+    fontSize: 12,
+    color: "#34d399",
+    fontWeight: "600",
+  },
+  cpBranch: {
+    fontSize: 11,
+    color: "#94a3b8",
+    backgroundColor: "#1e293b",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 3,
+  },
+  cpIntent: {
+    fontSize: 11,
+    color: "#64748b",
+    fontStyle: "italic",
+  },
+  cpMeta: {
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  cpMetaText: {
+    fontSize: 10,
+    color: "#475569",
+    fontFamily: "monospace",
   },
 });

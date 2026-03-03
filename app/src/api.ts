@@ -116,6 +116,24 @@ export async function fetchCheckpointMessages(checkpointId: string): Promise<Che
   return res.json() as Promise<CheckpointMessage[]>;
 }
 
+// Returned by GET /api/sessions/:id/checkpoints — session-scoped view of a checkpoint
+export interface SessionCheckpoint {
+  checkpointId: string;
+  branch: string | null;
+  cliVersion: string | null;
+  filesTouched: string[];
+  tokenUsage: { input_tokens?: number; output_tokens?: number; cache_creation_tokens?: number; cache_read_tokens?: number; api_call_count?: number } | null;
+  indexedAt: string;
+  createdAt: string | null;
+  summary: CheckpointSummary | null;
+}
+
+export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckpoint[]> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/checkpoints`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<SessionCheckpoint[]>;
+}
+
 export function subscribeToUpdates(onUpdate: () => void): () => void {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
