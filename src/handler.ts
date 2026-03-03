@@ -1298,9 +1298,10 @@ async function main(): Promise<void> {
     .description("Start the HTTP + WebSocket API server.")
     .option("--db <file>", "SQLite database file", defaultDbPath)
     .option("--port <n>", "Port to listen on", (v: string) => parseInt(v, 10), 3000)
-    .action(async (opts: { db: string; port: number }) => {
+    .option("--repo-dir <path>", "Git repo root for automatic checkpoint indexing (default: cwd)")
+    .action(async (opts: { db: string; port: number; repoDir?: string }) => {
       const { startServer } = await import("./server.js");
-      await startServer(expandHome(opts.db), opts.port);
+      await startServer(expandHome(opts.db), opts.port, opts.repoDir ?? process.cwd());
     });
 
   // ── default: stdin hook handler ──────────────────────────────────────────

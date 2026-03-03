@@ -11,14 +11,15 @@ type InlineNode =
 
 function parseInline(raw: string): InlineNode[] {
   const nodes: InlineNode[] = [];
-  // Match **bold**, *italic*, `code` — non-greedy, no newlines inside delimiters
-  const re = /(\*\*(?:[^*]|\*(?!\*))+?\*\*|\*(?:[^*\n])+?\*|`[^`\n]+?`)/g;
+  // Match **bold**, *italic*, ``double-backtick code``, `code` — in priority order
+  const re = /(\*\*(?:[^*]|\*(?!\*))+?\*\*|\*(?:[^*\n])+?\*|``(?:[^`]|`(?!`))+``|`[^`\n]+?`)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
     if (m.index > last) nodes.push({ t: "text", s: raw.slice(last, m.index) });
     const tok = m[1];
     if (tok.startsWith("**")) nodes.push({ t: "bold", s: tok.slice(2, -2) });
+    else if (tok.startsWith("``")) nodes.push({ t: "code", s: tok.slice(2, -2).trim() });
     else if (tok.startsWith("`")) nodes.push({ t: "code", s: tok.slice(1, -1) });
     else nodes.push({ t: "italic", s: tok.slice(1, -1) });
     last = m.index + tok.length;
@@ -46,13 +47,15 @@ function parseBlocks(md: string): Block[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Fenced code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
+    // Fenced code block (``` or ~~~), with optional leading whitespace
+    const trimmedLine = line.trimStart();
+    if (trimmedLine.startsWith("```") || trimmedLine.startsWith("~~~")) {
+      const fence = trimmedLine.slice(0, 3);
+      const lang = trimmedLine.slice(3).trim();
       const codeLines: string[] = [];
       i++;
-      while (i < lines.length && !lines[i].startsWith("```")) codeLines.push(lines[i++]);
-      if (i < lines.length) i++; // skip closing ```
+      while (i < lines.length && !lines[i].trimStart().startsWith(fence)) codeLines.push(lines[i++]);
+      if (i < lines.length) i++; // skip closing fence
       out.push({ kind: "code", lang, code: codeLines.join("\n") });
       continue;
     }
@@ -121,7 +124,8 @@ function parseBlocks(md: string): Block[] {
     while (
       i < lines.length &&
       lines[i].trim() !== "" &&
-      !lines[i].startsWith("```") &&
+      !lines[i].trimStart().startsWith("```") &&
+      !lines[i].trimStart().startsWith("~~~") &&
       !/^#{1,3} /.test(lines[i]) &&
       !/^[-*+] /.test(lines[i]) &&
       !/^\d+\. /.test(lines[i]) &&
@@ -145,8 +149,8 @@ function Inline({ nodes }: { nodes: InlineNode[] }) {
   return (
     <>
       {nodes.map((n, i) => {
-        if (n.t === "bold") return <Text key={i} style={s.bold}>{n.s}</Text>;
-        if (n.t === "italic") return <Text key={i} style={s.italic}>{n.s}</Text>;
+        if (n.t === "bold") return <Text key={i} style={s.bold}><Inline nodes={parseInline(n.s)} /></Text>;
+        if (n.t === "italic") return <Text key={i} style={s.italic}><Inline nodes={parseInline(n.s)} /></Text>;
         if (n.t === "code") return <Text key={i} style={s.inlineCode}>{n.s}</Text>;
         return <Text key={i}>{n.s}</Text>;
       })}

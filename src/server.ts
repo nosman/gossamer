@@ -2,7 +2,10 @@ import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
+import { execSync } from "child_process";
+import { existsSync } from "fs";
 import { getDb } from "./db.js";
+import { indexAllCheckpoints } from "./indexer.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -128,7 +131,7 @@ function mapEvent(e: {
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
-export async function startServer(dbPath: string, port: number): Promise<void> {
+export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
   const db = await getDb(dbPath);
 
   const app = express();
@@ -379,9 +382,56 @@ export async function startServer(dbPath: string, port: number): Promise<void> {
     }
   }, 2000);
 
+  // ── Checkpoint auto-indexer ───────────────────────────────────────────────
+
+  const WORKTREE_PATH = "/tmp/gossamer-checkpoints";
+  const CHECKPOINT_BRANCH = "entire/checkpoints/v1";
+  let checkpointPoller: ReturnType<typeof setInterval> | null = null;
+
+  if (repoDir) {
+    // Ensure worktree exists (reuse across restarts)
+    if (!existsSync(WORKTREE_PATH)) {
+      try {
+        execSync(
+          `git -C ${JSON.stringify(repoDir)} worktree add ${JSON.stringify(WORKTREE_PATH)} ${CHECKPOINT_BRANCH}`,
+          { stdio: "pipe" },
+        );
+        process.stderr.write(`checkpoint indexer: worktree created at ${WORKTREE_PATH}\n`);
+      } catch (err) {
+        process.stderr.write(`checkpoint indexer: failed to create worktree — ${err}\n`);
+      }
+    }
+
+    const broadcast = () => {
+      const msg = JSON.stringify({ type: "sessions_updated" });
+      for (const client of wss.clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(msg);
+      }
+    };
+
+    const runIndex = async () => {
+      if (!existsSync(WORKTREE_PATH)) return;
+      try {
+        // Pull latest commits into the worktree working tree
+        execSync(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard HEAD`, { stdio: "pipe" });
+      } catch { /* non-fatal */ }
+      try {
+        const { newMessages } = await indexAllCheckpoints(db, WORKTREE_PATH);
+        if (newMessages > 0) {
+          process.stderr.write(`checkpoint indexer: +${newMessages} new messages\n`);
+          broadcast();
+        }
+      } catch { /* non-fatal */ }
+    };
+
+    checkpointPoller = setInterval(runIndex, 30_000);
+    process.stderr.write(`checkpoint indexer: polling every 30s (worktree: ${WORKTREE_PATH})\n`);
+  }
+
   // Graceful shutdown
   const shutdown = () => {
     clearInterval(poller);
+    if (checkpointPoller) clearInterval(checkpointPoller);
     httpServer.close();
     process.exit(0);
   };

@@ -108,7 +108,6 @@ function CheckpointRow({
   return (
     <View style={styles.cpWrapper}>
       <TouchableOpacity onPress={() => setExpanded((v) => !v)} style={styles.cpRow}>
-        <Text style={styles.cpIcon}>{expanded ? "▼" : "▶"}</Text>
         <View style={styles.cpBody}>
           <View style={styles.cpTop}>
             <Text style={styles.cpLabel}>Checkpoint</Text>
@@ -479,11 +478,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     backgroundColor: "#f0fdf4",
-  },
-  cpIcon: {
-    fontSize: 10,
-    color: "#059669",
-    width: 10,
   },
   cpLabel: {
     fontSize: 12,
