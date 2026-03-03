@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "ddc2daaa1ada",
+  "session_id": "4528cc4b-fcd7-4559-ba14-8d7028703934",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T03:14:01.166454Z",
+  "branch": "react-native",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "app/src/api.ts",
+    "app/src/screens/SessionDetail.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d3f5d12ab4e5",
+  "token_usage": {
+    "input_tokens": 193,
+    "cache_creation_tokens": 430206,
+    "cache_read_tokens": 14645253,
+    "output_tokens": 79501,
+    "api_call_count": 159
+  },
+  "summary": {
+    "intent": "Build out the Gossamer session monitoring app with AI-generated interaction overviews, Entire CLI checkpoint indexing, checkpoint UI, and integration of checkpoints into the session detail log view.",
+    "outcome": "All features were implemented end-to-end: InteractionOverview generation on Stop events with backfill, Entire CLI checkpoint indexing (2400 messages across 12 checkpoints), full checkpoint UI (list + detail with summary card), normalized CheckpointSummary table, CheckpointSessionLink many-to-many table, and checkpoint rows interleaved chronologically in SessionDetail.",
+    "learnings": {
+      "repo": [
+        "Gossamer uses Prisma 7 + better-sqlite3 adapter (PrismaBetterSqlite3) with NodeNext module resolution requiring .js extensions on imports",
+        "The API server is Express + WebSocket on a shared port; restart required after every TypeScript build to pick up dist/ changes",
+        "AI summarization uses claude-haiku-4-5 via Anthropic SDK with a truncateAnalysis fallback when no API key or --no-summary is set",
+        "Entire CLI checkpoint branch is entire/checkpoints/v1; files accessed via git worktree add /tmp/... then worktree remove after indexing",
+        "Entire CLI full.jsonl event types: user, assistant, progress, file-history-snapshot, system; key fields: uuid, parentUuid, sessionId, timestamp, cwd, gitBranch, type, message/data, planContent, toolUseID, parentToolUseID",
+        "Entire CLI session metadata.json summary shape: { intent, outcome, learnings: { repo[], code[{path,finding}], workflow[] }, friction[], open_items[] } — only present in newer CLI versions"
+      ],
+      "code": [
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "GFM table detection requires checking header row contains | AND next line matches separator regex /^\\|?[\\s|:=-]*-+[\\s|:=-]*\\|?$/; paragraph accumulator must use isTableStart(j) guard not a simple pipe check or any paragraph with | breaks"
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CheckpointSession.sessionId is @unique (canonical latest record per session), so a separate CheckpointSessionLink table with @@unique([checkpointId, sessionId]) and @@index([sessionId]) is needed to track the full many-to-many history"
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "Use findUnique + conditional create (not upsert with update:{}) for CheckpointMessage to safely skip already-indexed UUIDs without unexpected behavior"
+        },
+        {
+          "path": "app/src/screens/SessionDetail.tsx",
+          "finding": "Checkpoint rows are interleaved chronologically with events by sorting on createdAt (falling back to indexedAt) and merging into the DisplayItem union type"
+        },
+        {
+          "path": "src/handler.ts",
+          "finding": "generateInteractionOverview must be called non-blockingly (no await) on Stop events to avoid delaying the hook response"
+        }
+      ],
+      "workflow": [
+        "Always read the current file state before Edit tool calls on actively-modified files; stale old_string causes edit failures",
+        "When adding a new Prisma model, always run prisma db push then npm run build before testing — type errors surface at compile time",
+        "git worktree is the clean way to access data from another branch without switching; remove it after use",
+        "Re-indexing is safe and idempotent: messages are skipped via findUnique check, sessions and summaries are upserted"
+      ]
+    },
+    "friction": [
+      "Prisma schema Edit tool calls failed multiple times due to stale old_string not matching the already-modified file; required reading file first each time",
+      "User rejected first implementation of summary fields as a JSON blob on CheckpointSession; had to redo as normalized CheckpointSummary relation table",
+      "Initial GFM table fix used !line.includes('|') in paragraph accumulator which broke all paragraphs containing a pipe character; required a second fix with isTableStart(j)",
+      "Port 3000 EADDRINUSE on server restart required lsof -ti :3000 | xargs kill -9 before starting the new process",
+      "CheckpointSession.sessionId @unique constraint meant re-indexing didn't create duplicate link records — the CheckpointSessionLink backfill silently had no new messages to report, making it hard to verify the upserts actually fired"
+    ],
+    "open_items": [
+      "The checkpoint rows in SessionDetail navigate to CheckpointDetail but show the full checkpoint — could be scoped to show only the messages from the specific session",
+      "CheckpointDetail stats bar and session filtering could be updated to scope to a specific sessionId when navigated from SessionDetail",
+      "transcriptLinesAtStart and checkpointTranscriptStart fields on CheckpointSession are always null for current local checkpoints — depends on newer Entire CLI versions",
+      "No UI yet for InteractionOverview keywords or the Checkpoints list intent column on sessions that lack summaries (shows — placeholder)",
+      "The Checkpoints list fetches summary from the first session only — checkpoints with multiple sessions may show incomplete intent"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T03:13:14.820719Z",
+    "agent_lines": 162,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 162,
+    "agent_percentage": 100
+  }
+}
