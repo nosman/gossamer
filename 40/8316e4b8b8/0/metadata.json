@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "408316e4b8b8",
+  "session_id": "4528cc4b-fcd7-4559-ba14-8d7028703934",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T03:31:10.252866Z",
+  "branch": "react-native",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "app/src/screens/SessionDetail.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5a882e502379",
+  "token_usage": {
+    "input_tokens": 228,
+    "cache_creation_tokens": 446665,
+    "cache_read_tokens": 16398790,
+    "output_tokens": 90228,
+    "api_call_count": 184
+  },
+  "summary": {
+    "intent": "Extend the Gossamer session monitoring tool with AI-generated interaction overviews and a full Entire CLI checkpoint integration (indexing, API, and UI), then refine the checkpoint rendering in the SessionDetail log view.",
+    "outcome": "InteractionOverview table and backfill pipeline were added; Entire CLI checkpoints are indexed into SQLite (including normalized CheckpointSummary) and exposed via multiple API routes; a Checkpoints list screen and CheckpointDetail screen were built; checkpoint rows were interleaved into SessionDetail with an expandable summary dropdown styled to match existing event card conventions.",
+    "learnings": {
+      "repo": [
+        "Prisma schema uses `@unique` on `CheckpointSession.sessionId` to store canonical latest-state records — a separate `CheckpointSessionLink` join table is required to track the full many-to-many history of (checkpoint, session) pairs.",
+        "The Entire CLI checkpoint format uses a two-level shard tree: `\u003croot\u003e/\u003c2hex\u003e/\u003c10hex\u003e/` with root `metadata.json`, session subdirs `0/`, `1/`, each containing `metadata.json` + `full.jsonl`.",
+        "The `full.jsonl` event types are: user, assistant, progress, file-history-snapshot, system — with fields uuid, parentUuid, sessionId, timestamp, cwd, gitBranch, slug, planContent, toolUseId, parentToolUseId, message/data.",
+        "The session `metadata.json` summary shape is `{ intent, outcome, learnings: { repo[], code[{path,finding}], workflow[] }, friction[], open_items[] }` — only present in newer Entire CLI versions.",
+        "The server is a long-running process; schema/code changes require a manual restart to take effect.",
+        "The existing event cards (User/Assistant/ToolGroup) use a 4px left border as the primary visual differentiator; labels are `fontSize: 12, fontWeight: '700', textTransform: 'uppercase'`."
+      ],
+      "code": [
+        {
+          "path": "app/src/components/MarkdownView.tsx",
+          "finding": "GFM table parsing was missing entirely — table lines fell through to the paragraph accumulator and rendered as raw text. Fix: detect table by header row containing `|` followed by separator `/^\\|?[\\s|:=-]*-+[\\s|:=-]*\\|?$/`, add `isTableStart(j)` guard in paragraph accumulator to prevent pipe-containing paragraph lines from being misidentified."
+        },
+        {
+          "path": "app/src/screens/SessionDetail.tsx",
+          "finding": "Checkpoint rows are interleaved with event items by sorting on `createdAt ?? indexedAt`. The `CheckpointRow` component uses a `useState` expanded flag, renders a collapsible dropdown with section icons (✓ Outcome, ◎ Repo, \u003c/\u003e Code, ↺ Workflow, △ Friction, ◇ Open items), and navigates to CheckpointDetail on tap."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "Used `findUnique` + conditional `create` instead of `upsert` with `update: {}` for CheckpointMessage to avoid unexpected upsert behavior on already-indexed UUIDs."
+        },
+        {
+          "path": "src/handler.ts",
+          "finding": "`generateInteractionOverview` is called non-blockingly (fire-and-forget, no `await`) on Stop events to avoid delaying the hook response pipeline."
+        }
+      ],
+      "workflow": [
+        "Entire CLI checkpoints live in a git branch (`entire/checkpoints/v1`); use `git worktree add /tmp/entire-checkpoints entire/checkpoints/v1` to check out files for indexing, then `git worktree remove` to clean up.",
+        "When adding a new Prisma relation table, existing records won't be backfilled automatically — a re-index run is needed to populate the new join table from historical data.",
+        "Rejected storing nested JSON summary fields as a blob on CheckpointSession; normalized into a dedicated `CheckpointSummary` table with individual typed columns for querying and display."
+      ]
+    },
+    "friction": [
+      "Prisma schema edits failed when `old_string` didn't match after prior edits modified the file — required reading the file before each edit to get the current state.",
+      "Port 3000 EADDRINUSE on server restart required `lsof -ti :3000 | xargs kill -9` before restarting.",
+      "The `backfill-overviews` CLI flag name didn't match expected format on first invocation attempt, requiring a flag correction.",
+      "Paragraph accumulator guard `!line.includes('|')` was too broad and broke paragraphs containing pipe characters; needed the narrower `isTableStart(j)` check instead.",
+      "First summary field approach (JSON blob on CheckpointSession) was rejected by the user mid-implementation, requiring a schema redesign to a normalized relation table."
+    ],
+    "open_items": [
+      "The `CheckpointSessionLink` re-index to populate historical data was not confirmed to have fired the upserts correctly — only message counts were verified (0 new messages), not link row counts.",
+      "The `GET /api/sessions/:sessionId/checkpoints` route is implemented but not yet surfaced in the SessionDetail UI beyond the interleaved checkpoint rows — no dedicated 'all checkpoints for this session' view exists.",
+      "The `checkpointTranscriptStart` and `transcriptLinesAtStart` fields on CheckpointSession are always null in current local data (version-dependent field not present in the indexed checkpoints).",
+      "No UI yet for `InteractionOverview` on the ActiveSessions list screen — overviews are only shown in SessionDetail.",
+      "The Checkpoints list screen subscribes to WebSocket updates but checkpoint indexing is a manual CLI step — no automatic watch/polling for new checkpoint directories."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T03:30:23.483578Z",
+    "agent_lines": 172,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 172,
+    "agent_percentage": 100
+  }
+}
