@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "eeb00e78e59b",
+  "session_id": "3d301c34-9645-408f-bb36-5fdefd0d5c23",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T04:39:24.783322Z",
+  "branch": "react-native",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "prisma/schema.prisma"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e0aeefd4be85",
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 29320,
+    "cache_read_tokens": 421755,
+    "output_tokens": 17214,
+    "api_call_count": 15
+  },
+  "summary": {
+    "intent": "Refactor the SQLite/Prisma schema for the Gossamer project to normalize checkpoint data into dedicated tables matching the actual CLI file structure, replacing JSON blobs with proper relational tables.",
+    "outcome": "Created a fully normalized schema with TokenUsage, FilePath, SessionLink, CheckpointMetadata, CheckpointSessionMetadata, InitialAttribution, CheckpointSessionSummary, OpenItem, FrictionItem, RepoLearning, CodeLearning, WorkflowLearning, and join tables (CheckpointMetadataFilePath, CheckpointSessionMetadataFilePath).",
+    "learnings": {
+      "repo": [
+        "The Prisma schema lives at /Users/stephanostsoucas/gossamer/prisma/schema.prisma.",
+        "FilePath uses @unique on the path column to deduplicate file paths across join tables.",
+        "CheckpointMetadataFilePath and CheckpointSessionMetadataFilePath are separate join tables but both reference the shared FilePath table.",
+        "TokenUsage is a shared table referenced by both CheckpointMetadata and CheckpointSessionMetadata via one-to-one FKs."
+      ],
+      "code": [
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "SessionLink requires a checkpointMetadataId FK to support the one-to-many relationship from CheckpointMetadata.sessions."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CheckpointSessionMetadata.files_touched reuses the FilePath table via a separate CheckpointSessionMetadataFilePath join table rather than creating a new file path type."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "Nested JSON arrays (open_items, friction, workflow learnings, repo learnings) are each extracted into their own one-to-many tables with a single text column and an indexed FK back to CheckpointSessionMetadata."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CodeLearning differs from other learning tables by having both path and finding columns (and optionally line), while RepoLearning and WorkflowLearning only need a text column."
+        }
+      ],
+      "workflow": [
+        "Always Read the Prisma schema file before attempting an Edit to avoid old_string mismatches from stale context.",
+        "When a user interrupts a request mid-flight, wait for the revised instruction before proceeding rather than completing the original intent.",
+        "Extract each nested JSON field into its own table when the user specifies normalization — don't collapse related arrays into a single table."
+      ]
+    },
+    "friction": [
+      "User interrupted the initial CheckpointSessionMetadata creation twice to revise the relational design before the assistant could proceed.",
+      "The assistant began implementing CheckpointSessionMetadata with inline/embedded fields before the user clarified that all nested JSON objects should be extracted into separate tables."
+    ],
+    "open_items": [
+      "The existing Checkpoint and CheckpointSession models still store token usage as JSON strings — these fields need to be migrated to reference the new TokenUsage table.",
+      "No Prisma migration has been run yet; the schema changes are uncommitted and untested against the actual SQLite database.",
+      "CodeLearning table does not have an end_line column — only path and finding were modeled, so line-range information from the summary JSON is not yet captured.",
+      "SessionLink columns (metadata, transcript, context, content_hash, prompt) are all nullable strings — no validation or referential integrity beyond the FK to CheckpointMetadata."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T04:39:04.440269Z",
+    "agent_lines": 133,
+    "human_added": 3,
+    "human_modified": 15,
+    "human_removed": 0,
+    "total_committed": 151,
+    "agent_percentage": 88.0794701986755
+  }
+}
