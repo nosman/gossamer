@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "f94574ba8949",
+  "session_id": "3d301c34-9645-408f-bb36-5fdefd0d5c23",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T05:05:53.815522Z",
+  "branch": "react-native",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/indexer.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e184bb87341f",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 121957,
+    "cache_read_tokens": 1042184,
+    "output_tokens": 33955,
+    "api_call_count": 25
+  },
+  "summary": {
+    "intent": "Refactor the Prisma SQLite schema to represent checkpoint data with normalized tables matching the actual CLI file structure, then write indexing code to populate those tables from the checkpoint directory layout.",
+    "outcome": "Created a fully normalized schema (TokenUsage, FilePath, SessionLink, CheckpointMetadata, CheckpointSessionMetadata, InitialAttribution, CheckpointSessionSummary, OpenItem, FrictionItem, RepoLearning, CodeLearning, WorkflowLearning, and two join tables), wrote indexAllCheckpointsV2 in indexer.ts, and wired it into the existing 30s polling loop in server.ts alongside the V1 indexer.",
+    "learnings": {
+      "repo": [
+        "The checkpoint directory layout is \u003cshard2\u003e/\u003cid10\u003e/metadata.json (outer, maps to CheckpointMetadata) and \u003cshard2\u003e/\u003cid10\u003e/0/{metadata.json,content_hash.txt,context.md,full.jsonl,prompt.txt} (inner session, maps to CheckpointSessionMetadata + SessionLink).",
+        "content_hash.txt should store the actual hash string content, not the file path — only the other four session files store paths in SessionLink.",
+        "The existing V1 poller in server.ts already manages the worktree at /tmp/gossamer-checkpoints on branch entire/checkpoints/v1; V2 reuses the same worktree.",
+        "CheckpointMetadataFilePath and CheckpointSessionMetadataFilePath are separate join tables both reusing the shared FilePath table for deduplication.",
+        "Prisma schema edits fail if the file hasn't been read in the current context; always Read the schema before attempting an Edit."
+      ],
+      "code": [
+        {
+          "path": "src/indexer.ts",
+          "finding": "upsertFilePath uses find-or-create semantics to deduplicate paths; createTokenUsage always inserts a fresh row and is called only on first index to avoid duplicates."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "indexCheckpointV2 deletes and recreates all child array rows (OpenItem, FrictionItem, RepoLearning, CodeLearning, WorkflowItem) on each run to stay idempotent without stale data accumulation."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "Both V1 and V2 indexers are wrapped in independent try/catch blocks inside runIndex so an error in either does not stop the other or crash the server."
+        }
+      ],
+      "workflow": [
+        "When the user interrupts a request mid-flight, read the current file state before editing — don't assume the schema matches what was last written.",
+        "For deeply nested JSON structures, extract each nested field into its own table rather than storing as JSON blobs; this was explicitly required by the user after an initial blob-based design was rejected in a prior session.",
+        "The V2 indexer is idempotent via findUnique guards but not free — an indexedAt timestamp on CheckpointMetadata could be used to skip already-indexed entries if polling performance becomes a concern."
+      ]
+    },
+    "friction": [
+      "User interrupted the assistant multiple times mid-response, requiring re-reads of the schema and re-orientation before each edit.",
+      "The user initially provided the wrong directory structure, then corrected it; the indexer logic had to account for the real two-level layout (\u003cshard\u003e/\u003cid10\u003e/0/) rather than the first description."
+    ],
+    "open_items": [
+      "indexAllCheckpointsV2 re-indexes all checkpoints on every 30s poll; adding an indexedAt timestamp to CheckpointMetadata to skip already-indexed entries would improve performance.",
+      "No migration was run after schema changes — the new tables exist in schema.prisma but prisma migrate dev / db push has not been confirmed as executed.",
+      "The WorkflowLearning model was added but the JSON field in CheckpointSessionSummary is named 'workflow' in the summary JSON; verify the field mapping is correct in the indexer.",
+      "CodeLearning has path and finding columns but the JSON also includes an optional line field — confirm whether the line number is captured in the schema and indexer."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T05:05:29.777428Z",
+    "agent_lines": 292,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 292,
+    "agent_percentage": 100
+  }
+}
