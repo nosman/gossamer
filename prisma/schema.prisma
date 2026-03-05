@@ -59,6 +59,157 @@ model InteractionOverview {
 
 // ─── Entire CLI checkpoint tables ─────────────────────────────────────────────
 
+model CheckpointMetadata {
+  id               Int                          @id @default(autoincrement())
+  cliVersion       String?
+  checkpointId     String                       @unique
+  strategy         String?
+  branch           String?
+  checkpointsCount Int                          @default(0)
+  tokenUsageId     Int?                         @unique
+  tokenUsage       TokenUsage?                  @relation(fields: [tokenUsageId], references: [id])
+  sessions         SessionLink[]
+  filesTouched     CheckpointMetadataFilePath[]
+}
+
+model SessionLink {
+  id                   Int                 @id @default(autoincrement())
+  checkpointMetadataId Int?
+  checkpointMetadata   CheckpointMetadata? @relation(fields: [checkpointMetadataId], references: [id])
+  metadata             String?
+  transcript           String?
+  context              String?
+  contentHash          String?
+  prompt               String?
+
+  @@index([checkpointMetadataId])
+}
+
+model CheckpointMetadataFilePath {
+  checkpointMetadataId Int
+  filePathId           Int
+  checkpointMetadata   CheckpointMetadata @relation(fields: [checkpointMetadataId], references: [id])
+  filePath             FilePath           @relation(fields: [filePathId], references: [id])
+
+  @@id([checkpointMetadataId, filePathId])
+}
+
+model FilePath {
+  id   Int    @id @default(autoincrement())
+  path String @unique
+}
+
+model TokenUsage {
+  id                  Int @id @default(autoincrement())
+  inputTokens         Int @default(0)
+  cacheCreationTokens Int @default(0)
+  cacheReadTokens     Int @default(0)
+  outputTokens        Int @default(0)
+  apiCallCount        Int @default(0)
+}
+
+model CheckpointSessionMetadata {
+  id                  Int                                   @id @default(autoincrement())
+  cliVersion          String?
+  checkpointId        String
+  sessionId           String                                @unique
+  strategy            String?
+  createdAt           DateTime?
+  branch              String?
+  checkpointsCount    Int                                   @default(0)
+  agent               String?
+  turnId              String?
+  tokenUsageId        Int?                                  @unique
+  tokenUsage          TokenUsage?                           @relation(fields: [tokenUsageId], references: [id])
+  filesTouched        CheckpointSessionMetadataFilePath[]
+  initialAttribution  InitialAttribution?
+  summary             CheckpointSessionSummary?
+}
+
+model CheckpointSessionMetadataFilePath {
+  checkpointSessionMetadataId Int
+  filePathId                  Int
+  checkpointSessionMetadata   CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  filePath                    FilePath                  @relation(fields: [filePathId], references: [id])
+
+  @@id([checkpointSessionMetadataId, filePathId])
+}
+
+model InitialAttribution {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId   Int                       @unique
+  checkpointSessionMetadata     CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  calculatedAt                  DateTime?
+  agentLines                    Int                       @default(0)
+  humanAdded                    Int                       @default(0)
+  humanModified                 Int                       @default(0)
+  humanRemoved                  Int                       @default(0)
+  totalCommitted                Int                       @default(0)
+  agentPercentage               Float                     @default(0)
+}
+
+model CheckpointSessionSummary {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId   Int                       @unique
+  checkpointSessionMetadata     CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  intent                        String
+  outcome                       String
+  openItems           OpenItem[]
+  frictionItems       FrictionItem[]
+  repoLearnings       RepoLearning[]
+  codeLearnings       CodeLearning[]
+  workflowLearnings   WorkflowItem[]
+}
+
+model OpenItem {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionSummaryId    Int
+  checkpointSessionSummary      CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
+  text                          String
+
+  @@index([checkpointSessionSummaryId])
+}
+
+model FrictionItem {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionSummaryId    Int
+  checkpointSessionMetadata     CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
+  text                          String
+
+  @@index([checkpointSessionSummaryId])
+}
+
+model RepoLearning {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId   Int
+  checkpointSessionMetadata     CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  text                          String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+model CodeLearning {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId   Int
+  checkpointSessionMetadata     CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  path                          String
+  finding                       String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+model WorkflowItem {
+  id                            Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId   Int
+  checkpointSessionMetadata     CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  text                          String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+
+// ------------------------------------------- OLD
+
 model Checkpoint {
   id           Int                @id @default(autoincrement())
   checkpointId String             @unique
