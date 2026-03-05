@@ -5,7 +5,7 @@ import { createServer } from "http";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
-import { indexAllCheckpoints } from "./indexer.js";
+import { indexAllCheckpoints, indexAllCheckpointsV2 } from "./indexer.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -419,6 +419,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         const { newMessages } = await indexAllCheckpoints(db, WORKTREE_PATH);
         if (newMessages > 0) {
           process.stderr.write(`checkpoint indexer: +${newMessages} new messages\n`);
+          broadcast();
+        }
+      } catch { /* non-fatal */ }
+      try {
+        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH);
+        if (checkpoints > 0) {
+          process.stderr.write(`checkpoint indexer v2: indexed ${checkpoints} checkpoints\n`);
           broadcast();
         }
       } catch { /* non-fatal */ }

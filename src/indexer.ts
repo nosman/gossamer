@@ -25,6 +25,7 @@ interface RootMeta {
   checkpoint_id?: string;
   strategy?: string;
   branch?: string;
+  checkpoints_count?: number;
   files_touched?: string[];
   token_usage?: Record<string, unknown>;
 }
@@ -50,6 +51,7 @@ interface SessionMeta {
   strategy?: string;
   created_at?: string;
   branch?: string;
+  checkpoints_count?: number;
   turn_id?: string;
   agent?: string;
   token_usage?: Record<string, unknown>;
@@ -252,7 +254,288 @@ export async function indexCheckpoint(
   return totalNew;
 }
 
-// ─── Full-tree indexer ────────────────────────────────────────────────────────
+// ─── V2 helpers ───────────────────────────────────────────────────────────────
+
+async function upsertFilePath(db: PrismaClient, path: string): Promise<number> {
+  const existing = await db.filePath.findUnique({ where: { path }, select: { id: true } });
+  if (existing) return existing.id;
+  const created = await db.filePath.create({ data: { path } });
+  return created.id;
+}
+
+async function createTokenUsage(db: PrismaClient, tu: Record<string, unknown>): Promise<number> {
+  const row = await db.tokenUsage.create({
+    data: {
+      inputTokens:         Number(tu.input_tokens          ?? 0),
+      cacheCreationTokens: Number(tu.cache_creation_tokens ?? 0),
+      cacheReadTokens:     Number(tu.cache_read_tokens     ?? 0),
+      outputTokens:        Number(tu.output_tokens         ?? 0),
+      apiCallCount:        Number(tu.api_call_count        ?? 0),
+    },
+  });
+  return row.id;
+}
+
+// ─── V2 single-checkpoint indexer ────────────────────────────────────────────
+
+/**
+ * Index one checkpoint directory using the new normalized schema.
+ *
+ * Reads:
+ *   <checkpointDir>/metadata.json             → CheckpointMetadata
+ *   <checkpointDir>/<n>/metadata.json         → CheckpointSessionMetadata
+ *   <checkpointDir>/<n>/content_hash.txt      → SessionLink.contentHash (actual hash)
+ *   <checkpointDir>/<n>/{full.jsonl,context.md,prompt.txt} → SessionLink paths
+ */
+export async function indexCheckpointV2(
+  db: PrismaClient,
+  checkpointDir: string,
+  checkpointId: string,
+): Promise<void> {
+  const metaPath = join(checkpointDir, "metadata.json");
+  if (!existsSync(metaPath)) throw new Error(`No metadata.json at ${checkpointDir}`);
+
+  const meta = JSON.parse(readFileSync(metaPath, "utf8")) as RootMeta;
+
+  // Upsert CheckpointMetadata — create TokenUsage only on first insert
+  let checkpointMeta = await db.checkpointMetadata.findUnique({
+    where: { checkpointId },
+    select: { id: true },
+  });
+
+  if (!checkpointMeta) {
+    let tokenUsageId: number | null = null;
+    if (meta.token_usage) tokenUsageId = await createTokenUsage(db, meta.token_usage);
+    checkpointMeta = await db.checkpointMetadata.create({
+      data: {
+        checkpointId,
+        cliVersion:       meta.cli_version       ?? null,
+        branch:           meta.branch            ?? null,
+        strategy:         meta.strategy          ?? null,
+        checkpointsCount: meta.checkpoints_count ?? 0,
+        tokenUsageId,
+      },
+      select: { id: true },
+    });
+  } else {
+    await db.checkpointMetadata.update({
+      where: { checkpointId },
+      data: {
+        cliVersion:       meta.cli_version       ?? null,
+        branch:           meta.branch            ?? null,
+        strategy:         meta.strategy          ?? null,
+        checkpointsCount: meta.checkpoints_count ?? 0,
+      },
+    });
+  }
+
+  // files_touched → FilePath + join table
+  for (const filePath of meta.files_touched ?? []) {
+    const filePathId = await upsertFilePath(db, filePath);
+    await db.checkpointMetadataFilePath.upsert({
+      where: { checkpointMetadataId_filePathId: { checkpointMetadataId: checkpointMeta.id, filePathId } },
+      create: { checkpointMetadataId: checkpointMeta.id, filePathId },
+      update: {},
+    });
+  }
+
+  // Session sub-directories: 0/, 1/, …
+  const sessionDirs = readdirSync(checkpointDir)
+    .filter((e) => /^\d+$/.test(e) && statSync(join(checkpointDir, e)).isDirectory())
+    .sort((a, b) => parseInt(a) - parseInt(b));
+
+  for (const sessionDir of sessionDirs) {
+    const sessionPath    = join(checkpointDir, sessionDir);
+    const metadataFile   = join(sessionPath, "metadata.json");
+    const transcriptFile = join(sessionPath, "full.jsonl");
+    const contextFile    = join(sessionPath, "context.md");
+    const hashFile       = join(sessionPath, "content_hash.txt");
+    const promptFile     = join(sessionPath, "prompt.txt");
+
+    // Read actual hash content (not the file path)
+    const contentHash = existsSync(hashFile) ? readFileSync(hashFile, "utf8").trim() : null;
+
+    await db.sessionLink.create({
+      data: {
+        checkpointMetadataId: checkpointMeta.id,
+        metadata:   existsSync(metadataFile)   ? metadataFile   : null,
+        transcript: existsSync(transcriptFile) ? transcriptFile : null,
+        context:    existsSync(contextFile)    ? contextFile    : null,
+        contentHash,
+        prompt:     existsSync(promptFile)     ? promptFile     : null,
+      },
+    });
+
+    if (!existsSync(metadataFile)) continue;
+
+    const sessionMeta = JSON.parse(readFileSync(metadataFile, "utf8")) as SessionMeta;
+    const { session_id: sessionId } = sessionMeta;
+    if (!sessionId) continue;
+
+    // CheckpointSessionMetadata — create or update
+    let sessionRecord = await db.checkpointSessionMetadata.findUnique({
+      where: { sessionId },
+      select: { id: true },
+    });
+
+    if (!sessionRecord) {
+      let sessionTokenUsageId: number | null = null;
+      if (sessionMeta.token_usage) {
+        sessionTokenUsageId = await createTokenUsage(db, sessionMeta.token_usage);
+      }
+      sessionRecord = await db.checkpointSessionMetadata.create({
+        data: {
+          checkpointId,
+          sessionId,
+          cliVersion:       sessionMeta.cli_version       ?? null,
+          strategy:         sessionMeta.strategy          ?? null,
+          createdAt:        sessionMeta.created_at ? new Date(sessionMeta.created_at) : null,
+          branch:           sessionMeta.branch            ?? null,
+          checkpointsCount: sessionMeta.checkpoints_count ?? 0,
+          agent:            sessionMeta.agent             ?? null,
+          turnId:           sessionMeta.turn_id           ?? null,
+          tokenUsageId:     sessionTokenUsageId,
+        },
+        select: { id: true },
+      });
+    } else {
+      await db.checkpointSessionMetadata.update({
+        where: { sessionId },
+        data: {
+          cliVersion: sessionMeta.cli_version ?? null,
+          strategy:   sessionMeta.strategy    ?? null,
+          createdAt:  sessionMeta.created_at ? new Date(sessionMeta.created_at) : null,
+          branch:     sessionMeta.branch      ?? null,
+          agent:      sessionMeta.agent       ?? null,
+          turnId:     sessionMeta.turn_id     ?? null,
+        },
+      });
+    }
+
+    // files_touched for session
+    for (const filePath of sessionMeta.files_touched ?? []) {
+      const filePathId = await upsertFilePath(db, filePath);
+      await db.checkpointSessionMetadataFilePath.upsert({
+        where: {
+          checkpointSessionMetadataId_filePathId: {
+            checkpointSessionMetadataId: sessionRecord.id,
+            filePathId,
+          },
+        },
+        create: { checkpointSessionMetadataId: sessionRecord.id, filePathId },
+        update: {},
+      });
+    }
+
+    // initial_attribution
+    if (sessionMeta.initial_attribution) {
+      const ia = sessionMeta.initial_attribution as Record<string, unknown>;
+      const iaData = {
+        calculatedAt:    ia.calculated_at ? new Date(ia.calculated_at as string) : null,
+        agentLines:      Number(ia.agent_lines      ?? 0),
+        humanAdded:      Number(ia.human_added      ?? 0),
+        humanModified:   Number(ia.human_modified   ?? 0),
+        humanRemoved:    Number(ia.human_removed    ?? 0),
+        totalCommitted:  Number(ia.total_committed  ?? 0),
+        agentPercentage: Number(ia.agent_percentage ?? 0),
+      };
+      await db.initialAttribution.upsert({
+        where:  { checkpointSessionMetadataId: sessionRecord.id },
+        create: { checkpointSessionMetadataId: sessionRecord.id, ...iaData },
+        update: iaData,
+      });
+    }
+
+    // summary
+    if (sessionMeta.summary) {
+      const sm = sessionMeta.summary;
+      const summaryRecord = await db.checkpointSessionSummary.upsert({
+        where:  { checkpointSessionMetadataId: sessionRecord.id },
+        create: { checkpointSessionMetadataId: sessionRecord.id, intent: sm.intent ?? "", outcome: sm.outcome ?? "" },
+        update: { intent: sm.intent ?? "", outcome: sm.outcome ?? "" },
+        select: { id: true },
+      });
+
+      // Recreate child arrays on every index pass
+      await Promise.all([
+        db.openItem.deleteMany(     { where: { checkpointSessionSummaryId: summaryRecord.id } }),
+        db.frictionItem.deleteMany( { where: { checkpointSessionSummaryId: summaryRecord.id } }),
+        db.repoLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
+        db.codeLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
+        db.workflowItem.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
+      ]);
+
+      const creates: Promise<unknown>[] = [];
+
+      if (sm.open_items?.length) {
+        creates.push(db.openItem.createMany({
+          data: sm.open_items.map((text) => ({ checkpointSessionSummaryId: summaryRecord.id, text })),
+        }));
+      }
+      if (sm.friction?.length) {
+        creates.push(db.frictionItem.createMany({
+          data: sm.friction.map((text) => ({ checkpointSessionSummaryId: summaryRecord.id, text })),
+        }));
+      }
+      if (sm.learnings?.repo?.length) {
+        creates.push(db.repoLearning.createMany({
+          data: sm.learnings.repo.map((text) => ({ checkpointSessionMetadataId: summaryRecord.id, text })),
+        }));
+      }
+      if (sm.learnings?.code?.length) {
+        creates.push(db.codeLearning.createMany({
+          data: sm.learnings.code.map(({ path, finding }) => ({
+            checkpointSessionMetadataId: summaryRecord.id,
+            path,
+            finding,
+          })),
+        }));
+      }
+      if (sm.learnings?.workflow?.length) {
+        creates.push(db.workflowItem.createMany({
+          data: sm.learnings.workflow.map((text) => ({ checkpointSessionMetadataId: summaryRecord.id, text })),
+        }));
+      }
+
+      await Promise.all(creates);
+    }
+  }
+}
+
+// ─── V2 full-tree indexer ─────────────────────────────────────────────────────
+
+export async function indexAllCheckpointsV2(
+  db: PrismaClient,
+  rootDir: string,
+  onProgress?: (checkpointId: string) => void,
+): Promise<{ checkpoints: number }> {
+  let totalCheckpoints = 0;
+
+  const shards = readdirSync(rootDir)
+    .filter((e) => /^[0-9a-f]{2}$/i.test(e) && statSync(join(rootDir, e)).isDirectory());
+
+  for (const shard of shards) {
+    const shardPath = join(rootDir, shard);
+    const ids = readdirSync(shardPath)
+      .filter((e) => /^[0-9a-f]{10}$/i.test(e) && statSync(join(shardPath, e)).isDirectory());
+
+    for (const rest of ids) {
+      const checkpointId  = shard + rest;
+      const checkpointDir = join(shardPath, rest);
+      try {
+        await indexCheckpointV2(db, checkpointDir, checkpointId);
+        totalCheckpoints++;
+        onProgress?.(checkpointId);
+      } catch (err) {
+        process.stderr.write(`indexer-v2: skipping ${checkpointId}: ${err}\n`);
+      }
+    }
+  }
+
+  return { checkpoints: totalCheckpoints };
+}
+
+// ─── Full-tree indexer (V1 / old schema) ─────────────────────────────────────
 
 /**
  * Walk a checkpoints root directory and index every checkpoint found.
