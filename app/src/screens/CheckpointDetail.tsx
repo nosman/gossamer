@@ -66,9 +66,9 @@ function SummaryCard({ summary }: { summary: CheckpointSummary }) {
         <Text style={s.fieldLabel}>Outcome</Text>
         <Text style={s.fieldText} selectable>{summary.outcome}</Text>
       </View>
-      <SummarySection label="Repo learnings"     items={summary.learningsRepo} />
-      <CodeLearningSections                       items={summary.learningsCode} />
-      <SummarySection label="Workflow learnings"  items={summary.learningsWorkflow} />
+      <SummarySection label="Repo learnings"     items={summary.repoLearnings} />
+      <CodeLearningSections                       items={summary.codeLearnings} />
+      <SummarySection label="Workflow learnings"  items={summary.workflowLearnings} />
       <SummarySection label="Friction"            items={summary.friction} />
       <SummarySection label="Open items"          items={summary.openItems} />
     </View>

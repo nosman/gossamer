@@ -10,7 +10,7 @@ import {
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { StackScreenProps } from "@react-navigation/stack";
 import type { RootStackParamList } from "../../App";
-import { fetchCheckpoints, subscribeToUpdates, type Checkpoint, type CheckpointSummary } from "../api";
+import { fetchCheckpoints, subscribeToUpdates, type Checkpoint } from "../api";
 
 type Props = StackScreenProps<RootStackParamList, "Checkpoints">;
 
@@ -23,7 +23,6 @@ const COL = {
   sessions:  70,
   files:     70,
   tokens:    90,
-  date:     130,
 } as const;
 
 const TOTAL_WIDTH = Object.values(COL).reduce((a, b) => a + b, 0) + 16;
@@ -35,25 +34,12 @@ const COLUMNS: { label: string; width: number }[] = [
   { label: "Sessions",   width: COL.sessions },
   { label: "Files",      width: COL.files },
   { label: "Out tokens", width: COL.tokens },
-  { label: "Indexed at", width: COL.date },
 ];
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  const dd  = String(d.getDate()).padStart(2, "0");
-  const mm  = String(d.getMonth() + 1).padStart(2, "0");
-  const yy  = String(d.getFullYear()).slice(2);
-  const hh  = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${dd}/${mm}/${yy} ${hh}:${min}`;
-}
 
 // ─── Row component ────────────────────────────────────────────────────────────
 
 function CheckpointRow({ checkpoint, onPress }: { checkpoint: Checkpoint; onPress: () => void }) {
-  const outTokens = checkpoint.tokenUsage?.output_tokens ?? 0;
+  const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
   return (
     <TouchableOpacity onPress={onPress} style={s.row}>
       <Text style={[s.cell, s.idCell, { width: COL.id }]} numberOfLines={1}>
@@ -73,9 +59,6 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: Checkpoint; onPres
       </Text>
       <Text style={[s.cell, s.numCell, { width: COL.tokens }]} numberOfLines={1}>
         {outTokens > 0 ? outTokens.toLocaleString() : "—"}
-      </Text>
-      <Text style={[s.cell, s.cellText, { width: COL.date }]} numberOfLines={1}>
-        {fmt(checkpoint.indexedAt)}
       </Text>
     </TouchableOpacity>
   );

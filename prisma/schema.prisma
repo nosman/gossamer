@@ -67,7 +67,7 @@ model CheckpointMetadata {
   branch           String?
   checkpointsCount Int                          @default(0)
   tokenUsageId     Int?                         @unique
-  tokenUsage       TokenUsage?                  @relation(fields: [tokenUsageId], references: [id])
+  tokenUsage       TokenUsage?                  @relation("CheckpointMetadataTokenUsage", fields: [tokenUsageId], references: [id])
   sessions         SessionLink[]
   filesTouched     CheckpointMetadataFilePath[]
 }
@@ -89,30 +89,34 @@ model CheckpointMetadataFilePath {
   checkpointMetadataId Int
   filePathId           Int
   checkpointMetadata   CheckpointMetadata @relation(fields: [checkpointMetadataId], references: [id])
-  filePath             FilePath           @relation(fields: [filePathId], references: [id])
+  filePath             FilePath           @relation("CheckpointMetadataFilePaths", fields: [filePathId], references: [id])
 
   @@id([checkpointMetadataId, filePathId])
 }
 
 model FilePath {
-  id   Int    @id @default(autoincrement())
-  path String @unique
+  id                     Int                                @id @default(autoincrement())
+  path                   String                             @unique
+  checkpointFiles        CheckpointMetadataFilePath[]        @relation("CheckpointMetadataFilePaths")
+  checkpointSessionFiles CheckpointSessionMetadataFilePath[] @relation("CheckpointSessionMetadataFilePaths")
 }
 
 model TokenUsage {
-  id                  Int @id @default(autoincrement())
-  inputTokens         Int @default(0)
-  cacheCreationTokens Int @default(0)
-  cacheReadTokens     Int @default(0)
-  outputTokens        Int @default(0)
-  apiCallCount        Int @default(0)
+  id                        Int                        @id @default(autoincrement())
+  inputTokens               Int                        @default(0)
+  cacheCreationTokens       Int                        @default(0)
+  cacheReadTokens           Int                        @default(0)
+  outputTokens              Int                        @default(0)
+  apiCallCount              Int                        @default(0)
+  checkpointMetadata        CheckpointMetadata?        @relation("CheckpointMetadataTokenUsage")
+  checkpointSessionMetadata CheckpointSessionMetadata? @relation("CheckpointSessionMetadataTokenUsage")
 }
 
 model CheckpointSessionMetadata {
   id                  Int                                   @id @default(autoincrement())
   cliVersion          String?
   checkpointId        String
-  sessionId           String                                @unique
+  sessionId           String
   strategy            String?
   createdAt           DateTime?
   branch              String?
@@ -120,17 +124,20 @@ model CheckpointSessionMetadata {
   agent               String?
   turnId              String?
   tokenUsageId        Int?                                  @unique
-  tokenUsage          TokenUsage?                           @relation(fields: [tokenUsageId], references: [id])
+  tokenUsage          TokenUsage?                           @relation("CheckpointSessionMetadataTokenUsage", fields: [tokenUsageId], references: [id])
   filesTouched        CheckpointSessionMetadataFilePath[]
   initialAttribution  InitialAttribution?
   summary             CheckpointSessionSummary?
+
+  @@unique([checkpointId, sessionId])
+  @@index([sessionId])
 }
 
 model CheckpointSessionMetadataFilePath {
   checkpointSessionMetadataId Int
   filePathId                  Int
   checkpointSessionMetadata   CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
-  filePath                    FilePath                  @relation(fields: [filePathId], references: [id])
+  filePath                    FilePath                  @relation("CheckpointSessionMetadataFilePaths", fields: [filePathId], references: [id])
 
   @@id([checkpointSessionMetadataId, filePathId])
 }

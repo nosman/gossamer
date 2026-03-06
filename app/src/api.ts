@@ -64,21 +64,30 @@ export async function fetchSessionEvents(id: string): Promise<Event[]> {
 export interface CheckpointSummary {
   intent: string;
   outcome: string;
-  learningsRepo: string[];
-  learningsCode: Array<{ path: string; finding: string }>;
-  learningsWorkflow: string[];
+  repoLearnings: string[];
+  codeLearnings: Array<{ path: string; finding: string }>;
+  workflowLearnings: string[];
   friction: string[];
   openItems: string[];
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  outputTokens: number;
+  apiCallCount: number;
+}
+
 export interface Checkpoint {
+  id: number;
   checkpointId: string;
   branch: string | null;
   cliVersion: string | null;
   strategy: string | null;
+  checkpointsCount: number;
   filesTouched: string[];
-  tokenUsage: { input_tokens?: number; output_tokens?: number; cache_creation_tokens?: number; cache_read_tokens?: number; api_call_count?: number } | null;
-  indexedAt: string;
+  tokenUsage: TokenUsage | null;
   sessionCount: number;
   summary: CheckpointSummary | null;
 }
@@ -99,13 +108,13 @@ export interface CheckpointMessage {
 }
 
 export async function fetchCheckpoint(id: string): Promise<Checkpoint> {
-  const res = await fetch(`${API_BASE}/checkpoints/${encodeURIComponent(id)}`);
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Checkpoint>;
 }
 
 export async function fetchCheckpoints(): Promise<Checkpoint[]> {
-  const res = await fetch(`${API_BASE}/checkpoints`);
+  const res = await fetch(`${API_BASE}/v2/checkpoints`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Checkpoint[]>;
 }
@@ -122,8 +131,7 @@ export interface SessionCheckpoint {
   branch: string | null;
   cliVersion: string | null;
   filesTouched: string[];
-  tokenUsage: { input_tokens?: number; output_tokens?: number; cache_creation_tokens?: number; cache_read_tokens?: number; api_call_count?: number } | null;
-  indexedAt: string;
+  tokenUsage: TokenUsage | null;
   createdAt: string | null;
   summary: CheckpointSummary | null;
 }

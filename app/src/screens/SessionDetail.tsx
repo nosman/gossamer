@@ -101,7 +101,7 @@ function CheckpointRow({
   onPress: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const outTokens = checkpoint.tokenUsage?.output_tokens ?? 0;
+  const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
   const fileCount = checkpoint.filesTouched.length;
   const s = checkpoint.summary;
 
@@ -140,18 +140,18 @@ function CheckpointRow({
               <Text style={styles.cpSectionText} selectable>{s.outcome}</Text>
             </View>
           ) : null}
-          {s?.learningsRepo && s.learningsRepo.length > 0 ? (
+          {s?.repoLearnings && s.repoLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>◎ Repo learnings</Text>
-              {s.learningsRepo.map((item, i) => (
+              {s.repoLearnings.map((item, i) => (
                 <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
           ) : null}
-          {s?.learningsCode && s.learningsCode.length > 0 ? (
+          {s?.codeLearnings && s.codeLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>{"</>"} Code learnings</Text>
-              {s.learningsCode.map((item, i) => (
+              {s.codeLearnings.map((item, i) => (
                 <View key={i} style={styles.cpCodeLearning}>
                   <Text style={styles.cpCodePath}>{item.path}</Text>
                   <Text style={styles.cpBullet} selectable>{item.finding}</Text>
@@ -159,10 +159,10 @@ function CheckpointRow({
               ))}
             </View>
           ) : null}
-          {s?.learningsWorkflow && s.learningsWorkflow.length > 0 ? (
+          {s?.workflowLearnings && s.workflowLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>↺ Workflow learnings</Text>
-              {s.learningsWorkflow.map((item, i) => (
+              {s.workflowLearnings.map((item, i) => (
                 <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
@@ -230,8 +230,8 @@ export function SessionDetail({ route, navigation }: Props) {
         const merged: DisplayItem[] = [];
         let cpIdx = 0;
         const sortedCps = [...checkpoints].sort((a, b) => {
-          const ta = a.createdAt ?? a.indexedAt;
-          const tb = b.createdAt ?? b.indexedAt;
+          const ta = a.createdAt ?? "";
+          const tb = b.createdAt ?? "";
           return ta < tb ? -1 : ta > tb ? 1 : 0;
         });
 
@@ -245,7 +245,7 @@ export function SessionDetail({ route, navigation }: Props) {
           // Insert any checkpoints whose createdAt falls before this item
           while (cpIdx < sortedCps.length) {
             const cp = sortedCps[cpIdx];
-            const cpTime = cp.createdAt ?? cp.indexedAt;
+            const cpTime = cp.createdAt ?? "";
             if (cpTime <= itemTime) {
               merged.push({ kind: "checkpoint", checkpoint: cp });
               cpIdx++;

@@ -58,9 +58,9 @@ function mapSummary(s: {
   return {
     intent: s.intent,
     outcome: s.outcome,
-    learningsRepo:     s.learningsRepo     ? (JSON.parse(s.learningsRepo)     as string[]) : [],
-    learningsCode:     s.learningsCode     ? (JSON.parse(s.learningsCode)     as Array<{ path: string; finding: string }>) : [],
-    learningsWorkflow: s.learningsWorkflow ? (JSON.parse(s.learningsWorkflow) as string[]) : [],
+    repoLearnings:     s.learningsRepo     ? (JSON.parse(s.learningsRepo)     as string[]) : [],
+    codeLearnings:     s.learningsCode     ? (JSON.parse(s.learningsCode)     as Array<{ path: string; finding: string }>) : [],
+    workflowLearnings: s.learningsWorkflow ? (JSON.parse(s.learningsWorkflow) as string[]) : [],
     friction:          s.friction          ? (JSON.parse(s.friction)          as string[]) : [],
     openItems:         s.openItems         ? (JSON.parse(s.openItems)         as string[]) : [],
   };
@@ -312,8 +312,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           branch: c.branch,
           cliVersion: c.cliVersion,
           filesTouched: c.filesTouched ? (JSON.parse(c.filesTouched) as string[]) : [],
-          tokenUsage: c.tokenUsage ? (JSON.parse(c.tokenUsage) as Record<string, unknown>) : null,
-          indexedAt: c.indexedAt.toISOString(),
+          tokenUsage: c.tokenUsage ? (() => { const t = JSON.parse(c.tokenUsage) as Record<string, unknown>; return { inputTokens: t.input_tokens, cacheCreationTokens: t.cache_creation_tokens, cacheReadTokens: t.cache_read_tokens, outputTokens: t.output_tokens, apiCallCount: t.api_call_count }; })() : null,
           createdAt: session?.createdAt?.toISOString() ?? null,
           summary: session?.summary ? mapSummary(session.summary) : null,
         };
@@ -350,6 +349,138 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         parentToolUseId: m.parentToolUseId,
         data: JSON.parse(m.data) as unknown,
       })));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ─── V2 helpers ─────────────────────────────────────────────────────────────
+
+  type V2Session = {
+    summary: {
+      intent: string; outcome: string;
+      openItems: { text: string }[];
+      frictionItems: { text: string }[];
+      repoLearnings: { text: string }[];
+      codeLearnings: { path: string; finding: string }[];
+      workflowLearnings: { text: string }[];
+    } | null;
+  };
+
+  function mapV2Summary(summary: NonNullable<V2Session["summary"]>) {
+    return {
+      intent:            summary.intent,
+      outcome:           summary.outcome,
+      openItems:         summary.openItems.map((r) => r.text),
+      friction:          summary.frictionItems.map((r) => r.text),
+      repoLearnings:     summary.repoLearnings.map((r) => r.text),
+      codeLearnings:     summary.codeLearnings.map((r) => ({ path: r.path, finding: r.finding })),
+      workflowLearnings: summary.workflowLearnings.map((r) => r.text),
+    };
+  }
+
+  const V2_SESSION_INCLUDE = {
+    summary: {
+      include: {
+        openItems:         true,
+        frictionItems:     true,
+        repoLearnings:     true,
+        codeLearnings:     true,
+        workflowLearnings: true,
+      },
+    },
+  } as const;
+
+  // GET /api/v2/checkpoints
+  app.get("/api/v2/checkpoints", async (_req, res) => {
+    try {
+      const checkpoints = await db.checkpointMetadata.findMany({
+        include: {
+          tokenUsage: true,
+          filesTouched: { include: { filePath: true } },
+        },
+      });
+
+      const checkpointIds = checkpoints.map((c) => c.checkpointId);
+
+      const sessions = await db.checkpointSessionMetadata.findMany({
+        where: { checkpointId: { in: checkpointIds } },
+        include: V2_SESSION_INCLUDE,
+      });
+
+      // Group sessions by checkpointId
+      const sessionsByCheckpoint = new Map<string, typeof sessions>();
+      for (const s of sessions) {
+        const arr = sessionsByCheckpoint.get(s.checkpointId) ?? [];
+        arr.push(s);
+        sessionsByCheckpoint.set(s.checkpointId, arr);
+      }
+
+      res.json(checkpoints.map((c) => {
+        const cpSessions = sessionsByCheckpoint.get(c.checkpointId) ?? [];
+        const summary = cpSessions.find((s) => s.summary)?.summary ?? null;
+        return {
+          id:               c.id,
+          checkpointId:     c.checkpointId,
+          cliVersion:       c.cliVersion,
+          strategy:         c.strategy,
+          branch:           c.branch,
+          checkpointsCount: c.checkpointsCount,
+          tokenUsage: c.tokenUsage ? {
+            inputTokens:         c.tokenUsage.inputTokens,
+            cacheCreationTokens: c.tokenUsage.cacheCreationTokens,
+            cacheReadTokens:     c.tokenUsage.cacheReadTokens,
+            outputTokens:        c.tokenUsage.outputTokens,
+            apiCallCount:        c.tokenUsage.apiCallCount,
+          } : null,
+          filesTouched:  c.filesTouched.map((f) => f.filePath.path),
+          sessionCount:  cpSessions.length,
+          summary: summary ? mapV2Summary(summary) : null,
+        };
+      }));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/v2/checkpoints/:id
+  app.get("/api/v2/checkpoints/:id", async (req, res) => {
+    try {
+      const checkpointId = req.params.id;
+      const checkpoint = await db.checkpointMetadata.findUnique({
+        where: { checkpointId },
+        include: {
+          tokenUsage: true,
+          filesTouched: { include: { filePath: true } },
+        },
+      });
+      if (!checkpoint) { res.status(404).json({ error: "Not found" }); return; }
+
+      const sessions = await db.checkpointSessionMetadata.findMany({
+        where: { checkpointId },
+        include: V2_SESSION_INCLUDE,
+      });
+
+      const summary = sessions.find((s) => s.summary)?.summary ?? null;
+
+      res.json({
+        id:               checkpoint.id,
+        checkpointId:     checkpoint.checkpointId,
+        cliVersion:       checkpoint.cliVersion,
+        strategy:         checkpoint.strategy,
+        branch:           checkpoint.branch,
+        checkpointsCount: checkpoint.checkpointsCount,
+        tokenUsage: checkpoint.tokenUsage ? {
+          inputTokens:         checkpoint.tokenUsage.inputTokens,
+          cacheCreationTokens: checkpoint.tokenUsage.cacheCreationTokens,
+          cacheReadTokens:     checkpoint.tokenUsage.cacheReadTokens,
+          outputTokens:        checkpoint.tokenUsage.outputTokens,
+          apiCallCount:        checkpoint.tokenUsage.apiCallCount,
+        } : null,
+        filesTouched:  checkpoint.filesTouched.map((f) => f.filePath.path),
+        sessionCount:  sessions.length,
+        summary:       summary ? mapV2Summary(summary) : null,
+      });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

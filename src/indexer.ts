@@ -374,7 +374,7 @@ export async function indexCheckpointV2(
 
     // CheckpointSessionMetadata — create or update
     let sessionRecord = await db.checkpointSessionMetadata.findUnique({
-      where: { sessionId },
+      where: { checkpointId_sessionId: { checkpointId, sessionId } },
       select: { id: true },
     });
 
@@ -400,7 +400,7 @@ export async function indexCheckpointV2(
       });
     } else {
       await db.checkpointSessionMetadata.update({
-        where: { sessionId },
+        where: { checkpointId_sessionId: { checkpointId, sessionId } },
         data: {
           cliVersion: sessionMeta.cli_version ?? null,
           strategy:   sessionMeta.strategy    ?? null,
