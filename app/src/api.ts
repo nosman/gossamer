@@ -137,7 +137,7 @@ export interface SessionCheckpoint {
 }
 
 export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckpoint[]> {
-  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/checkpoints`);
+  const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/checkpoints`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<SessionCheckpoint[]>;
 }

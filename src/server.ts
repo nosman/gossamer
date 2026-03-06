@@ -391,6 +391,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     },
   } as const;
 
+  const V2_SESSION_ORDER = { createdAt: "desc" as const };
+
   // GET /api/v2/checkpoints
   app.get("/api/v2/checkpoints", async (_req, res) => {
     try {
@@ -404,7 +406,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const checkpointIds = checkpoints.map((c) => c.checkpointId);
 
       const sessions = await db.checkpointSessionMetadata.findMany({
-        where: { checkpointId: { in: checkpointIds } },
+        where:   { checkpointId: { in: checkpointIds } },
+        orderBy: V2_SESSION_ORDER,
         include: V2_SESSION_INCLUDE,
       });
 
@@ -457,7 +460,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       if (!checkpoint) { res.status(404).json({ error: "Not found" }); return; }
 
       const sessions = await db.checkpointSessionMetadata.findMany({
-        where: { checkpointId },
+        where:   { checkpointId },
+        orderBy: V2_SESSION_ORDER,
         include: V2_SESSION_INCLUDE,
       });
 
@@ -481,6 +485,40 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         sessionCount:  sessions.length,
         summary:       summary ? mapV2Summary(summary) : null,
       });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/v2/sessions/:id/checkpoints
+  app.get("/api/v2/sessions/:id/checkpoints", async (req, res) => {
+    try {
+      const sessionId = req.params.id;
+      const sessionRows = await db.checkpointSessionMetadata.findMany({
+        where:   { sessionId },
+        orderBy: { createdAt: "asc" },
+        include: {
+          ...V2_SESSION_INCLUDE,
+          tokenUsage:   true,
+          filesTouched: { include: { filePath: true } },
+        },
+      });
+
+      res.json(sessionRows.map((s) => ({
+        checkpointId: s.checkpointId,
+        cliVersion:   s.cliVersion,
+        branch:       s.branch,
+        createdAt:    s.createdAt?.toISOString() ?? null,
+        tokenUsage:   s.tokenUsage ? {
+          inputTokens:         s.tokenUsage.inputTokens,
+          cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
+          cacheReadTokens:     s.tokenUsage.cacheReadTokens,
+          outputTokens:        s.tokenUsage.outputTokens,
+          apiCallCount:        s.tokenUsage.apiCallCount,
+        } : null,
+        filesTouched: s.filesTouched.map((f) => f.filePath.path),
+        summary:      s.summary ? mapV2Summary(s.summary) : null,
+      })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
