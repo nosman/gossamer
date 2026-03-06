@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "84f07712f266",
+  "session_id": "3d301c34-9645-408f-bb36-5fdefd0d5c23",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-06T05:07:31.519139Z",
+  "branch": "react-native",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "app/src/api.ts",
+    "app/src/screens/CheckpointDetail.tsx",
+    "app/src/screens/Checkpoints.tsx",
+    "app/src/screens/SessionDetail.tsx",
+    "prisma/schema.prisma",
+    "src/db.ts",
+    "src/indexer.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "79775a3a52a4",
+  "token_usage": {
+    "input_tokens": 159,
+    "cache_creation_tokens": 256818,
+    "cache_read_tokens": 13077437,
+    "output_tokens": 73219,
+    "api_call_count": 123
+  },
+  "summary": {
+    "intent": "Refactor the SQLite/Prisma schema to properly represent the Entire CLI checkpoint file structure, implement a V2 indexer to populate it, and update the UI to consume the new normalized data.",
+    "outcome": "Full V2 schema created with normalized tables (CheckpointMetadata, CheckpointSessionMetadata, SessionLink, TokenUsage, FilePath, InitialAttribution, CheckpointSessionSummary, OpenItem, FrictionItem, RepoLearning, CodeLearning, WorkflowLearning), indexer implemented and run successfully producing 21 rows, V2 list and detail API endpoints added, and UI updated to consume V2 endpoints.",
+    "learnings": {
+      "repo": [
+        "CheckpointSessionMetadata.sessionId must NOT be @unique — the same session appears in multiple checkpoints as Entire CLI tracks its progression. The correct unique key is @@unique([checkpointId, sessionId]).",
+        "The checkpoint file structure is: \u003cshard\u003e/\u003cid10\u003e/metadata.json (outer, maps to CheckpointMetadata) and \u003cshard\u003e/\u003cid10\u003e/0/metadata.json (inner, maps to CheckpointSessionMetadata). The session turn directory is a zero-indexed integer.",
+        "content_hash.txt should be read for its content (the actual hash string), not stored as a file path.",
+        "The V1 /api/checkpoints/:id endpoint reads from the old Checkpoint/CheckpointSession tables (JSON blobs); CheckpointDetail was silently hitting V1 even after the list was migrated to V2.",
+        "The worktree at /tmp/gossamer-checkpoints is reused by the 30s polling loop for both V1 and V2 indexers.",
+        "There are only 5 unique session IDs across 21 inner metadata files — each session spans multiple checkpoint snapshots over time.",
+        "Checkpoint 8ccecf8a8ec5 has no summary field in its source metadata files — it is not an indexing bug but simply not yet summarized by Entire CLI."
+      ],
+      "code": [
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "When a model is referenced by two different relations from the same foreign model (e.g. TokenUsage referenced by both CheckpointMetadata and CheckpointSessionMetadata), Prisma requires named relations and explicit back-references on the referenced model to disambiguate."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "V2 indexer uses @@unique([checkpointId, sessionId]) composite key for upsert on CheckpointSessionMetadata, not sessionId alone, to allow the same session to appear in multiple checkpoints."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "The summary mapping logic should be extracted into a shared helper used by both the V2 list and V2 detail endpoints to avoid divergence. The V2 detail endpoint must be added separately from the list endpoint — the UI's fetchCheckpoint call must be explicitly pointed at it."
+        },
+        {
+          "path": "app/src/api.ts",
+          "finding": "fetchCheckpoints and fetchCheckpoint must both be updated when migrating to V2 — migrating only the list endpoint leaves the detail screen hitting V1 with empty JSON blob data."
+        }
+      ],
+      "workflow": [
+        "Always read the Prisma schema file before attempting an Edit; stale context causes old_string mismatches and failed edits.",
+        "After a schema change, run prisma db push before running the indexer. Use --accept-data-loss when dropping unique constraints.",
+        "When re-indexing after a schema change, wipe V2 tables first if the unique key structure changed, otherwise old rows with the wrong key shape will block upserts.",
+        "The running server serves the compiled dist/; after any server.ts change, both npm run build and a server restart are required before the new endpoint is live.",
+        "Use lsof -ti :3000 | xargs kill -9 to clear a port before restarting the server."
+      ]
+    },
+    "friction": [
+      "User interrupted the initial CheckpointMetadata creation request mid-way to redirect the approach (normalization of nested fields into separate tables).",
+      "User interrupted the initial indexer writing request mid-way to clarify the correct file structure.",
+      "User provided the wrong file structure first (flat listing) and then corrected it to the real tree structure.",
+      "Prisma build failed after schema additions because TokenUsage and FilePath were each referenced by two models without named relations and back-references — required multiple schema edits to resolve.",
+      "prisma db push required --accept-data-loss flag to drop the old @unique constraint on sessionId.",
+      "Stale server process was serving old dist after reindex, causing confusion about whether the API data was correct.",
+      "CheckpointDetail silently showed empty summaries for most checkpoints because it was still calling the V1 detail endpoint, which was only discovered after the user reported the bug explicitly.",
+      "DB path confusion: schema.prisma uses a relative path so prisma db push from the wrong CWD targeted the wrong file; required using the absolute path."
+    ],
+    "open_items": [
+      "V2 indexer re-runs on every 30s poll for all checkpoints including already-indexed ones — an indexedAt timestamp on CheckpointMetadata could be used to skip already-indexed entries for performance.",
+      "The checkpoint polling loop runs git reset --hard HEAD every 30 seconds with no error handling for git failures or stale worktrees.",
+      "SessionDetail.tsx may still reference stale V1 checkpoint data in some paths — full audit of all checkpoint data flows in the UI was not completed.",
+      "The old V1 Checkpoint/CheckpointSession tables and their indexer logic are still present and running in parallel with V2 — they should be removed once V2 is confirmed stable.",
+      "WorkflowLearning items in the schema are named WorkflowLearning but the server maps them as workflowLearnings — confirm the field name is consistent across schema, indexer, and API response."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-06T05:06:57.288826Z",
+    "agent_lines": 361,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 361,
+    "agent_percentage": 100
+  }
+}
