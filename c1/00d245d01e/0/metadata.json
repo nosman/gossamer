@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "c100d245d01e",
+  "session_id": "3d301c34-9645-408f-bb36-5fdefd0d5c23",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-06T05:32:57.714264Z",
+  "branch": "react-native",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "app/src/api.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0c9843e6c240",
+  "checkpoint_transcript_start": 722,
+  "transcript_lines_at_start": 722,
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 144171,
+    "cache_read_tokens": 2547453,
+    "output_tokens": 5439,
+    "api_call_count": 17
+  },
+  "summary": {
+    "intent": "Ensure the UI displays checkpoint summaries from the most recent session, and migrate checkpoint fetching from the old V1 API to the new V2 API.",
+    "outcome": "Both list and detail endpoints now sort sessions by createdAt DESC before selecting a summary, and the UI fetches checkpoints via a new GET /api/v2/sessions/:id/checkpoints endpoint instead of the old V1 endpoint.",
+    "learnings": {
+      "repo": [
+        "V2_SESSION_INCLUDE is a reusable Prisma include object used in findMany calls in src/server.ts; orderBy must be a top-level findMany argument, not nested inside include.",
+        "SessionDetail.tsx merges checkpoint events into the timeline by sorting checkpoints by createdAt ascending and doing a linear merge-insert based on timestamp comparison.",
+        "fetchSessionCheckpoints previously called the V1 /api/sessions/:id/checkpoints endpoint backed by old Checkpoint/CheckpointSession tables; now replaced with a V2 endpoint."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "finding": "Added GET /api/v2/sessions/:id/checkpoints endpoint returning checkpoints sorted by createdAt ascending."
+        },
+        {
+          "path": "app/src/api.ts",
+          "finding": "Updated fetchSessionCheckpoints to call /api/v2/sessions/:id/checkpoints instead of the V1 endpoint."
+        },
+        {
+          "path": "app/src/screens/SessionDetail.tsx",
+          "finding": "Checkpoint merge logic sorts by createdAt ascending and inserts checkpoints before events whose timestamp is \u003e= checkpoint.createdAt; null createdAt falls back to empty string, placing those checkpoints first."
+        }
+      ],
+      "workflow": [
+        "Prisma orderBy must be at the findMany level, not inside include blocks — a quick mistake to make when refactoring includes.",
+        "After backend changes, curl-testing the new endpoint directly before wiring up the client is an effective verification step."
+      ]
+    },
+    "friction": [
+      "Initial edit incorrectly placed orderBy inside the include block rather than as a top-level findMany argument, requiring a follow-up fix."
+    ],
+    "open_items": [
+      "If session-timeline checkpoints are ever migrated fully to V2, the fetchSessionCheckpoints call and merge logic in SessionDetail.tsx would need to be revisited to ensure compatibility.",
+      "The old V1 /api/sessions/:id/checkpoints endpoint still exists in the server but is no longer called by the UI — it could be removed as cleanup."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-06T05:32:44.391161Z",
+    "agent_lines": 41,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 41,
+    "agent_percentage": 100
+  }
+}
