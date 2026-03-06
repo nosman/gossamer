@@ -6,12 +6,9 @@ import {
   StyleSheet,
   useWindowDimensions,
 } from "react-native";
+import { Stack, useRouter } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { StackScreenProps } from "@react-navigation/stack";
-import type { RootStackParamList } from "../../App";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
-
-type Props = StackScreenProps<RootStackParamList, "SessionTree">;
 
 // ─── Tree building ────────────────────────────────────────────────────────────
 
@@ -19,7 +16,7 @@ interface FlatNode {
   session: Session;
   depth: number;
   hasChildren: boolean;
-  isLast: boolean; // last sibling at this level
+  isLast: boolean;
 }
 
 function buildChildMap(sessions: Session[]): Map<string | null, Session[]> {
@@ -27,10 +24,8 @@ function buildChildMap(sessions: Session[]): Map<string | null, Session[]> {
   for (const s of sessions) {
     const key = s.parentSessionId;
     if (!map.has(key)) map.set(key, []);
-    // sort siblings newest-first
     map.get(key)!.push(s);
   }
-  // sort each sibling group newest-first
   for (const arr of map.values()) {
     arr.sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
   }
@@ -60,18 +55,18 @@ function flatten(
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60)  return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60)  return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
 }
 
 function activityColor(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 2 * 60 * 1000)  return "#22c55e"; // active  < 2 min
-  if (diff < 15 * 60 * 1000) return "#f59e0b"; // recent  < 15 min
-  return "#d1d5db";                             // ended
+  if (diff < 2 * 60 * 1000)  return "#22c55e";
+  if (diff < 15 * 60 * 1000) return "#f59e0b";
+  return "#d1d5db";
 }
 
 // ─── Node row ─────────────────────────────────────────────────────────────────
@@ -95,7 +90,6 @@ function TreeNode({ node, isExpanded, onPress, onToggle }: NodeProps) {
       onPress={onPress}
       activeOpacity={0.7}
     >
-      {/* Expand/collapse toggle — only rendered for parent nodes */}
       <TouchableOpacity
         onPress={hasChildren ? onToggle : onPress}
         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -108,10 +102,8 @@ function TreeNode({ node, isExpanded, onPress, onToggle }: NodeProps) {
         )}
       </TouchableOpacity>
 
-      {/* Activity dot for parent nodes */}
       {hasChildren && <View style={[s.dot, { backgroundColor: dotColor }]} />}
 
-      {/* Content */}
       <View style={s.content}>
         <View style={s.titleRow}>
           <Text style={s.sessionId}>{session.sessionId.slice(0, 8)}</Text>
@@ -137,7 +129,8 @@ function TreeNode({ node, isExpanded, onPress, onToggle }: NodeProps) {
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-export function SessionTree({ navigation }: Props) {
+export function SessionTree() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -152,10 +145,9 @@ export function SessionTree({ navigation }: Props) {
       const data = await fetchSessions();
       setSessions(data);
       setError(null);
-      // auto-expand all nodes that have children
       setExpanded((prev) => {
         const next = new Set(prev);
-        const parentIds = new Set(data.map((s) => s.parentSessionId).filter(Boolean));
+        const parentIds = new Set(data.map((sess) => sess.parentSessionId).filter(Boolean));
         for (const id of parentIds) if (id) next.add(id);
         return next;
       });
@@ -188,58 +180,72 @@ export function SessionTree({ navigation }: Props) {
 
   if (loading) {
     return (
-      <View style={s.centered}>
-        <Text style={s.loadingText}>Loading…</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: "Session Tree" }} />
+        <View style={s.centered}>
+          <Text style={s.loadingText}>Loading…</Text>
+        </View>
+      </>
     );
   }
 
   if (error) {
     return (
-      <View style={s.centered}>
-        <Text style={s.errorText}>{error}</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: "Session Tree" }} />
+        <View style={s.centered}>
+          <Text style={s.errorText}>{error}</Text>
+        </View>
+      </>
     );
   }
 
   if (nodes.length === 0) {
     return (
-      <View style={s.centered}>
-        <Text style={s.emptyText}>No sessions yet.</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: "Session Tree" }} />
+        <View style={s.centered}>
+          <Text style={s.emptyText}>No sessions yet.</Text>
+        </View>
+      </>
     );
   }
 
   return (
-    <View style={[s.scroll, { height: contentHeight }]}>
-      {nodes.map((node, i) => {
-        const isExpanded = expanded.has(node.session.sessionId);
-        return (
-          <View key={node.session.sessionId}>
-            {/* Vertical connector line running down from parent */}
-            {node.depth > 0 && (
-              <View
-                style={[
-                  s.connector,
-                  { left: 12 + (node.depth - 1) * INDENT + 9 },
-                ]}
+    <>
+      <Stack.Screen options={{ title: "Session Tree" }} />
+      <View style={[s.scroll, { height: contentHeight }]}>
+        {nodes.map((node) => {
+          const isExpanded = expanded.has(node.session.sessionId);
+          return (
+            <View key={node.session.sessionId}>
+              {node.depth > 0 && (
+                <View
+                  style={[
+                    s.connector,
+                    { left: 12 + (node.depth - 1) * INDENT + 9 },
+                  ]}
+                />
+              )}
+              <TreeNode
+                node={node}
+                isExpanded={isExpanded}
+                onPress={() =>
+                  router.push({
+                    pathname: "/sessions/[sessionId]",
+                    params: {
+                      sessionId: node.session.sessionId,
+                      title: node.session.summary ?? node.session.sessionId.slice(0, 8) + "…",
+                    },
+                  })
+                }
+                onToggle={() => toggle(node.session.sessionId)}
               />
-            )}
-            <TreeNode
-              node={node}
-              isExpanded={isExpanded}
-              onPress={() =>
-                navigation.push("SessionDetail", {
-                  sessionId: node.session.sessionId,
-                  title: node.session.summary ?? node.session.sessionId.slice(0, 8) + "…",
-                })
-              }
-              onToggle={() => toggle(node.session.sessionId)}
-            />
-          </View>
-        );
-      })}
-    </View>
+            </View>
+          );
+        })}
+      </View>
+    </>
   );
 }
 

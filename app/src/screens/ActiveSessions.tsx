@@ -4,15 +4,13 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
+  TouchableOpacity,
   useWindowDimensions,
 } from "react-native";
+import { Stack, useRouter } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { StackScreenProps } from "@react-navigation/stack";
-import type { RootStackParamList } from "../../App";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
-
-type Props = StackScreenProps<RootStackParamList, "ActiveSessions">;
 
 const COLUMNS: { label: string; width: number }[] = [
   { label: "Session",  width: COL_WIDTHS.session  },
@@ -26,7 +24,8 @@ const COLUMNS: { label: string; width: number }[] = [
 
 const TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
-export function ActiveSessions({ navigation }: Props) {
+export function ActiveSessions() {
+  const router = useRouter();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -75,38 +74,61 @@ export function ActiveSessions({ navigation }: Props) {
   }
 
   return (
-    <View style={[styles.scroll, { height: contentHeight }]}>
-      {/* Sticky header — outside the scroll so it doesn't move vertically */}
-      <View style={[styles.row, styles.headerRow]}>
-        {COLUMNS.map(({ label, width }) => (
-          <Text key={label} style={[styles.headerCell, { width }]}>
-            {label}
-          </Text>
-        ))}
+    <>
+      <Stack.Screen
+        options={{
+          title: "Claude Sessions",
+          headerRight: () => (
+            <React.Fragment>
+              <TouchableOpacity
+                onPress={() => router.push("/checkpoints")}
+                style={{ marginRight: 10 }}
+              >
+                <Text style={{ fontSize: 16 }}>⬛</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => router.push("/session-tree")}
+                style={{ marginRight: 14 }}
+              >
+                <Text style={{ fontSize: 18 }}>⬡</Text>
+              </TouchableOpacity>
+            </React.Fragment>
+          ),
+        }}
+      />
+      <View style={[styles.scroll, { height: contentHeight }]}>
+        <View style={[styles.row, styles.headerRow]}>
+          {COLUMNS.map(({ label, width }) => (
+            <Text key={label} style={[styles.headerCell, { width }]}>
+              {label}
+            </Text>
+          ))}
+        </View>
+        <View style={styles.rowsScroll}>
+          {sessions.length === 0 ? (
+            <View style={styles.centered}>
+              <Text style={styles.emptyText}>No sessions yet.</Text>
+            </View>
+          ) : (
+            sessions.map((item) => (
+              <SessionRow
+                key={item.sessionId}
+                session={item}
+                onPress={() =>
+                  router.push({
+                    pathname: "/sessions/[sessionId]",
+                    params: {
+                      sessionId: item.sessionId,
+                      title: item.summary ?? item.sessionId.slice(0, 8) + "…",
+                    },
+                  })
+                }
+              />
+            ))
+          )}
+        </View>
       </View>
-
-      {/* Rows — scrollable both horizontally and vertically */}
-      <View style={styles.rowsScroll}>
-        {sessions.length === 0 ? (
-          <View style={styles.centered}>
-            <Text style={styles.emptyText}>No sessions yet.</Text>
-          </View>
-        ) : (
-          sessions.map((item) => (
-            <SessionRow
-              key={item.sessionId}
-              session={item}
-              onPress={() =>
-                navigation.navigate("SessionDetail", {
-                  sessionId: item.sessionId,
-                  title: item.summary ?? item.sessionId.slice(0, 8) + "…",
-                })
-              }
-            />
-          ))
-        )}
-      </View>
-    </View>
+    </>
   );
 }
 

@@ -7,12 +7,9 @@ import {
   ActivityIndicator,
   useWindowDimensions,
 } from "react-native";
+import { Stack, useRouter } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { StackScreenProps } from "@react-navigation/stack";
-import type { RootStackParamList } from "../../App";
 import { fetchCheckpoints, subscribeToUpdates, type Checkpoint } from "../api";
-
-type Props = StackScreenProps<RootStackParamList, "Checkpoints">;
 
 // ─── Column config ────────────────────────────────────────────────────────────
 
@@ -66,7 +63,8 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: Checkpoint; onPres
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-export function Checkpoints({ navigation }: Props) {
+export function Checkpoints() {
+  const router = useRouter();
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -91,51 +89,72 @@ export function Checkpoints({ navigation }: Props) {
 
   if (loading) {
     return (
-      <View style={s.centered}>
-        <ActivityIndicator size="large" color="#6366f1" />
-      </View>
+      <>
+        <Stack.Screen options={{ title: "Checkpoints" }} />
+        <View style={s.centered}>
+          <ActivityIndicator size="large" color="#6366f1" />
+        </View>
+      </>
     );
   }
 
   if (error) {
     return (
-      <View style={s.centered}>
-        <Text style={s.errorText}>{error}</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: "Checkpoints" }} />
+        <View style={s.centered}>
+          <Text style={s.errorText}>{error}</Text>
+        </View>
+      </>
     );
   }
 
   return (
-    <View style={[s.scroll, { height: contentHeight }]}>
-      {/* Sticky header */}
-      <View style={[s.headerRow, { minWidth: TOTAL_WIDTH }]}>
-        {COLUMNS.map(({ label, width }) => (
-          <Text key={label} style={[s.headerCell, { width }]}>{label}</Text>
-        ))}
+    <>
+      <Stack.Screen
+        options={{
+          title: "Checkpoints",
+          headerRight: () => (
+            <TouchableOpacity
+              onPress={() => router.push("/checkpoints/timeline")}
+              style={{ marginRight: 14 }}
+            >
+              <Text style={{ fontSize: 15 }}>◎</Text>
+            </TouchableOpacity>
+          ),
+        }}
+      />
+      <View style={[s.scroll, { height: contentHeight }]}>
+        <View style={[s.headerRow, { minWidth: TOTAL_WIDTH }]}>
+          {COLUMNS.map(({ label, width }) => (
+            <Text key={label} style={[s.headerCell, { width }]}>{label}</Text>
+          ))}
+        </View>
+        <View style={{ minWidth: TOTAL_WIDTH }}>
+          {checkpoints.length === 0 ? (
+            <View style={s.centered}>
+              <Text style={s.emptyText}>No checkpoints indexed yet.</Text>
+            </View>
+          ) : (
+            checkpoints.map((cp) => (
+              <CheckpointRow
+                key={cp.checkpointId}
+                checkpoint={cp}
+                onPress={() =>
+                  router.push({
+                    pathname: "/checkpoints/[checkpointId]",
+                    params: {
+                      checkpointId: cp.checkpointId,
+                      title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId,
+                    },
+                  })
+                }
+              />
+            ))
+          )}
+        </View>
       </View>
-
-      {/* Rows */}
-      <View style={{ minWidth: TOTAL_WIDTH }}>
-        {checkpoints.length === 0 ? (
-          <View style={s.centered}>
-            <Text style={s.emptyText}>No checkpoints indexed yet.</Text>
-          </View>
-        ) : (
-          checkpoints.map((cp) => (
-            <CheckpointRow
-              key={cp.checkpointId}
-              checkpoint={cp}
-              onPress={() =>
-                navigation.navigate("CheckpointDetail", {
-                  checkpointId: cp.checkpointId,
-                  title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId,
-                })
-              }
-            />
-          ))
-        )}
-      </View>
-    </View>
+    </>
   );
 }
 

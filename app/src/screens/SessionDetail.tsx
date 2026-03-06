@@ -7,14 +7,11 @@ import {
   TouchableOpacity,
   useWindowDimensions,
 } from "react-native";
+import { Stack, useRouter, useLocalSearchParams } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { StackScreenProps } from "@react-navigation/stack";
-import type { RootStackParamList } from "../../App";
 import { fetchSession, fetchSessionEvents, fetchSessionOverview, fetchSessionCheckpoints, type Session, type Event, type InteractionOverview, type SessionCheckpoint } from "../api";
 import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
-
-type Props = StackScreenProps<RootStackParamList, "SessionDetail">;
 
 // ─── Event grouping ───────────────────────────────────────────────────────────
 
@@ -24,7 +21,6 @@ type DisplayItem =
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
 function groupEvents(events: Event[]): DisplayItem[] {
-  // Pass 1: pair PreToolUse with its matching PostToolUse
   const postMap = new Map<string, Event>();
   for (const event of events) {
     if (event.event === "PostToolUse" || event.event === "PostToolUseFailure") {
@@ -59,8 +55,6 @@ function groupEvents(events: Event[]): DisplayItem[] {
     raw.push({ kind: "event", event });
   }
 
-  // Pass 2: collapse consecutive toolUse + Notification items into toolGroup.
-  // Notifications are absorbed silently (they're mostly "permission needed" noise).
   const isGroupable = (item: RawItem) =>
     item.kind === "toolUse" ||
     (item.kind === "event" && item.event.event === "Notification");
@@ -75,13 +69,11 @@ function groupEvents(events: Event[]): DisplayItem[] {
         if (item.kind === "toolUse") {
           group.push({ pre: item.pre, post: item.post, failed: item.failed });
         }
-        // Notifications are swallowed — don't add to group
         i++;
       }
       if (group.length > 0) {
         result.push({ kind: "toolGroup", tools: group });
       }
-      // If the run was notifications-only, they're silently dropped
     } else {
       result.push({ kind: "event", event: (raw[i] as { kind: "event"; event: Event }).event });
       i++;
@@ -103,7 +95,7 @@ function CheckpointRow({
   const [expanded, setExpanded] = useState(false);
   const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
   const fileCount = checkpoint.filesTouched.length;
-  const s = checkpoint.summary;
+  const sum = checkpoint.summary;
 
   return (
     <View style={styles.cpWrapper}>
@@ -116,9 +108,9 @@ function CheckpointRow({
               <Text style={styles.cpBranch}>{checkpoint.branch}</Text>
             )}
           </View>
-          {s?.intent ? (
+          {sum?.intent ? (
             <Text style={styles.cpIntent} numberOfLines={expanded ? undefined : 1}>
-              {s.intent}
+              {sum.intent}
             </Text>
           ) : null}
         </View>
@@ -134,60 +126,60 @@ function CheckpointRow({
 
       {expanded && (
         <View style={styles.cpDropdown}>
-          {s?.outcome ? (
+          {sum?.outcome ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>✓ Outcome</Text>
-              <Text style={styles.cpSectionText} selectable>{s.outcome}</Text>
+              <Text style={styles.cpSectionText} selectable>{sum.outcome}</Text>
             </View>
           ) : null}
-          {s?.repoLearnings && s.repoLearnings.length > 0 ? (
+          {sum?.repoLearnings && sum.repoLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>◎ Repo learnings</Text>
-              {s.repoLearnings.map((item, i) => (
-                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              {sum.repoLearnings.map((item, idx) => (
+                <Text key={idx} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
           ) : null}
-          {s?.codeLearnings && s.codeLearnings.length > 0 ? (
+          {sum?.codeLearnings && sum.codeLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>{"</>"} Code learnings</Text>
-              {s.codeLearnings.map((item, i) => (
-                <View key={i} style={styles.cpCodeLearning}>
+              {sum.codeLearnings.map((item, idx) => (
+                <View key={idx} style={styles.cpCodeLearning}>
                   <Text style={styles.cpCodePath}>{item.path}</Text>
                   <Text style={styles.cpBullet} selectable>{item.finding}</Text>
                 </View>
               ))}
             </View>
           ) : null}
-          {s?.workflowLearnings && s.workflowLearnings.length > 0 ? (
+          {sum?.workflowLearnings && sum.workflowLearnings.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>↺ Workflow learnings</Text>
-              {s.workflowLearnings.map((item, i) => (
-                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              {sum.workflowLearnings.map((item, idx) => (
+                <Text key={idx} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
           ) : null}
-          {s?.friction && s.friction.length > 0 ? (
+          {sum?.friction && sum.friction.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>△ Friction</Text>
-              {s.friction.map((item, i) => (
-                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              {sum.friction.map((item, idx) => (
+                <Text key={idx} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
           ) : null}
-          {s?.openItems && s.openItems.length > 0 ? (
+          {sum?.openItems && sum.openItems.length > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>◇ Open items</Text>
-              {s.openItems.map((item, i) => (
-                <Text key={i} style={styles.cpBullet} selectable>· {item}</Text>
+              {sum.openItems.map((item, idx) => (
+                <Text key={idx} style={styles.cpBullet} selectable>· {item}</Text>
               ))}
             </View>
           ) : null}
           {fileCount > 0 ? (
             <View style={styles.cpSection}>
               <Text style={styles.cpSectionLabel}>Files touched</Text>
-              {checkpoint.filesTouched.map((f, i) => (
-                <Text key={i} style={styles.cpFilePath}>{f}</Text>
+              {checkpoint.filesTouched.map((f, idx) => (
+                <Text key={idx} style={styles.cpFilePath}>{f}</Text>
               ))}
             </View>
           ) : null}
@@ -202,8 +194,9 @@ function CheckpointRow({
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-export function SessionDetail({ route, navigation }: Props) {
-  const { sessionId } = route.params;
+export function SessionDetail() {
+  const router = useRouter();
+  const { sessionId, title } = useLocalSearchParams<{ sessionId: string; title?: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [overview, setOverview] = useState<InteractionOverview | null>(null);
   const [items, setItems] = useState<DisplayItem[]>([]);
@@ -213,6 +206,8 @@ export function SessionDetail({ route, navigation }: Props) {
   const { height } = useWindowDimensions();
   const headerHeight = useHeaderHeight();
   const contentHeight = height - headerHeight;
+
+  const screenTitle = title ?? sessionId.slice(0, 8) + "…";
 
   useEffect(() => {
     Promise.all([
@@ -225,7 +220,6 @@ export function SessionDetail({ route, navigation }: Props) {
         setSession(s);
         setOverview(ov);
 
-        // Merge events and checkpoints in chronological order
         const grouped = groupEvents(evs);
         const merged: DisplayItem[] = [];
         let cpIdx = 0;
@@ -242,7 +236,6 @@ export function SessionDetail({ route, navigation }: Props) {
               : item.kind === "toolGroup"
               ? item.tools[0]?.pre.timestamp ?? ""
               : "";
-          // Insert any checkpoints whose createdAt falls before this item
           while (cpIdx < sortedCps.length) {
             const cp = sortedCps[cpIdx];
             const cpTime = cp.createdAt ?? "";
@@ -255,7 +248,6 @@ export function SessionDetail({ route, navigation }: Props) {
           }
           merged.push(item);
         }
-        // Append any remaining checkpoints
         while (cpIdx < sortedCps.length) {
           merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
         }
@@ -269,99 +261,117 @@ export function SessionDetail({ route, navigation }: Props) {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#6366f1" />
-      </View>
+      <>
+        <Stack.Screen options={{ title: screenTitle }} />
+        <View style={styles.centered}>
+          <ActivityIndicator size="large" color="#6366f1" />
+        </View>
+      </>
     );
   }
 
   if (error) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorText}>{error}</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: screenTitle }} />
+        <View style={styles.centered}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      </>
     );
   }
 
   return (
-    <View style={[styles.scroll, { height: contentHeight }]}>
-      {session?.parentSessionId && (
-        <TouchableOpacity
-          style={styles.parentBanner}
-          onPress={() =>
-            navigation.push("SessionDetail", {
-              sessionId: session.parentSessionId!,
-              title: session.parentSessionId!.slice(0, 8) + "…",
-            })
-          }
-        >
-          <Text style={styles.parentLabel}>↑ Continuation of</Text>
-          <Text style={styles.parentId}>{session.parentSessionId.slice(0, 8)}…</Text>
-        </TouchableOpacity>
-      )}
+    <>
+      <Stack.Screen options={{ title: screenTitle }} />
+      <View style={[styles.scroll, { height: contentHeight }]}>
+        {session?.parentSessionId && (
+          <TouchableOpacity
+            style={styles.parentBanner}
+            onPress={() =>
+              router.push({
+                pathname: "/sessions/[sessionId]",
+                params: {
+                  sessionId: session.parentSessionId!,
+                  title: session.parentSessionId!.slice(0, 8) + "…",
+                },
+              })
+            }
+          >
+            <Text style={styles.parentLabel}>↑ Continuation of</Text>
+            <Text style={styles.parentId}>{session.parentSessionId.slice(0, 8)}…</Text>
+          </TouchableOpacity>
+        )}
 
-      {session?.childSessionIds?.map((childId) => (
-        <TouchableOpacity
-          key={childId}
-          style={styles.childBanner}
-          onPress={() =>
-            navigation.push("SessionDetail", {
-              sessionId: childId,
-              title: childId.slice(0, 8) + "…",
-            })
-          }
-        >
-          <Text style={styles.childLabel}>↓ Continued as</Text>
-          <Text style={styles.childId}>{childId.slice(0, 8)}…</Text>
-        </TouchableOpacity>
-      ))}
+        {session?.childSessionIds?.map((childId) => (
+          <TouchableOpacity
+            key={childId}
+            style={styles.childBanner}
+            onPress={() =>
+              router.push({
+                pathname: "/sessions/[sessionId]",
+                params: {
+                  sessionId: childId,
+                  title: childId.slice(0, 8) + "…",
+                },
+              })
+            }
+          >
+            <Text style={styles.childLabel}>↓ Continued as</Text>
+            <Text style={styles.childId}>{childId.slice(0, 8)}…</Text>
+          </TouchableOpacity>
+        ))}
 
-      {overview && (
-        <View style={styles.overviewCard}>
-          <Text style={styles.overviewLabel}>Overview</Text>
-          <Text style={styles.overviewSummary}>{overview.summary}</Text>
-          {overview.keywords.length > 0 && (
-            <View style={styles.overviewKeywords}>
-              {overview.keywords.map((kw) => (
-                <View key={kw} style={styles.keyword}>
-                  <Text style={styles.keywordText}>{kw}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-          <Text style={styles.overviewTime}>
-            {new Date(overview.startedAt).toLocaleString()} → {new Date(overview.endedAt).toLocaleString()}
-          </Text>
-        </View>
-      )}
+        {overview && (
+          <View style={styles.overviewCard}>
+            <Text style={styles.overviewLabel}>Overview</Text>
+            <Text style={styles.overviewSummary}>{overview.summary}</Text>
+            {overview.keywords.length > 0 && (
+              <View style={styles.overviewKeywords}>
+                {overview.keywords.map((kw) => (
+                  <View key={kw} style={styles.keyword}>
+                    <Text style={styles.keywordText}>{kw}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+            <Text style={styles.overviewTime}>
+              {new Date(overview.startedAt).toLocaleString()} → {new Date(overview.endedAt).toLocaleString()}
+            </Text>
+          </View>
+        )}
 
-      {items.length === 0 ? (
-        <View style={styles.centered}>
-          <Text style={styles.emptyText}>No events for this session.</Text>
-        </View>
-      ) : (
-        items.map((item, idx) =>
-          item.kind === "toolGroup" ? (
-            <ToolGroupItem key={`grp-${idx}`} tools={item.tools} />
-          ) : item.kind === "checkpoint" ? (
-            <CheckpointRow
-              key={`cp-${item.checkpoint.checkpointId}`}
-              checkpoint={item.checkpoint}
-              onPress={() =>
-                navigation.navigate("CheckpointDetail", {
-                  checkpointId: item.checkpoint.checkpointId,
-                  title: item.checkpoint.branch
-                    ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}`
-                    : item.checkpoint.checkpointId,
-                })
-              }
-            />
-          ) : (
-            <EventItem key={`evt-${item.event.id}`} event={item.event} />
+        {items.length === 0 ? (
+          <View style={styles.centered}>
+            <Text style={styles.emptyText}>No events for this session.</Text>
+          </View>
+        ) : (
+          items.map((item, idx) =>
+            item.kind === "toolGroup" ? (
+              <ToolGroupItem key={`grp-${idx}`} tools={item.tools} />
+            ) : item.kind === "checkpoint" ? (
+              <CheckpointRow
+                key={`cp-${item.checkpoint.checkpointId}`}
+                checkpoint={item.checkpoint}
+                onPress={() =>
+                  router.push({
+                    pathname: "/checkpoints/[checkpointId]",
+                    params: {
+                      checkpointId: item.checkpoint.checkpointId,
+                      title: item.checkpoint.branch
+                        ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}`
+                        : item.checkpoint.checkpointId,
+                    },
+                  })
+                }
+              />
+            ) : (
+              <EventItem key={`evt-${item.event.id}`} event={item.event} />
+            )
           )
-        )
-      )}
-    </View>
+        )}
+      </View>
+    </>
   );
 }
 

@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "Gossamer",
+    "slug": "gossamer-app",
+    "version": "1.0.0",
+    "scheme": "gossamer",
+    "plugins": [
+      ["expo-router", { "root": "routes" }]
+    ],
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

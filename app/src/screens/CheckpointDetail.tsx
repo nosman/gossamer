@@ -7,15 +7,10 @@ import {
   ActivityIndicator,
   useWindowDimensions,
 } from "react-native";
+import { Stack, useLocalSearchParams } from "expo-router";
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { StackScreenProps } from "@react-navigation/stack";
-import type { RootStackParamList } from "../../App";
 import { fetchCheckpoint, fetchCheckpointMessages, type Checkpoint, type CheckpointMessage, type CheckpointSummary } from "../api";
 import { CheckpointMessageItem, type ToolResultBlock } from "../components/CheckpointMessageItem";
-
-type Props = StackScreenProps<RootStackParamList, "CheckpointDetail">;
-
-// ─── Screen ───────────────────────────────────────────────────────────────────
 
 // ─── Summary card ─────────────────────────────────────────────────────────────
 
@@ -77,8 +72,8 @@ function SummaryCard({ summary }: { summary: CheckpointSummary }) {
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-export function CheckpointDetail({ route }: Props) {
-  const { checkpointId } = route.params;
+export function CheckpointDetail() {
+  const { checkpointId, title } = useLocalSearchParams<{ checkpointId: string; title?: string }>();
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [messages, setMessages] = useState<CheckpointMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -96,7 +91,6 @@ export function CheckpointDetail({ route }: Props) {
       .finally(() => setLoading(false));
   }, [checkpointId]);
 
-  // Build a map from tool_use_id → tool_result block for rendering paired outputs
   const toolResults = useMemo(() => {
     const map = new Map<string, ToolResultBlock>();
     for (const msg of messages) {
@@ -113,19 +107,27 @@ export function CheckpointDetail({ route }: Props) {
     return map;
   }, [messages]);
 
+  const screenTitle = title ?? checkpointId;
+
   if (loading) {
     return (
-      <View style={s.centered}>
-        <ActivityIndicator size="large" color="#059669" />
-      </View>
+      <>
+        <Stack.Screen options={{ title: screenTitle }} />
+        <View style={s.centered}>
+          <ActivityIndicator size="large" color="#059669" />
+        </View>
+      </>
     );
   }
 
   if (error) {
     return (
-      <View style={s.centered}>
-        <Text style={s.errorText}>{error}</Text>
-      </View>
+      <>
+        <Stack.Screen options={{ title: screenTitle }} />
+        <View style={s.centered}>
+          <Text style={s.errorText}>{error}</Text>
+        </View>
+      </>
     );
   }
 
@@ -135,43 +137,43 @@ export function CheckpointDetail({ route }: Props) {
   }, {});
 
   return (
-    <View style={[s.scroll, { height: contentHeight }]}>
-      {/* Stats bar */}
-      <View style={s.statsBar}>
-        {Object.entries(counts).map(([type, count]) => (
-          <View key={type} style={s.statChip}>
-            <Text style={s.statText}>{type} {count}</Text>
-          </View>
-        ))}
-        <TouchableOpacity
-          style={[s.filterBtn, showCompact && s.filterBtnActive]}
-          onPress={() => setShowCompact((v) => !v)}
-        >
-          <Text style={[s.filterBtnText, showCompact && s.filterBtnTextActive]}>
-            {showCompact ? "▲ hide system" : "▼ show system"}
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Summary card */}
-      {checkpoint?.summary && <SummaryCard summary={checkpoint.summary} />}
-
-      {/* Message list */}
-      {messages.length === 0 ? (
-        <View style={s.centered}>
-          <Text style={s.emptyText}>No messages in this checkpoint.</Text>
+    <>
+      <Stack.Screen options={{ title: screenTitle }} />
+      <View style={[s.scroll, { height: contentHeight }]}>
+        <View style={s.statsBar}>
+          {Object.entries(counts).map(([type, count]) => (
+            <View key={type} style={s.statChip}>
+              <Text style={s.statText}>{type} {count}</Text>
+            </View>
+          ))}
+          <TouchableOpacity
+            style={[s.filterBtn, showCompact && s.filterBtnActive]}
+            onPress={() => setShowCompact((v) => !v)}
+          >
+            <Text style={[s.filterBtnText, showCompact && s.filterBtnTextActive]}>
+              {showCompact ? "▲ hide system" : "▼ show system"}
+            </Text>
+          </TouchableOpacity>
         </View>
-      ) : (
-        messages.map((msg) => (
-          <CheckpointMessageItem
-            key={msg.uuid}
-            msg={msg}
-            toolResults={toolResults}
-            showCompact={showCompact}
-          />
-        ))
-      )}
-    </View>
+
+        {checkpoint?.summary && <SummaryCard summary={checkpoint.summary} />}
+
+        {messages.length === 0 ? (
+          <View style={s.centered}>
+            <Text style={s.emptyText}>No messages in this checkpoint.</Text>
+          </View>
+        ) : (
+          messages.map((msg) => (
+            <CheckpointMessageItem
+              key={msg.uuid}
+              msg={msg}
+              toolResults={toolResults}
+              showCompact={showCompact}
+            />
+          ))
+        )}
+      </View>
+    </>
   );
 }
 
