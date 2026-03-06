@@ -1,0 +1,17 @@
+let's install a router package for our app. We want to make new routes for each screen. We also want to add a new page that shows a timeline for checkpoints.
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+start the server
+
+---
+
+why is there now an app/app folder?
