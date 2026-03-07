@@ -16,6 +16,7 @@ export interface Session {
   summary: string | null;
   keywords: string[];
   branch: string | null;
+  intent: string | null;
 }
 
 export interface Event {
@@ -87,6 +88,7 @@ export interface Checkpoint {
   cliVersion: string | null;
   strategy: string | null;
   checkpointsCount: number;
+  createdAt: string | null;
   filesTouched: string[];
   tokenUsage: TokenUsage | null;
   sessionCount: number;

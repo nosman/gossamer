@@ -24,6 +24,7 @@ interface SessionResponse {
   summary: string | null;
   keywords: string[];
   branch: string | null;
+  intent: string | null;
 }
 
 interface EventResponse {
@@ -85,6 +86,7 @@ function mapSession(
   },
   childSessionIds: string[] = [],
   branch: string | null = null,
+  intent: string | null = null,
 ): SessionResponse {
   return {
     sessionId: s.sessionId,
@@ -101,6 +103,7 @@ function mapSession(
     summary: s.summary,
     keywords: s.keywords ? (JSON.parse(s.keywords) as string[]) : [],
     branch,
+    intent,
   };
 }
 
@@ -149,15 +152,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       const sessionIds = sessions.map((s) => s.sessionId);
 
-      // Fetch latest branch per session from CheckpointSessionMetadata
+      // Fetch latest branch and intent per session from CheckpointSessionMetadata
       const sessionMetas = await db.checkpointSessionMetadata.findMany({
         where: { sessionId: { in: sessionIds } },
-        select: { sessionId: true, branch: true, createdAt: true },
+        select: { sessionId: true, branch: true, createdAt: true, summary: { select: { intent: true } } },
         orderBy: { createdAt: "desc" },
       });
       const branchMap = new Map<string, string | null>();
+      const intentMap = new Map<string, string | null>();
       for (const m of sessionMetas) {
         if (!branchMap.has(m.sessionId)) branchMap.set(m.sessionId, m.branch);
+        if (!intentMap.has(m.sessionId)) intentMap.set(m.sessionId, m.summary?.intent ?? null);
       }
 
       // Build parent → children map in memory
@@ -169,7 +174,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           childMap.set(s.parentSessionId, arr);
         }
       }
-      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [], branchMap.get(s.sessionId) ?? null)));
+      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [], branchMap.get(s.sessionId) ?? null, intentMap.get(s.sessionId) ?? null)));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -186,7 +191,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         }),
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: req.params.id },
-          select: { branch: true },
+          select: { branch: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
       ]);
@@ -194,7 +199,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         res.status(404).json({ error: "Session not found" });
         return;
       }
-      res.json(mapSession(session, children.map((c) => c.sessionId), latestMeta?.branch ?? null));
+      res.json(mapSession(session, children.map((c) => c.sessionId), latestMeta?.branch ?? null, latestMeta?.summary?.intent ?? null));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -443,6 +448,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       res.json(checkpoints.map((c) => {
         const cpSessions = sessionsByCheckpoint.get(c.checkpointId) ?? [];
         const summary = cpSessions.find((s) => s.summary)?.summary ?? null;
+        const latestCreatedAt = cpSessions
+          .filter((s): s is typeof s & { createdAt: Date } => s.createdAt !== null)
+          .map((s) => s.createdAt)
+          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
         return {
           id:               c.id,
           checkpointId:     c.checkpointId,
@@ -450,6 +459,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           strategy:         c.strategy,
           branch:           c.branch,
           checkpointsCount: c.checkpointsCount,
+          createdAt:        latestCreatedAt?.toISOString() ?? null,
           tokenUsage: c.tokenUsage ? {
             inputTokens:         c.tokenUsage.inputTokens,
             cacheCreationTokens: c.tokenUsage.cacheCreationTokens,

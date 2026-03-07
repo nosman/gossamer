@@ -1,81 +1,114 @@
 import React from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
-import { Box, Group, Text, ActionIcon } from "@mantine/core";
+import {
+  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group,
+  useMantineColorScheme, useComputedColorScheme,
+} from "@mantine/core";
 
-function useRouteTitle(): string {
-  const { pathname, state } = useLocation();
-  const s = state as { title?: string } | null;
-  if (s?.title) return s.title;
-  if (pathname === "/") return "Claude Sessions";
-  if (pathname === "/session-tree") return "Session Tree";
-  if (pathname === "/checkpoints") return "Checkpoints";
-  if (pathname === "/checkpoints/timeline") return "Checkpoint Timeline";
-  if (pathname.startsWith("/sessions/")) return "Session Detail";
-  if (pathname.startsWith("/checkpoints/")) return "Checkpoint Detail";
-  return "Gossamer";
-}
+const NAV_ITEMS = [
+  { label: "Sessions",     path: "/",                     sym: "≡"  },
+  { label: "Session Tree", path: "/session-tree",         sym: "⬡"  },
+  { label: "Checkpoints",  path: "/checkpoints",          sym: "⬛" },
+  { label: "Timeline",     path: "/checkpoints/timeline", sym: "◎"  },
+] as const;
 
-function HeaderRight() {
-  const { pathname } = useLocation();
-  const navigate = useNavigate();
+const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline"]);
 
-  if (pathname === "/") {
-    return (
-      <Group gap={4}>
-        <ActionIcon variant="subtle" color="gray" onClick={() => navigate("/checkpoints")} title="Checkpoints">
-          ⬛
-        </ActionIcon>
-        <ActionIcon variant="subtle" color="gray" onClick={() => navigate("/session-tree")} title="Session Tree">
-          ⬡
-        </ActionIcon>
-      </Group>
-    );
-  }
-
-  if (pathname === "/checkpoints") {
-    return (
-      <ActionIcon variant="subtle" color="gray" onClick={() => navigate("/checkpoints/timeline")} title="Timeline">
-        ◎
-      </ActionIcon>
-    );
-  }
-
-  return null;
+function getActiveNav(pathname: string): string {
+  if (pathname === "/" || pathname.startsWith("/sessions/")) return "/";
+  if (pathname === "/session-tree") return "/session-tree";
+  if (pathname === "/checkpoints/timeline") return "/checkpoints/timeline";
+  if (pathname.startsWith("/checkpoints")) return "/checkpoints";
+  return "";
 }
 
 export function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const title = useRouteTitle();
-  const canGoBack = pathname !== "/";
+  const { toggleColorScheme } = useMantineColorScheme();
+  const colorScheme = useComputedColorScheme("dark");
+
+  const activeNav = getActiveNav(pathname);
+  const canGoBack = !TOP_LEVEL.has(pathname);
 
   return (
-    <Box style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      <Box
+    <AppShell navbar={{ width: 220, breakpoint: "sm" }} padding={0} style={{ height: "100vh" }}>
+      <AppShell.Navbar
+        style={{
+          backgroundColor: "var(--mantine-color-dark-7)",
+          borderRight: "1px solid var(--mantine-color-dark-4)",
+          display: "flex",
+          flexDirection: "column",
+          padding: "12px 8px",
+        }}
+      >
+        <Text fw={700} size="sm" c="bright" px={8} py={6} mb={8} style={{ letterSpacing: 0.2 }}>
+          Gossamer
+        </Text>
+
+        <Box style={{ flex: 1 }}>
+          {NAV_ITEMS.map(({ label, path, sym }) => (
+            <NavLink
+              key={path}
+              label={label}
+              leftSection={
+                <Text size="xs" c="dimmed" style={{ width: 16, textAlign: "center", fontFamily: "monospace" }}>
+                  {sym}
+                </Text>
+              }
+              active={activeNav === path}
+              onClick={() => navigate(path)}
+              styles={{
+                root: { borderRadius: 6, marginBottom: 2, fontSize: 13 },
+              }}
+            />
+          ))}
+        </Box>
+
+        <Group
+          justify="space-between"
+          px={8}
+          pt={10}
+          style={{ borderTop: "1px solid var(--mantine-color-dark-4)" }}
+        >
+          <Text size="xs" c="dimmed">v0.1</Text>
+          <Tooltip label={colorScheme === "dark" ? "Light mode" : "Dark mode"} position="right" withArrow>
+            <ActionIcon variant="subtle" color="gray" onClick={toggleColorScheme} size="sm">
+              {colorScheme === "dark" ? "☀" : "◐"}
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </AppShell.Navbar>
+
+      <AppShell.Main
         style={{
           display: "flex",
-          alignItems: "center",
-          gap: 8,
-          height: 48,
-          padding: "0 12px",
-          backgroundColor: "var(--mantine-color-gray-0)",
-          borderBottom: "1px solid var(--mantine-color-gray-3)",
-          flexShrink: 0,
+          flexDirection: "column",
+          overflow: "hidden",
+          height: "100vh",
+          padding: 0,
         }}
       >
         {canGoBack && (
-          <ActionIcon variant="subtle" color="gray" onClick={() => navigate(-1)} title="Back" size="sm">
-            ←
-          </ActionIcon>
+          <Box
+            style={{
+              display: "flex",
+              alignItems: "center",
+              height: 40,
+              padding: "0 16px",
+              borderBottom: "1px solid var(--mantine-color-dark-4)",
+              flexShrink: 0,
+            }}
+          >
+            <ActionIcon variant="subtle" color="gray" onClick={() => navigate(-1)} size="sm" title="Back">
+              ←
+            </ActionIcon>
+          </Box>
         )}
-        <Text fw={600} size="sm" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {title}
-        </Text>
-        <HeaderRight />
-      </Box>
-      <Box component="main" style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-        <Outlet />
-      </Box>
-    </Box>
+        <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <Outlet />
+        </Box>
+      </AppShell.Main>
+    </AppShell>
   );
 }

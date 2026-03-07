@@ -8,7 +8,7 @@ const COLUMNS: { label: string; width: number }[] = [
   { label: "Session ID",  width: COL_WIDTHS.sessionId      },
   { label: "User",        width: COL_WIDTHS.user            },
   { label: "Branch",      width: COL_WIDTHS.branch          },
-  { label: "Summary",     width: COL_WIDTHS.summary         },
+  { label: "Intent",      width: COL_WIDTHS.intent           },
   { label: "Parent",      width: COL_WIDTHS.parentSessionId },
   { label: "Started",     width: COL_WIDTHS.started         },
   { label: "Updated",     width: COL_WIDTHS.updated         },

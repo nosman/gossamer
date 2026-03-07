@@ -1,46 +1,83 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Center, Loader, Alert, Text, Table, Box, Badge } from "@mantine/core";
+import {
+  Center, Loader, Alert, Text, Box, Badge, Group, UnstyledButton, Code, ScrollArea,
+} from "@mantine/core";
 import { fetchCheckpoints, subscribeToUpdates, type Checkpoint } from "../api";
 
-const COL = { id: 130, branch: 140, intent: 300, sessions: 70, files: 70, tokens: 90 } as const;
-const TOTAL_WIDTH = Object.values(COL).reduce((a, b) => a + b, 0) + 16;
-const COLUMNS = [
-  { label: "Checkpoint", width: COL.id },
-  { label: "Branch",     width: COL.branch },
-  { label: "Intent",     width: COL.intent },
-  { label: "Sessions",   width: COL.sessions },
-  { label: "Files",      width: COL.files },
-  { label: "Out tokens", width: COL.tokens },
-];
+function timeAgo(iso: string | null): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
-function CheckpointRow({ checkpoint, onPress }: { checkpoint: Checkpoint; onPress: () => void }) {
+function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPress: () => void }) {
+  const title = checkpoint.summary?.intent ?? checkpoint.checkpointId;
+  const shortId = checkpoint.checkpointId.slice(0, 12);
   const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
+  const tokStr = outTokens >= 1000
+    ? `${(outTokens / 1000).toFixed(1)}k tokens`
+    : outTokens > 0 ? `${outTokens} tokens` : null;
+  const fileCount = checkpoint.filesTouched.length;
+  const age = timeAgo(checkpoint.createdAt);
+
   return (
-    <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
-      <Table.Td style={{ width: COL.id }}>
-        <Text ff="monospace" size="sm" c="teal" fw={600}>{checkpoint.checkpointId}</Text>
-      </Table.Td>
-      <Table.Td style={{ width: COL.branch }}>
-        {checkpoint.branch
-          ? <Badge variant="light" color="gray" size="sm">{checkpoint.branch}</Badge>
-          : <Text size="sm" c="dimmed">—</Text>}
-      </Table.Td>
-      <Table.Td style={{ width: COL.intent, overflow: "hidden" }}>
-        <Text size="sm" c="dimmed" fs="italic" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {checkpoint.summary?.intent ?? "—"}
-        </Text>
-      </Table.Td>
-      <Table.Td style={{ width: COL.sessions, textAlign: "right" }}>
-        <Text size="sm" c="dimmed">{checkpoint.sessionCount}</Text>
-      </Table.Td>
-      <Table.Td style={{ width: COL.files, textAlign: "right" }}>
-        <Text size="sm" c="dimmed">{checkpoint.filesTouched.length}</Text>
-      </Table.Td>
-      <Table.Td style={{ width: COL.tokens, textAlign: "right" }}>
-        <Text size="sm" c="dimmed" ff="monospace">{outTokens > 0 ? outTokens.toLocaleString() : "—"}</Text>
-      </Table.Td>
-    </Table.Tr>
+    <UnstyledButton
+      onClick={onPress}
+      style={{ width: "100%", display: "block", padding: "16px 20px", borderBottom: "1px solid var(--mantine-color-dark-4)" }}
+      styles={{ root: { "&:hover": { backgroundColor: "var(--mantine-color-dark-5)" } } }}
+    >
+      <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xl">
+        <Box style={{ flex: 1, minWidth: 0 }}>
+          <Text fw={600} size="sm" mb={6} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {title}
+          </Text>
+          <Group gap={6} wrap="wrap" align="center">
+            <Code fz={11} style={{ borderRadius: 4, padding: "1px 6px" }}>{shortId}</Code>
+            {age && (
+              <>
+                <Text size="xs" c="dimmed">·</Text>
+                <Text size="xs" c="dimmed">⏱ {age}</Text>
+              </>
+            )}
+            {checkpoint.branch && (
+              <>
+                <Text size="xs" c="dimmed">·</Text>
+                <Badge variant="outline" color="teal" size="xs" radius="sm">{checkpoint.branch}</Badge>
+              </>
+            )}
+            <Text size="xs" c="dimmed">·</Text>
+            <Badge variant="outline" color="orange" size="xs" radius="sm" ff="monospace">Claude Code</Badge>
+          </Group>
+        </Box>
+
+        <Group gap={6} style={{ flexShrink: 0, alignSelf: "center" }} wrap="nowrap">
+          {fileCount > 0 && (
+            <Text size="xs" c="dimmed">{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>
+          )}
+          {checkpoint.sessionCount > 0 && (
+            <>
+              <Text size="xs" c="dimmed">·</Text>
+              <Text size="xs" c="dimmed">{checkpoint.sessionCount} session{checkpoint.sessionCount !== 1 ? "s" : ""}</Text>
+            </>
+          )}
+          {tokStr && (
+            <>
+              <Text size="xs" c="dimmed">·</Text>
+              <Text size="xs" c="dimmed">{tokStr}</Text>
+            </>
+          )}
+        </Group>
+      </Group>
+    </UnstyledButton>
   );
 }
 
@@ -69,33 +106,20 @@ export function Checkpoints() {
   if (checkpoints.length === 0) return <Center style={{ flex: 1 }}><Text c="dimmed" size="sm">No checkpoints indexed yet.</Text></Center>;
 
   return (
-    <Box style={{ flex: 1, overflow: "hidden" }}>
-      <Table.ScrollContainer minWidth={TOTAL_WIDTH} h="100%">
-        <Table stickyHeader highlightOnHover>
-          <Table.Thead>
-            <Table.Tr>
-              {COLUMNS.map(({ label, width }) => (
-                <Table.Th key={label} style={{ width, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
-                  {label}
-                </Table.Th>
-              ))}
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {checkpoints.map((cp) => (
-              <CheckpointRow
-                key={cp.checkpointId}
-                checkpoint={cp}
-                onPress={() =>
-                  navigate(`/checkpoints/${cp.checkpointId}`, {
-                    state: { title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId },
-                  })
-                }
-              />
-            ))}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
-    </Box>
+    <ScrollArea style={{ flex: 1 }}>
+      <Box>
+        {checkpoints.map((cp) => (
+          <CheckpointCard
+            key={cp.checkpointId}
+            checkpoint={cp}
+            onPress={() =>
+              navigate(`/checkpoints/${cp.checkpointId}`, {
+                state: { title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId },
+              })
+            }
+          />
+        ))}
+      </Box>
+    </ScrollArea>
   );
 }
