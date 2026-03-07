@@ -1,5 +1,5 @@
 import React from "react";
-import { TouchableOpacity, View, StyleSheet, Linking } from "../primitives";
+import { Table, Badge, Text, Anchor, Group } from "@mantine/core";
 import type { Session } from "../api";
 
 interface Props {
@@ -33,67 +33,60 @@ export function SessionRow({ session, onPress }: Props) {
   const summary = session.summary ?? session.prompt?.slice(0, 120) ?? "—";
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.row}>
-      <View style={{ ...styles.cell, ...styles.idCellWrap, width: COL_WIDTHS.session } as React.CSSProperties}>
-        {session.parentSessionId && <span style={styles.continuationMark}>↳</span>}
-        <span style={{ ...styles.idCell, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties}>
-          {session.sessionId.slice(0, 8)}…
-        </span>
-      </View>
+    <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
+      <Table.Td style={{ width: COL_WIDTHS.session }}>
+        <Group gap={3} wrap="nowrap">
+          {session.parentSessionId && <Text size="xs" c="blue" fw={700}>↳</Text>}
+          <Text ff="monospace" size="sm" c="indigo" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {session.sessionId.slice(0, 8)}…
+          </Text>
+        </Group>
+      </Table.Td>
 
-      <div style={{ ...styles.cell, width: COL_WIDTHS.user, overflow: "hidden" } as React.CSSProperties}>
+      <Table.Td style={{ width: COL_WIDTHS.user, overflow: "hidden" }}>
         {session.gitUserEmail ? (
-          <span
-            role="link"
-            onClick={(e) => { e.stopPropagation(); Linking.openURL(`mailto:${session.gitUserEmail}`); }}
-            style={{ ...styles.userLink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" } as React.CSSProperties}
+          <Anchor
+            size="sm"
+            href={`mailto:${session.gitUserEmail}`}
+            onClick={(e) => e.stopPropagation()}
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
           >
             {session.gitUserName ?? session.gitUserEmail}
-          </span>
+          </Anchor>
         ) : (
-          <span style={{ ...styles.cellText, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" } as React.CSSProperties}>
+          <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {session.gitUserName ?? "—"}
-          </span>
+          </Text>
         )}
-      </div>
+      </Table.Td>
 
-      <span style={{ ...styles.cell, ...styles.cellText, width: COL_WIDTHS.repo, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties}>
-        {repo}
-      </span>
+      <Table.Td style={{ width: COL_WIDTHS.repo, overflow: "hidden" }}>
+        <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{repo}</Text>
+      </Table.Td>
 
-      <span style={{ ...styles.cell, ...styles.cellText, width: COL_WIDTHS.summary, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties}>
-        {summary}
-      </span>
+      <Table.Td style={{ width: COL_WIDTHS.summary, overflow: "hidden" }}>
+        <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</Text>
+      </Table.Td>
 
-      <View style={{ ...styles.cell, ...styles.keywordsCell, width: COL_WIDTHS.keywords } as React.CSSProperties}>
-        {session.keywords.length > 0 ? (
-          session.keywords.map((kw) => (
-            <span key={kw} style={styles.chip}>{kw}</span>
-          ))
-        ) : (
-          <span style={styles.cellText}>—</span>
-        )}
-      </View>
+      <Table.Td style={{ width: COL_WIDTHS.keywords, overflow: "hidden" }}>
+        <Group gap={4} wrap="nowrap" style={{ overflow: "hidden" }}>
+          {session.keywords.length > 0 ? (
+            session.keywords.map((kw) => (
+              <Badge key={kw} variant="light" color="violet" size="xs" radius="xl">{kw}</Badge>
+            ))
+          ) : (
+            <Text size="sm" c="dimmed">—</Text>
+          )}
+        </Group>
+      </Table.Td>
 
-      <span style={{ ...styles.cell, ...styles.cellText, width: COL_WIDTHS.started } as React.CSSProperties}>
-        {fmt(session.startedAt)}
-      </span>
+      <Table.Td style={{ width: COL_WIDTHS.started }}>
+        <Text size="sm">{fmt(session.startedAt)}</Text>
+      </Table.Td>
 
-      <span style={{ ...styles.cell, ...styles.cellText, width: COL_WIDTHS.updated } as React.CSSProperties}>
-        {fmt(session.updatedAt)}
-      </span>
-    </TouchableOpacity>
+      <Table.Td style={{ width: COL_WIDTHS.updated }}>
+        <Text size="sm">{fmt(session.updatedAt)}</Text>
+      </Table.Td>
+    </Table.Tr>
   );
 }
-
-const styles = StyleSheet.create({
-  row: { display: "flex", flexDirection: "row", alignItems: "center", padding: "8px", borderBottom: "1px solid #e5e7eb", cursor: "pointer" } as React.CSSProperties,
-  cell: { padding: "0 4px", overflow: "hidden", flexShrink: 0 } as React.CSSProperties,
-  cellText: { fontSize: 13, color: "#374151" } as React.CSSProperties,
-  idCellWrap: { display: "flex", flexDirection: "row", alignItems: "center", gap: 3 } as React.CSSProperties,
-  idCell: { fontFamily: "monospace", fontSize: 13, color: "#6366f1" } as React.CSSProperties,
-  continuationMark: { fontSize: 11, color: "#0369a1", fontWeight: 700 } as React.CSSProperties,
-  userLink: { fontSize: 13, color: "#2563eb", textDecoration: "underline", cursor: "pointer" } as React.CSSProperties,
-  keywordsCell: { display: "flex", flexDirection: "row", flexWrap: "nowrap", alignItems: "center", gap: 4, overflow: "hidden" } as React.CSSProperties,
-  chip: { backgroundColor: "#ede9fe", borderRadius: 10, padding: "2px 7px", fontSize: 11, color: "#5b21b6", fontWeight: 500, flexShrink: 0 } as React.CSSProperties,
-});

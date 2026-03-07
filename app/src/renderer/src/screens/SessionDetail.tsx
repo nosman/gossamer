@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
-import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet } from "../primitives";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse } from "@mantine/core";
 import {
   fetchSession,
   fetchSessionEvents,
@@ -78,41 +78,85 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
   const sum = checkpoint.summary;
 
   return (
-    <div style={{ borderLeft: "4px solid #059669" }}>
-      <TouchableOpacity onPress={() => setExpanded((v) => !v)} style={styles.cpRow}>
-        <View style={styles.cpBody}>
-          <View style={styles.cpTop}>
-            <span style={styles.cpLabel}>Checkpoint</span>
-            <span style={styles.cpId}>{checkpoint.checkpointId}</span>
-            {checkpoint.branch && <span style={styles.cpBranch}>{checkpoint.branch}</span>}
-          </View>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)" }}>
+      <UnstyledButton
+        onClick={() => setExpanded((v) => !v)}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "var(--mantine-color-teal-0)" }}
+      >
+        <Box style={{ flex: 1 }}>
+          <Group gap={8} mb={2}>
+            <Text size="xs" fw={700} c="teal" tt="uppercase">Checkpoint</Text>
+            <Text ff="monospace" size="xs" c="green" fw={600}>{checkpoint.checkpointId}</Text>
+            {checkpoint.branch && <Badge variant="light" color="teal" size="xs">{checkpoint.branch}</Badge>}
+          </Group>
           {sum?.intent && (
-            <div style={{ ...styles.cpIntent, WebkitLineClamp: expanded ? undefined : 1, display: expanded ? "block" : "-webkit-box", WebkitBoxOrient: "vertical", overflow: "hidden" } as React.CSSProperties}>
-              {sum.intent}
-            </div>
+            <Text size="xs" c="dimmed" fs="italic" lineClamp={expanded ? undefined : 1}>{sum.intent}</Text>
           )}
-        </View>
-        <View style={styles.cpMeta}>
-          {fileCount > 0 && <span style={styles.cpMetaText}>{fileCount} file{fileCount !== 1 ? "s" : ""}</span>}
-          {outTokens > 0 && <span style={styles.cpMetaText}>{outTokens.toLocaleString()} tok</span>}
-        </View>
-      </TouchableOpacity>
+        </Box>
+        <Box style={{ textAlign: "right", flexShrink: 0 }}>
+          {fileCount > 0 && <Text size="xs" c="dimmed" ff="monospace">{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>}
+          {outTokens > 0 && <Text size="xs" c="dimmed" ff="monospace">{outTokens.toLocaleString()} tok</Text>}
+        </Box>
+      </UnstyledButton>
 
-      {expanded && (
-        <View style={styles.cpDropdown}>
-          {sum?.outcome && <View style={styles.cpSection}><span style={styles.cpSectionLabel}>✓ Outcome</span><span style={styles.cpSectionText}>{sum.outcome}</span></View>}
-          {sum?.repoLearnings?.length ? <View style={styles.cpSection}><span style={styles.cpSectionLabel}>◎ Repo learnings</span>{sum.repoLearnings.map((it, i) => <span key={i} style={styles.cpBullet}>· {it}</span>)}</View> : null}
-          {sum?.codeLearnings?.length ? <View style={styles.cpSection}><span style={styles.cpSectionLabel}>{"</>"} Code learnings</span>{sum.codeLearnings.map((it, i) => <View key={i} style={styles.cpCodeLearning}><span style={styles.cpCodePath}>{it.path}</span><span style={styles.cpBullet}>{it.finding}</span></View>)}</View> : null}
-          {sum?.workflowLearnings?.length ? <View style={styles.cpSection}><span style={styles.cpSectionLabel}>↺ Workflow learnings</span>{sum.workflowLearnings.map((it, i) => <span key={i} style={styles.cpBullet}>· {it}</span>)}</View> : null}
-          {sum?.friction?.length ? <View style={styles.cpSection}><span style={styles.cpSectionLabel}>△ Friction</span>{sum.friction.map((it, i) => <span key={i} style={styles.cpBullet}>· {it}</span>)}</View> : null}
-          {sum?.openItems?.length ? <View style={styles.cpSection}><span style={styles.cpSectionLabel}>◇ Open items</span>{sum.openItems.map((it, i) => <span key={i} style={styles.cpBullet}>· {it}</span>)}</View> : null}
-          {fileCount > 0 && <View style={styles.cpSection}><span style={styles.cpSectionLabel}>Files touched</span>{checkpoint.filesTouched.map((f, i) => <span key={i} style={styles.cpFilePath}>{f}</span>)}</View>}
-          <TouchableOpacity onPress={onPress} style={styles.cpOpenBtn}>
-            <span style={styles.cpOpenBtnText}>Open checkpoint →</span>
-          </TouchableOpacity>
-        </View>
-      )}
-    </div>
+      <Collapse in={expanded}>
+        <Box style={{ backgroundColor: "#f8fffe", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+          {sum?.outcome && (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>✓ Outcome</Text>
+              <Text size="xs">{sum.outcome}</Text>
+            </Box>
+          )}
+          {sum?.repoLearnings?.length ? (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◎ Repo learnings</Text>
+              {sum.repoLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
+            </Box>
+          ) : null}
+          {sum?.codeLearnings?.length ? (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>{"</>"} Code learnings</Text>
+              {sum.codeLearnings.map((it, i) => (
+                <Box key={i} pl={4} mb={2}>
+                  <Text size="xs" ff="monospace" c="violet" fw={600}>{it.path}</Text>
+                  <Text size="xs">· {it.finding}</Text>
+                </Box>
+              ))}
+            </Box>
+          ) : null}
+          {sum?.workflowLearnings?.length ? (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>↺ Workflow learnings</Text>
+              {sum.workflowLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
+            </Box>
+          ) : null}
+          {sum?.friction?.length ? (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>△ Friction</Text>
+              {sum.friction.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
+            </Box>
+          ) : null}
+          {sum?.openItems?.length ? (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◇ Open items</Text>
+              {sum.openItems.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
+            </Box>
+          ) : null}
+          {fileCount > 0 && (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Files touched</Text>
+              {checkpoint.filesTouched.map((f, i) => <Text key={i} size="xs" ff="monospace" c="dimmed" pl={4}>{f}</Text>)}
+            </Box>
+          )}
+          <UnstyledButton
+            onClick={onPress}
+            style={{ alignSelf: "flex-start", marginTop: 4, padding: "5px 10px", borderRadius: 4, border: "1px solid var(--mantine-color-teal-3)" }}
+          >
+            <Text size="xs" c="teal" ff="monospace">Open checkpoint →</Text>
+          </UnstyledButton>
+        </Box>
+      </Collapse>
+    </Box>
   );
 }
 
@@ -154,41 +198,50 @@ export function SessionDetail() {
       .finally(() => setLoading(false));
   }, [id]);
 
-  if (loading) return <View style={styles.centered}><ActivityIndicator color="#6366f1" /></View>;
-  if (error) return <View style={styles.centered}><span style={{ color: "#ef4444" }}>{error}</span></View>;
+  if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
+  if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
   return (
-    <div style={{ flex: 1, overflow: "auto", backgroundColor: "#fff" }}>
+    <ScrollArea style={{ flex: 1 }}>
       {session?.parentSessionId && (
-        <TouchableOpacity style={styles.parentBanner} onPress={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}>
-          <span style={styles.parentLabel}>↑ Continuation of</span>
-          <span style={styles.parentId}>{session.parentSessionId.slice(0, 8)}…</span>
-        </TouchableOpacity>
+        <UnstyledButton
+          onClick={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "var(--mantine-color-blue-0)", borderBottom: "1px solid var(--mantine-color-blue-2)", padding: "8px 14px" }}
+        >
+          <Text size="xs" c="blue">↑ Continuation of</Text>
+          <Text size="xs" c="blue" ff="monospace" fw={600} td="underline">{session.parentSessionId.slice(0, 8)}…</Text>
+        </UnstyledButton>
       )}
       {session?.childSessionIds?.map((childId) => (
-        <TouchableOpacity key={childId} style={styles.childBanner} onPress={() => navigate(`/sessions/${childId}`, { state: { title: childId.slice(0, 8) + "…" } })}>
-          <span style={styles.childLabel}>↓ Continued as</span>
-          <span style={styles.childId}>{childId.slice(0, 8)}…</span>
-        </TouchableOpacity>
+        <UnstyledButton
+          key={childId}
+          onClick={() => navigate(`/sessions/${childId}`, { state: { title: childId.slice(0, 8) + "…" } })}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "var(--mantine-color-green-0)", borderBottom: "1px solid var(--mantine-color-green-2)", padding: "8px 14px" }}
+        >
+          <Text size="xs" c="green">↓ Continued as</Text>
+          <Text size="xs" c="green" ff="monospace" fw={600} td="underline">{childId.slice(0, 8)}…</Text>
+        </UnstyledButton>
       ))}
 
       {overview && (
-        <View style={styles.overviewCard}>
-          <span style={styles.overviewLabel}>Overview</span>
-          <span style={styles.overviewSummary}>{overview.summary}</span>
+        <Box style={{ backgroundColor: "var(--mantine-color-gray-0)", borderBottom: "1px solid var(--mantine-color-gray-3)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+          <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }}>Overview</Text>
+          <Text size="sm">{overview.summary}</Text>
           {overview.keywords.length > 0 && (
-            <View style={styles.overviewKeywords}>
-              {overview.keywords.map((kw) => <span key={kw} style={styles.keyword}>{kw}</span>)}
-            </View>
+            <Group gap={5}>
+              {overview.keywords.map((kw) => (
+                <Badge key={kw} variant="light" color="gray" size="xs" radius="sm" ff="monospace">{kw}</Badge>
+              ))}
+            </Group>
           )}
-          <span style={styles.overviewTime}>
+          <Text size="xs" c="dimmed">
             {new Date(overview.startedAt).toLocaleString()} → {new Date(overview.endedAt).toLocaleString()}
-          </span>
-        </View>
+          </Text>
+        </Box>
       )}
 
       {items.length === 0 ? (
-        <View style={styles.centered}><span style={{ color: "#9ca3af" }}>No events for this session.</span></View>
+        <Center p="xl"><Text c="dimmed" size="sm">No events for this session.</Text></Center>
       ) : (
         items.map((item, idx) =>
           item.kind === "toolGroup" ? (
@@ -206,41 +259,6 @@ export function SessionDetail() {
           )
         )
       )}
-    </div>
+    </ScrollArea>
   );
 }
-
-const styles = StyleSheet.create({
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, minHeight: 120 } as React.CSSProperties,
-  parentBanner: { display: "flex", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#f0f9ff", borderBottom: "1px solid #bae6fd", padding: "8px 14px", cursor: "pointer" } as React.CSSProperties,
-  parentLabel: { fontSize: 12, color: "#0369a1" } as React.CSSProperties,
-  parentId: { fontSize: 12, color: "#0369a1", fontFamily: "monospace", fontWeight: 600, textDecoration: "underline" } as React.CSSProperties,
-  childBanner: { display: "flex", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#f0fdf4", borderBottom: "1px solid #bbf7d0", padding: "8px 14px", cursor: "pointer" } as React.CSSProperties,
-  childLabel: { fontSize: 12, color: "#15803d" } as React.CSSProperties,
-  childId: { fontSize: 12, color: "#15803d", fontFamily: "monospace", fontWeight: 600, textDecoration: "underline" } as React.CSSProperties,
-  overviewCard: { backgroundColor: "#fafaf9", borderBottom: "1px solid #e7e5e4", padding: "12px 14px", gap: 6 } as React.CSSProperties,
-  overviewLabel: { fontSize: 10, fontWeight: 700, color: "#78716c", textTransform: "uppercase", letterSpacing: 0.6 } as React.CSSProperties,
-  overviewSummary: { fontSize: 13, color: "#292524", lineHeight: "20px" } as React.CSSProperties,
-  overviewKeywords: { flexDirection: "row", flexWrap: "wrap", gap: 5 } as React.CSSProperties,
-  keyword: { backgroundColor: "#e7e5e4", borderRadius: 4, padding: "2px 6px", fontSize: 11, color: "#57534e", fontFamily: "monospace" } as React.CSSProperties,
-  overviewTime: { fontSize: 10, color: "#a8a29e" } as React.CSSProperties,
-  cpRow: { display: "flex", flexDirection: "row", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "#f0fdf4", cursor: "pointer" } as React.CSSProperties,
-  cpBody: { flex: 1, gap: 2 } as React.CSSProperties,
-  cpTop: { flexDirection: "row", alignItems: "center", gap: 8 } as React.CSSProperties,
-  cpLabel: { fontSize: 12, fontWeight: 700, color: "#059669", textTransform: "uppercase" } as React.CSSProperties,
-  cpId: { fontFamily: "monospace", fontSize: 12, color: "#065f46", fontWeight: 600 } as React.CSSProperties,
-  cpBranch: { fontSize: 11, color: "#059669", backgroundColor: "#d1fae5", padding: "1px 5px", borderRadius: 3 } as React.CSSProperties,
-  cpIntent: { fontSize: 11, color: "#6b7280", fontStyle: "italic" } as React.CSSProperties,
-  cpMeta: { alignItems: "flex-end", gap: 2 } as React.CSSProperties,
-  cpMetaText: { fontSize: 10, color: "#6b7280", fontFamily: "monospace" } as React.CSSProperties,
-  cpDropdown: { backgroundColor: "#f8fffe", borderTop: "1px solid #d1fae5", padding: "12px 16px", gap: 10 } as React.CSSProperties,
-  cpSection: { gap: 3 } as React.CSSProperties,
-  cpSectionLabel: { fontSize: 10, fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: 0.5 } as React.CSSProperties,
-  cpSectionText: { fontSize: 12, color: "#374151", lineHeight: "18px" } as React.CSSProperties,
-  cpBullet: { fontSize: 12, color: "#374151", lineHeight: "18px", paddingLeft: 4 } as React.CSSProperties,
-  cpCodeLearning: { paddingLeft: 4, gap: 1, marginBottom: 2 } as React.CSSProperties,
-  cpCodePath: { fontFamily: "monospace", fontSize: 11, color: "#4338ca", fontWeight: 600 } as React.CSSProperties,
-  cpFilePath: { fontFamily: "monospace", fontSize: 11, color: "#6b7280", paddingLeft: 4 } as React.CSSProperties,
-  cpOpenBtn: { alignSelf: "flex-start", marginTop: 4, padding: "5px 10px", borderRadius: 4, border: "1px solid #bbf7d0", cursor: "pointer" } as React.CSSProperties,
-  cpOpenBtnText: { fontSize: 11, color: "#059669", fontFamily: "monospace" } as React.CSSProperties,
-});

@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { StyleSheet } from "../primitives";
+import { Box, Badge, Group, Text, Collapse, Code } from "@mantine/core";
 import type { Event } from "../api";
 
 interface Props {
@@ -39,18 +39,22 @@ function truncated(val: unknown, max = 1200): string | undefined {
 
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+    <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {oldStr && (
-        <div style={ts.diffDel}>
-          <pre style={ts.diffText}>{oldStr.split("\n").map((l) => "− " + l).join("\n")}</pre>
-        </div>
+        <Box style={{ backgroundColor: "var(--mantine-color-red-0)", borderLeft: "3px solid var(--mantine-color-red-3)", padding: "4px 6px", borderRadius: 2 }}>
+          <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
+            {oldStr.split("\n").map((l) => "− " + l).join("\n")}
+          </Code>
+        </Box>
       )}
       {newStr && (
-        <div style={ts.diffAdd}>
-          <pre style={ts.diffText}>{newStr.split("\n").map((l) => "+ " + l).join("\n")}</pre>
-        </div>
+        <Box style={{ backgroundColor: "var(--mantine-color-green-0)", borderLeft: "3px solid var(--mantine-color-green-3)", padding: "4px 6px", borderRadius: 2 }}>
+          <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
+            {newStr.split("\n").map((l) => "+ " + l).join("\n")}
+          </Code>
+        </Box>
       )}
-    </div>
+    </Box>
   );
 }
 
@@ -58,30 +62,30 @@ function renderInput(toolName: string, inp: Record<string, unknown>): React.Reac
   switch (toolName) {
     case "Edit": {
       const fp = str(inp.file_path), old = str(inp.old_string), newS = str(inp.new_string);
-      return <div>{fp ? <div style={ts.filePath}>{fp}</div> : null}<DiffView oldStr={old} newStr={newS} /></div>;
+      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{fp}</Text> : null}<DiffView oldStr={old} newStr={newS} /></div>;
     }
     case "Write": {
       const fp = str(inp.file_path), content = str(inp.content);
-      return <div>{fp ? <div style={ts.filePath}>{fp}</div> : null}<pre style={ts.code}>{content.length > 1200 ? content.slice(0, 1200) + "\n…" : content}</pre></div>;
+      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{fp}</Text> : null}<Code block style={{ fontSize: 11 }}>{content.length > 1200 ? content.slice(0, 1200) + "\n…" : content}</Code></div>;
     }
     case "Read": {
       const fp = str(inp.file_path);
       const extra = (inp.offset != null ? `  offset: ${inp.offset}` : "") + (inp.limit != null ? `  limit: ${inp.limit}` : "");
-      return <div style={ts.filePath}>{fp}{extra}</div>;
+      return <Text size="xs" ff="monospace" c="violet" fw={600}>{fp}{extra}</Text>;
     }
-    case "Bash": return <pre style={ts.code}>{str(inp.command)}</pre>;
+    case "Bash": return <Code block style={{ fontSize: 11 }}>{str(inp.command)}</Code>;
     case "Glob": case "Grep": {
       const pattern = str(inp.pattern), extra = str(inp.path || inp.glob || inp.type || "");
-      return <pre style={ts.code}>{pattern}{extra ? "\n" + extra : ""}</pre>;
+      return <Code block style={{ fontSize: 11 }}>{pattern}{extra ? "\n" + extra : ""}</Code>;
     }
     case "WebFetch": {
       const url = str(inp.url), prompt = str(inp.prompt);
-      return <div><div style={ts.filePath}>{url}</div>{prompt ? <pre style={ts.code}>{prompt}</pre> : null}</div>;
+      return <div><Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{url}</Text>{prompt ? <Code block style={{ fontSize: 11 }}>{prompt}</Code> : null}</div>;
     }
-    case "WebSearch": return <pre style={ts.code}>{str(inp.query)}</pre>;
+    case "WebSearch": return <Code block style={{ fontSize: 11 }}>{str(inp.query)}</Code>;
     default: {
       const raw = JSON.stringify(inp, null, 2);
-      return <pre style={ts.code}>{raw.length > 1200 ? raw.slice(0, 1200) + "\n…" : raw}</pre>;
+      return <Code block style={{ fontSize: 11 }}>{raw.length > 1200 ? raw.slice(0, 1200) + "\n…" : raw}</Code>;
     }
   }
 }
@@ -92,7 +96,7 @@ export function ToolUseItem({ pre, post, failed }: Props) {
   const toolName = typeof preData.tool_name === "string" ? preData.tool_name : "?";
   const hint = toolHint(toolName, pre.data);
   const sym = !post ? "▶" : failed ? "✗" : "✓";
-  const color = !post ? "#3b82f6" : failed ? "#ef4444" : "#22c55e";
+  const color = !post ? "blue" : failed ? "red" : "green";
   const toolInput = preData.tool_input as Record<string, unknown> | undefined;
   let outputStr: string | undefined;
   if (post) {
@@ -104,51 +108,33 @@ export function ToolUseItem({ pre, post, failed }: Props) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <div onClick={() => setExpanded((v) => !v)} style={ts.container}>
-      <div style={ts.header}>
-        <span style={{ ...ts.sym, color } as React.CSSProperties}>{sym}</span>
-        <span style={{ ...ts.toolName, color } as React.CSSProperties}>{toolName}</span>
-        {hint && <span style={ts.hint}>{hint}</span>}
-        <span style={ts.time}>{timeStart}{showRange ? ` → ${timeEnd}` : ""}</span>
-        {pre.blocked && <span style={ts.blockedBadge}>BLOCKED</span>}
-        <span style={ts.chevron}>{expanded ? "▲" : "▼"}</span>
-      </div>
-      {expanded && (
-        <div style={ts.body}>
+    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid var(--mantine-color-gray-1)", cursor: "pointer" }}>
+      <Group gap={6}>
+        <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
+        <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>
+        {hint && <Text size="xs" c="dimmed" ff="monospace" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</Text>}
+        <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{timeStart}{showRange ? ` → ${timeEnd}` : ""}</Text>
+        {pre.blocked && <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>}
+        <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>
+      </Group>
+      <Collapse in={expanded}>
+        <Box mt={4} ml={20} mb={4}>
           {toolInput !== undefined && (
             <>
-              <div style={ts.sectionLabel}>input</div>
+              <Text size="xs" c="dimmed" fw={700} tt="uppercase" style={{ letterSpacing: 0.5, marginTop: 6, marginBottom: 2 }}>input</Text>
               {renderInput(toolName, toolInput)}
             </>
           )}
           {outputStr !== undefined && (
             <>
-              <div style={{ ...ts.sectionLabel, ...(failed ? { color: "#ef4444" } : {}) } as React.CSSProperties}>
+              <Text size="xs" fw={700} tt="uppercase" style={{ letterSpacing: 0.5, marginTop: 6, marginBottom: 2 }} c={failed ? "red" : "dimmed"}>
                 {failed ? "error" : "output"}
-              </div>
-              <pre style={ts.code}>{outputStr}</pre>
+              </Text>
+              <Code block style={{ fontSize: 11 }}>{outputStr}</Code>
             </>
           )}
-        </div>
-      )}
-    </div>
+        </Box>
+      </Collapse>
+    </Box>
   );
 }
-
-const ts = StyleSheet.create({
-  container: { padding: "5px 12px", borderBottom: "1px solid #f1f5f9", cursor: "pointer" } as React.CSSProperties,
-  header: { display: "flex", flexDirection: "row", alignItems: "center", gap: 6 } as React.CSSProperties,
-  sym: { fontSize: 12, fontWeight: "bold", width: 14, textAlign: "center" } as React.CSSProperties,
-  toolName: { fontSize: 12, fontWeight: 600, fontFamily: "monospace", flexShrink: 0 } as React.CSSProperties,
-  hint: { fontSize: 11, color: "#6b7280", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
-  time: { fontSize: 10, color: "#9ca3af", flexShrink: 0 } as React.CSSProperties,
-  blockedBadge: { backgroundColor: "#ef4444", borderRadius: 3, padding: "1px 4px", color: "#fff", fontSize: 9, fontWeight: "bold" } as React.CSSProperties,
-  chevron: { fontSize: 9, color: "#9ca3af", flexShrink: 0 } as React.CSSProperties,
-  body: { marginTop: 4, marginLeft: 20, marginBottom: 4 } as React.CSSProperties,
-  sectionLabel: { fontSize: 10, color: "#6b7280", fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, marginTop: 6, marginBottom: 2 } as React.CSSProperties,
-  filePath: { fontFamily: "monospace", fontSize: 11, color: "#4338ca", marginBottom: 4, fontWeight: 600 } as React.CSSProperties,
-  code: { fontFamily: "monospace", fontSize: 11, color: "#1e293b", backgroundColor: "#f8fafc", padding: 6, borderRadius: 3, lineHeight: "15px", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" } as React.CSSProperties,
-  diffDel: { backgroundColor: "#fef2f2", borderLeft: "3px solid #fca5a5", padding: "4px 6px", borderRadius: 2 } as React.CSSProperties,
-  diffAdd: { backgroundColor: "#f0fdf4", borderLeft: "3px solid #86efac", padding: "4px 6px", borderRadius: 2 } as React.CSSProperties,
-  diffText: { fontFamily: "monospace", fontSize: 11, lineHeight: "16px", color: "#1e293b", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all" } as React.CSSProperties,
-});

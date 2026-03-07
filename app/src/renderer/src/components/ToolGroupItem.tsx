@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { StyleSheet } from "../primitives";
+import { Box, Badge, Group, Text, Collapse } from "@mantine/core";
 import type { Event } from "../api";
 import { ToolUseItem } from "./ToolUseItem";
 
@@ -31,7 +31,7 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
   const anyPending = tools.some((t) => !t.post);
   const anyBlocked = tools.some((t) => t.pre.blocked);
   const sym   = anyFailed ? "✗" : anyPending ? "▶" : "✓";
-  const color = anyFailed ? "#ef4444" : anyPending ? "#3b82f6" : "#22c55e";
+  const color = anyFailed ? "red" : anyPending ? "blue" : "green";
 
   const timeStart = fmt(tools[0].pre.timestamp);
   const lastPost  = [...tools].reverse().find((t) => t.post)?.post;
@@ -39,34 +39,28 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <div style={s.wrapper}>
-      <div onClick={() => setExpanded((v) => !v)} style={s.header}>
-        <span style={{ ...s.sym, color } as React.CSSProperties}>{sym}</span>
-        <span style={s.count}>({tools.length}) tool uses</span>
-        <span style={s.summary}>{summary}</span>
-        <span style={s.time}>{timeStart}{showRange ? ` → ${timeEnd}` : ""}</span>
-        {anyBlocked && <span style={s.blockedBadge}>BLOCKED</span>}
-        <span style={s.chevron}>{expanded ? "▲" : "▼"}</span>
-      </div>
-      {expanded && (
-        <div style={s.items}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-gray-4)", backgroundColor: "var(--mantine-color-gray-0)" }}>
+      <Group
+        gap={6}
+        px={12}
+        py={6}
+        onClick={() => setExpanded((v) => !v)}
+        style={{ cursor: "pointer" }}
+      >
+        <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
+        <Text size="xs" fw={600}>({tools.length}) tool uses</Text>
+        <Text size="xs" c="dimmed" ff="monospace" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{summary}</Text>
+        <Text size="xs" c="dimmed">{timeStart}{showRange ? ` → ${timeEnd}` : ""}</Text>
+        {anyBlocked && <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>}
+        <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>
+      </Group>
+      <Collapse in={expanded}>
+        <Box style={{ borderTop: "1px solid var(--mantine-color-gray-3)" }}>
           {tools.map((t, i) => (
             <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} />
           ))}
-        </div>
-      )}
-    </div>
+        </Box>
+      </Collapse>
+    </Box>
   );
 }
-
-const s = StyleSheet.create({
-  wrapper: { borderLeft: "4px solid #9ca3af", backgroundColor: "#f8fafc" } as React.CSSProperties,
-  header: { display: "flex", flexDirection: "row", alignItems: "center", gap: 6, padding: "6px 12px", cursor: "pointer" } as React.CSSProperties,
-  sym: { fontSize: 12, fontWeight: "bold", width: 14, textAlign: "center" } as React.CSSProperties,
-  count: { fontSize: 12, fontWeight: 600, color: "#374151", flexShrink: 0 } as React.CSSProperties,
-  summary: { fontSize: 11, color: "#6b7280", fontFamily: "monospace", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } as React.CSSProperties,
-  time: { fontSize: 10, color: "#9ca3af", flexShrink: 0 } as React.CSSProperties,
-  blockedBadge: { backgroundColor: "#ef4444", borderRadius: 3, padding: "1px 4px", color: "#fff", fontSize: 9, fontWeight: "bold" } as React.CSSProperties,
-  chevron: { fontSize: 9, color: "#9ca3af", flexShrink: 0 } as React.CSSProperties,
-  items: { borderTop: "1px solid #e5e7eb" } as React.CSSProperties,
-});

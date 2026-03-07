@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { View, Text, TouchableOpacity, StyleSheet } from "../primitives";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton } from "@mantine/core";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
 
 interface FlatNode {
@@ -74,44 +74,44 @@ function TreeNode({
   const dotColor = activityColor(session.updatedAt);
 
   return (
-    <TouchableOpacity
-      style={{ ...s.row, paddingLeft: 12 + depth * INDENT } as React.CSSProperties}
-      onPress={onPress}
+    <UnstyledButton
+      onClick={onPress}
+      style={{ width: "100%", display: "flex", flexDirection: "row", alignItems: "flex-start", paddingTop: 10, paddingBottom: 10, paddingRight: 16, paddingLeft: 12 + depth * INDENT, borderBottom: "1px solid var(--mantine-color-gray-1)", gap: 8 }}
     >
       <div
         role="button"
         tabIndex={0}
         onClick={(e) => { e.stopPropagation(); hasChildren ? onToggle() : onPress(); }}
         onKeyDown={(e) => e.key === "Enter" && (hasChildren ? onToggle() : onPress())}
-        style={s.toggleWrap}
+        style={{ width: 18, display: "flex", alignItems: "center", paddingTop: 2, flexShrink: 0, cursor: "pointer" }}
       >
         {hasChildren ? (
-          <span style={s.chevron}>{isExpanded ? "▼" : "▶"}</span>
+          <Text size="xs" c="dimmed">{isExpanded ? "▼" : "▶"}</Text>
         ) : (
-          <div style={{ ...s.leaf, backgroundColor: dotColor } as React.CSSProperties} />
+          <div style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: dotColor, marginTop: 4 }} />
         )}
       </div>
 
-      {hasChildren && <div style={{ ...s.dot, backgroundColor: dotColor } as React.CSSProperties} />}
+      {hasChildren && <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: dotColor, marginTop: 3, flexShrink: 0 }} />}
 
-      <View style={s.content}>
-        <View style={s.titleRow}>
-          <span style={s.sessionId}>{session.sessionId.slice(0, 8)}</span>
-          {session.repoName && <span style={s.repoChip}>{session.repoName}</span>}
-          <span style={s.time}>{relativeTime(session.updatedAt)}</span>
-        </View>
+      <Box style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
+        <Group gap={6} wrap="wrap">
+          <Text ff="monospace" size="xs" fw={600}>{session.sessionId.slice(0, 8)}</Text>
+          {session.repoName && <Badge variant="light" color="violet" size="xs">{session.repoName}</Badge>}
+          <Text size="xs" c="dimmed" style={{ marginLeft: "auto" }}>{relativeTime(session.updatedAt)}</Text>
+        </Group>
         {session.summary && (
-          <div style={s.summary}>{session.summary}</div>
+          <Text size="xs" c="dimmed" lineClamp={2} style={{ lineHeight: "17px" }}>{session.summary}</Text>
         )}
         {session.keywords.length > 0 && (
-          <View style={s.keywords}>
+          <Group gap={4} mt={2}>
             {session.keywords.slice(0, 5).map((k) => (
-              <span key={k} style={s.keyword}>{k}</span>
+              <Badge key={k} variant="light" color="violet" size="xs" radius="sm">{k}</Badge>
             ))}
-          </View>
+          </Group>
         )}
-      </View>
-    </TouchableOpacity>
+      </Box>
+    </UnstyledButton>
   );
 }
 
@@ -159,12 +159,12 @@ export function SessionTree() {
     });
   }
 
-  if (loading) return <View style={s.centered}><div style={{ color: "#9ca3af" }}>Loading…</div></View>;
-  if (error) return <View style={s.centered}><div style={{ color: "#ef4444" }}>{error}</div></View>;
-  if (nodes.length === 0) return <View style={s.centered}><div style={{ color: "#9ca3af" }}>No sessions yet.</div></View>;
+  if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
+  if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
+  if (nodes.length === 0) return <Center style={{ flex: 1 }}><Text c="dimmed" size="sm">No sessions yet.</Text></Center>;
 
   return (
-    <div style={{ flex: 1, overflow: "auto", backgroundColor: "#fff" }}>
+    <ScrollArea style={{ flex: 1 }}>
       {nodes.map((node) => (
         <div key={node.session.sessionId} style={{ position: "relative" }}>
           {node.depth > 0 && (
@@ -174,7 +174,7 @@ export function SessionTree() {
               left: 12 + (node.depth - 1) * INDENT + 9,
               width: 1,
               height: "100%",
-              backgroundColor: "#e5e7eb",
+              backgroundColor: "var(--mantine-color-gray-3)",
             }} />
           )}
           <TreeNode
@@ -189,33 +189,6 @@ export function SessionTree() {
           />
         </div>
       ))}
-    </div>
+    </ScrollArea>
   );
 }
-
-const s = StyleSheet.create({
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24 } as React.CSSProperties,
-  row: {
-    display: "flex",
-    flexDirection: "row",
-    alignItems: "flex-start",
-    paddingTop: 10,
-    paddingBottom: 10,
-    paddingRight: 16,
-    borderBottom: "1px solid #f1f5f9",
-    gap: 8,
-    cursor: "pointer",
-  } as React.CSSProperties,
-  toggleWrap: { width: 18, display: "flex", alignItems: "center", paddingTop: 2, flexShrink: 0, cursor: "pointer" } as React.CSSProperties,
-  chevron: { fontSize: 10, color: "#9ca3af" } as React.CSSProperties,
-  leaf: { width: 7, height: 7, borderRadius: "50%", marginTop: 4 } as React.CSSProperties,
-  dot: { width: 8, height: 8, borderRadius: "50%", marginTop: 3, flexShrink: 0 } as React.CSSProperties,
-  content: { flex: 1, gap: 3 } as React.CSSProperties,
-  titleRow: { flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" } as React.CSSProperties,
-  sessionId: { fontFamily: "monospace", fontSize: 12, fontWeight: 600, color: "#374151" } as React.CSSProperties,
-  repoChip: { fontSize: 11, color: "#6d28d9", backgroundColor: "#ede9fe", padding: "1px 5px", borderRadius: 4 } as React.CSSProperties,
-  time: { fontSize: 11, color: "#9ca3af", marginLeft: "auto" } as React.CSSProperties,
-  summary: { fontSize: 12, color: "#6b7280", lineHeight: "17px", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" } as React.CSSProperties,
-  keywords: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginTop: 2 } as React.CSSProperties,
-  keyword: { fontSize: 10, color: "#7c3aed", backgroundColor: "#f5f3ff", padding: "1px 4px", borderRadius: 3 } as React.CSSProperties,
-});

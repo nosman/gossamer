@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { View, Text, ActivityIndicator, StyleSheet } from "../primitives";
+import { Center, Loader, Alert, Text, Table, Box } from "@mantine/core";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 
@@ -37,111 +37,55 @@ export function ActiveSessions() {
   }, [load]);
 
   if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator color="#6366f1" />
-      </View>
-    );
+    return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   }
 
   if (error) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.errorTitle}>Cannot reach API server</Text>
-        <Text style={styles.errorBody}>
-          Start the server with:{" "}
-          <span style={{ fontFamily: "monospace", background: "#f3f4f6", padding: "0 6px" }}>
-            claude-hook-handler serve
-          </span>
-        </Text>
-        <Text style={styles.errorDetail}>{error}</Text>
-      </View>
+      <Center style={{ flex: 1, padding: 24 }}>
+        <Alert color="red" title="Cannot reach API server" maw={480}>
+          <Text size="sm" mb={4}>
+            Start the server with:{" "}
+            <Text component="span" ff="monospace" size="sm">claude-hook-handler serve</Text>
+          </Text>
+          <Text size="xs" c="dimmed">{error}</Text>
+        </Alert>
+      </Center>
     );
   }
 
-  return (
-    <div style={{ flex: 1, overflow: "auto" }}>
-      <div style={{ minWidth: TOTAL_WIDTH }}>
-        {/* Sticky header */}
-        <div style={{ ...styles.headerRow, position: "sticky", top: 0, zIndex: 1 }}>
-          {COLUMNS.map(({ label, width }) => (
-            <Text key={label} style={{ ...styles.headerCell, width }}>
-              {label}
-            </Text>
-          ))}
-        </div>
+  if (sessions.length === 0) {
+    return <Center style={{ flex: 1 }}><Text c="dimmed" size="sm">No sessions yet.</Text></Center>;
+  }
 
-        {/* Rows */}
-        {sessions.length === 0 ? (
-          <View style={styles.centered}>
-            <Text style={styles.emptyText}>No sessions yet.</Text>
-          </View>
-        ) : (
-          sessions.map((item) => (
-            <SessionRow
-              key={item.sessionId}
-              session={item}
-              onPress={() =>
-                navigate(`/sessions/${item.sessionId}`, {
-                  state: { title: item.summary ?? item.sessionId.slice(0, 8) + "…" },
-                })
-              }
-            />
-          ))
-        )}
-      </div>
-    </div>
+  return (
+    <Box style={{ flex: 1, overflow: "hidden" }}>
+      <Table.ScrollContainer minWidth={TOTAL_WIDTH} h="100%">
+        <Table stickyHeader highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              {COLUMNS.map(({ label, width }) => (
+                <Table.Th key={label} style={{ width, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  {label}
+                </Table.Th>
+              ))}
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {sessions.map((item) => (
+              <SessionRow
+                key={item.sessionId}
+                session={item}
+                onPress={() =>
+                  navigate(`/sessions/${item.sessionId}`, {
+                    state: { title: item.summary ?? item.sessionId.slice(0, 8) + "…" },
+                  })
+                }
+              />
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
+    </Box>
   );
 }
-
-const styles = StyleSheet.create({
-  centered: {
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 24,
-    minHeight: 80,
-    flex: 1,
-  } as React.CSSProperties,
-  headerRow: {
-    display: "flex",
-    flexDirection: "row",
-    backgroundColor: "#f9fafb",
-    borderBottom: "2px solid #e5e7eb",
-    paddingTop: 8,
-    paddingBottom: 8,
-    paddingLeft: 8,
-    paddingRight: 8,
-  } as React.CSSProperties,
-  headerCell: {
-    fontSize: 12,
-    fontWeight: 700,
-    color: "#6b7280",
-    paddingLeft: 4,
-    paddingRight: 4,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    flexShrink: 0,
-  } as React.CSSProperties,
-  errorTitle: {
-    fontSize: 18,
-    fontWeight: 700,
-    color: "#ef4444",
-    marginBottom: 12,
-  } as React.CSSProperties,
-  errorBody: {
-    fontSize: 14,
-    color: "#374151",
-    textAlign: "center",
-    marginBottom: 8,
-    lineHeight: "22px",
-  } as React.CSSProperties,
-  errorDetail: {
-    fontSize: 12,
-    color: "#9ca3af",
-    textAlign: "center",
-  } as React.CSSProperties,
-  emptyText: {
-    fontSize: 14,
-    color: "#9ca3af",
-  } as React.CSSProperties,
-});

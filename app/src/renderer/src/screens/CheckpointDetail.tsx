@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useLocation } from "react-router-dom";
-import { View, TouchableOpacity, ActivityIndicator, StyleSheet } from "../primitives";
+import {
+  Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Button,
+} from "@mantine/core";
 import {
   fetchCheckpoint,
   fetchCheckpointMessages,
@@ -14,13 +16,15 @@ function SummarySection({ label, items }: { label: string; items: string[] }) {
   const [open, setOpen] = useState(false);
   if (items.length === 0) return null;
   return (
-    <View style={s.section}>
-      <TouchableOpacity onPress={() => setOpen((v) => !v)} style={s.sectionHeader}>
-        <span style={s.sectionLabel}>{label} ({items.length})</span>
-        <span style={s.sectionChevron}>{open ? "▲" : "▼"}</span>
-      </TouchableOpacity>
-      {open && items.map((item, i) => <span key={i} style={s.sectionItem}>{"· "}{item}</span>)}
-    </View>
+    <Box>
+      <UnstyledButton onClick={() => setOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+        <Text size="xs" fw={600}>{label} ({items.length})</Text>
+        <Text size="xs" c="dimmed">{open ? "▲" : "▼"}</Text>
+      </UnstyledButton>
+      <Collapse in={open}>
+        {items.map((item, i) => <Text key={i} size="xs" c="dimmed" pl={8} style={{ lineHeight: "18px" }}>· {item}</Text>)}
+      </Collapse>
+    </Box>
   );
 }
 
@@ -28,39 +32,41 @@ function CodeLearningSections({ items }: { items: Array<{ path: string; finding:
   const [open, setOpen] = useState(false);
   if (items.length === 0) return null;
   return (
-    <View style={s.section}>
-      <TouchableOpacity onPress={() => setOpen((v) => !v)} style={s.sectionHeader}>
-        <span style={s.sectionLabel}>Code learnings ({items.length})</span>
-        <span style={s.sectionChevron}>{open ? "▲" : "▼"}</span>
-      </TouchableOpacity>
-      {open && items.map((item, i) => (
-        <View key={i} style={s.codeLearningItem}>
-          <span style={s.codePath}>{item.path}</span>
-          <span style={s.sectionItem}>{item.finding}</span>
-        </View>
-      ))}
-    </View>
+    <Box>
+      <UnstyledButton onClick={() => setOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+        <Text size="xs" fw={600}>Code learnings ({items.length})</Text>
+        <Text size="xs" c="dimmed">{open ? "▲" : "▼"}</Text>
+      </UnstyledButton>
+      <Collapse in={open}>
+        {items.map((item, i) => (
+          <Box key={i} pl={8} mb={4}>
+            <Text size="xs" ff="monospace" c="violet" fw={600}>{item.path}</Text>
+            <Text size="xs" c="dimmed">{item.finding}</Text>
+          </Box>
+        ))}
+      </Collapse>
+    </Box>
   );
 }
 
 function SummaryCard({ summary }: { summary: CheckpointSummary }) {
   return (
-    <View style={s.summaryCard}>
-      <span style={s.summaryCardLabel}>Summary</span>
-      <View style={s.summaryBlock}>
-        <span style={s.fieldLabel}>Intent</span>
-        <span style={s.fieldText}>{summary.intent}</span>
-      </View>
-      <View style={s.summaryBlock}>
-        <span style={s.fieldLabel}>Outcome</span>
-        <span style={s.fieldText}>{summary.outcome}</span>
-      </View>
-      <SummarySection label="Repo learnings"    items={summary.repoLearnings} />
-      <CodeLearningSections                      items={summary.codeLearnings} />
-      <SummarySection label="Workflow learnings" items={summary.workflowLearnings} />
-      <SummarySection label="Friction"           items={summary.friction} />
-      <SummarySection label="Open items"         items={summary.openItems} />
-    </View>
+    <Box style={{ backgroundColor: "var(--mantine-color-teal-0)", borderBottom: "1px solid var(--mantine-color-teal-2)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+      <Text size="xs" fw={700} c="teal" tt="uppercase" style={{ letterSpacing: 0.6 }}>Summary</Text>
+      <Box>
+        <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Intent</Text>
+        <Text size="sm">{summary.intent}</Text>
+      </Box>
+      <Box>
+        <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Outcome</Text>
+        <Text size="sm">{summary.outcome}</Text>
+      </Box>
+      <SummarySection label="Repo learnings"     items={summary.repoLearnings} />
+      <CodeLearningSections                        items={summary.codeLearnings} />
+      <SummarySection label="Workflow learnings"  items={summary.workflowLearnings} />
+      <SummarySection label="Friction"            items={summary.friction} />
+      <SummarySection label="Open items"          items={summary.openItems} />
+    </Box>
   );
 }
 
@@ -96,8 +102,8 @@ export function CheckpointDetail() {
     return map;
   }, [messages]);
 
-  if (loading) return <View style={s.centered}><ActivityIndicator color="#059669" /></View>;
-  if (error) return <View style={s.centered}><span style={{ color: "#ef4444" }}>{error}</span></View>;
+  if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="teal" /></Center>;
+  if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
   const counts = messages.reduce<Record<string, number>>((acc, m) => {
     acc[m.type] = (acc[m.type] ?? 0) + 1;
@@ -105,53 +111,31 @@ export function CheckpointDetail() {
   }, {});
 
   return (
-    <div style={{ flex: 1, overflow: "auto", backgroundColor: "#fff" }}>
-      {/* Stats bar */}
-      <div style={s.statsBar}>
+    <ScrollArea style={{ flex: 1 }}>
+      <Group gap={6} p="xs" style={{ backgroundColor: "var(--mantine-color-gray-0)", borderBottom: "1px solid var(--mantine-color-gray-3)" }} wrap="wrap">
         {Object.entries(counts).map(([type, count]) => (
-          <span key={type} style={s.statChip}>{type} {count}</span>
+          <Badge key={type} variant="light" color="gray" size="sm" ff="monospace">{type} {count}</Badge>
         ))}
-        <TouchableOpacity
-          style={{ ...s.filterBtn, ...(showCompact ? s.filterBtnActive : {}) } as React.CSSProperties}
-          onPress={() => setShowCompact((v) => !v)}
+        <Button
+          variant={showCompact ? "filled" : "outline"}
+          color="dark"
+          size="xs"
+          ml="auto"
+          onClick={() => setShowCompact((v) => !v)}
         >
-          <span style={{ ...s.filterBtnText, ...(showCompact ? s.filterBtnTextActive : {}) } as React.CSSProperties}>
-            {showCompact ? "▲ hide system" : "▼ show system"}
-          </span>
-        </TouchableOpacity>
-      </div>
+          {showCompact ? "▲ hide system" : "▼ show system"}
+        </Button>
+      </Group>
 
       {checkpoint?.summary && <SummaryCard summary={checkpoint.summary} />}
 
       {messages.length === 0 ? (
-        <View style={s.centered}><span style={{ color: "#9ca3af" }}>No messages in this checkpoint.</span></View>
+        <Center p="xl"><Text c="dimmed" size="sm">No messages in this checkpoint.</Text></Center>
       ) : (
         messages.map((msg) => (
           <CheckpointMessageItem key={msg.uuid} msg={msg} toolResults={toolResults} showCompact={showCompact} />
         ))
       )}
-    </div>
+    </ScrollArea>
   );
 }
-
-const s = StyleSheet.create({
-  centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 24, minHeight: 120 } as React.CSSProperties,
-  statsBar: { display: "flex", flexDirection: "row", flexWrap: "wrap", gap: 6, alignItems: "center", padding: "8px 12px", backgroundColor: "#f8fafc", borderBottom: "1px solid #e5e7eb" } as React.CSSProperties,
-  statChip: { backgroundColor: "#e2e8f0", borderRadius: 4, padding: "2px 7px", fontSize: 11, color: "#475569", fontFamily: "monospace" } as React.CSSProperties,
-  filterBtn: { marginLeft: "auto", borderRadius: 4, padding: "3px 8px", border: "1px solid #cbd5e1", cursor: "pointer" } as React.CSSProperties,
-  filterBtnActive: { backgroundColor: "#0f172a", borderColor: "#0f172a" } as React.CSSProperties,
-  filterBtnText: { fontSize: 11, color: "#64748b" } as React.CSSProperties,
-  filterBtnTextActive: { color: "#f8fafc" } as React.CSSProperties,
-  summaryCard: { backgroundColor: "#f0fdf4", borderBottom: "1px solid #bbf7d0", padding: "12px 14px", gap: 8 } as React.CSSProperties,
-  summaryCardLabel: { fontSize: 10, fontWeight: 700, color: "#166534", textTransform: "uppercase", letterSpacing: 0.6 } as React.CSSProperties,
-  summaryBlock: { gap: 2 } as React.CSSProperties,
-  fieldLabel: { fontSize: 10, fontWeight: 700, color: "#4b5563", textTransform: "uppercase", letterSpacing: 0.4 } as React.CSSProperties,
-  fieldText: { fontSize: 13, color: "#111827", lineHeight: "19px" } as React.CSSProperties,
-  section: { gap: 4 } as React.CSSProperties,
-  sectionHeader: { display: "flex", flexDirection: "row", alignItems: "center", gap: 6, cursor: "pointer" } as React.CSSProperties,
-  sectionLabel: { fontSize: 11, fontWeight: 600, color: "#374151" } as React.CSSProperties,
-  sectionChevron: { fontSize: 9, color: "#9ca3af" } as React.CSSProperties,
-  sectionItem: { fontSize: 12, color: "#4b5563", lineHeight: "18px", paddingLeft: 8 } as React.CSSProperties,
-  codeLearningItem: { paddingLeft: 8, gap: 1, marginBottom: 4 } as React.CSSProperties,
-  codePath: { fontFamily: "monospace", fontSize: 11, color: "#4338ca", fontWeight: 600 } as React.CSSProperties,
-});
