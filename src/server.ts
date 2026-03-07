@@ -528,23 +528,29 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
 
-  // WebSocket change detection — poll every 2s, broadcast on new events
-  let lastMaxId: number | null = null;
+  // WebSocket change detection — poll every 2s, broadcast on new events or checkpoints
+  let lastMaxEventId: number | null = null;
+  let lastMaxCheckpointId: number | null = null;
+  const broadcast = () => {
+    const message = JSON.stringify({ type: "sessions_updated" });
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(message);
+      }
+    }
+  };
   const poller = setInterval(async () => {
     try {
-      const latest = await db.event.findFirst({
-        orderBy: { id: "desc" },
-        select: { id: true },
-      });
-      const currentId = latest?.id ?? null;
-      if (currentId !== lastMaxId) {
-        lastMaxId = currentId;
-        const message = JSON.stringify({ type: "sessions_updated" });
-        for (const client of wss.clients) {
-          if (client.readyState === WebSocket.OPEN) {
-            client.send(message);
-          }
-        }
+      const [latestEvent, latestCheckpoint] = await Promise.all([
+        db.event.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        db.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+      ]);
+      const currentEventId = latestEvent?.id ?? null;
+      const currentCheckpointId = latestCheckpoint?.id ?? null;
+      if (currentEventId !== lastMaxEventId || currentCheckpointId !== lastMaxCheckpointId) {
+        lastMaxEventId = currentEventId;
+        lastMaxCheckpointId = currentCheckpointId;
+        broadcast();
       }
     } catch {
       // Non-fatal polling error — keep running
@@ -561,6 +567,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     // Ensure worktree exists (reuse across restarts)
     if (!existsSync(WORKTREE_PATH)) {
       try {
+        // Prune stale worktree registration first, then re-add
+        execSync(`git -C ${JSON.stringify(repoDir)} worktree prune`, { stdio: "pipe" });
         execSync(
           `git -C ${JSON.stringify(repoDir)} worktree add ${JSON.stringify(WORKTREE_PATH)} ${CHECKPOINT_BRANCH}`,
           { stdio: "pipe" },
@@ -570,13 +578,6 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         process.stderr.write(`checkpoint indexer: failed to create worktree — ${err}\n`);
       }
     }
-
-    const broadcast = () => {
-      const msg = JSON.stringify({ type: "sessions_updated" });
-      for (const client of wss.clients) {
-        if (client.readyState === WebSocket.OPEN) client.send(msg);
-      }
-    };
 
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
@@ -600,6 +601,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       } catch { /* non-fatal */ }
     };
 
+    void runIndex();
     checkpointPoller = setInterval(runIndex, 30_000);
     process.stderr.write(`checkpoint indexer: polling every 30s (worktree: ${WORKTREE_PATH})\n`);
   }
