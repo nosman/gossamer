@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "754d7456b57d",
+  "strategy": "manual-commit",
+  "branch": "react-native",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "app/package-lock.json",
+    "app/package.json",
+    "app/postcss.config.cjs",
+    "app/src/renderer/src/Layout.tsx",
+    "app/src/renderer/src/components/CheckpointMessageItem.tsx",
+    "app/src/renderer/src/components/EventItem.tsx",
+    "app/src/renderer/src/components/SessionRow.tsx",
+    "app/src/renderer/src/components/ToolGroupItem.tsx",
+    "app/src/renderer/src/components/ToolUseItem.tsx",
+    "app/src/renderer/src/main.tsx",
+    "app/src/renderer/src/screens/ActiveSessions.tsx",
+    "app/src/renderer/src/screens/CheckpointDetail.tsx",
+    "app/src/renderer/src/screens/CheckpointTimeline.tsx",
+    "app/src/renderer/src/screens/Checkpoints.tsx",
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "app/src/renderer/src/screens/SessionTree.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/75/4d7456b57d/0/metadata.json",
+      "transcript": "/75/4d7456b57d/0/full.jsonl",
+      "context": "/75/4d7456b57d/0/context.md",
+      "content_hash": "/75/4d7456b57d/0/content_hash.txt",
+      "prompt": "/75/4d7456b57d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 99904,
+    "cache_read_tokens": 1757228,
+    "output_tokens": 42990,
+    "api_call_count": 38
+  }
+}

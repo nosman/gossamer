@@ -1,0 +1,5 @@
+now that we have installed electron, let's use mantine as our ui component library
+
+---
+
+Let's use mantine whenever we can moving forward.
