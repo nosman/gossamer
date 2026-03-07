@@ -17,7 +17,7 @@ function BlockedBadge() {
 function UserPromptCard({ event }: { event: Event }) {
   const prompt = str(data(event).prompt);
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-indigo-5)", backgroundColor: "var(--mantine-color-indigo-1)", padding: "10px 14px" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-indigo-5)", backgroundColor: "light-dark(var(--mantine-color-indigo-1), var(--mantine-color-dark-6))", padding: "10px 14px" }}>
       <Group gap={8} align="baseline">
         <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
         <Text ff="monospace" size="xs" c="indigo" style={{ flex: 1, lineHeight: "18px" }}>{prompt || "(no prompt)"}</Text>
@@ -32,7 +32,7 @@ function AssistantCard({ event }: { event: Event }) {
   const msg = str(d.last_assistant_message);
   const reason = str(d.reason);
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "#fff", padding: "10px 14px" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(#fff, var(--mantine-color-dark-7))", padding: "10px 14px" }}>
       <Group gap={8} mb={4}>
         {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
         <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
@@ -44,15 +44,15 @@ function AssistantCard({ event }: { event: Event }) {
 }
 
 const NOTIF_STYLE: Record<string, { color: string; bg: string; sym: string }> = {
-  permission_prompt: { color: "#b45309", bg: "#fffbeb", sym: "?" },
-  idle_prompt:       { color: "#6b7280", bg: "#f9fafb", sym: "…" },
+  permission_prompt: { color: "#b45309", bg: "light-dark(#fffbeb, var(--mantine-color-dark-6))", sym: "?" },
+  idle_prompt:       { color: "#6b7280", bg: "light-dark(#f9fafb, var(--mantine-color-dark-7))", sym: "…" },
 };
 
 function NotificationRow({ event }: { event: Event }) {
   const d = data(event);
   const msg = str(d.message);
   const ntype = str(d.notification_type);
-  const style = NOTIF_STYLE[ntype] ?? { color: "#6b7280", bg: "#f9fafb", sym: "◆" };
+  const style = NOTIF_STYLE[ntype] ?? { color: "#6b7280", bg: "light-dark(#f9fafb, var(--mantine-color-dark-7))", sym: "◆" };
   return (
     <Group gap={8} px={12} py={5} style={{ backgroundColor: style.bg, borderBottom: "1px solid var(--mantine-color-gray-1)" }}>
       <Text size="sm" fw={700} style={{ color: style.color, width: 16, textAlign: "center" }}>{style.sym}</Text>

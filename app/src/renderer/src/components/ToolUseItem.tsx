@@ -41,14 +41,14 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   return (
     <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {oldStr && (
-        <Box style={{ backgroundColor: "var(--mantine-color-red-0)", borderLeft: "3px solid var(--mantine-color-red-3)", padding: "4px 6px", borderRadius: 2 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-red-0), var(--mantine-color-dark-6))", borderLeft: "3px solid var(--mantine-color-red-3)", padding: "4px 6px", borderRadius: 2 }}>
           <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
             {oldStr.split("\n").map((l) => "− " + l).join("\n")}
           </Code>
         </Box>
       )}
       {newStr && (
-        <Box style={{ backgroundColor: "var(--mantine-color-green-0)", borderLeft: "3px solid var(--mantine-color-green-3)", padding: "4px 6px", borderRadius: 2 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-green-0), var(--mantine-color-dark-6))", borderLeft: "3px solid var(--mantine-color-green-3)", padding: "4px 6px", borderRadius: 2 }}>
           <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
             {newStr.split("\n").map((l) => "+ " + l).join("\n")}
           </Code>

@@ -4,6 +4,7 @@ import {
   AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group,
   useMantineColorScheme, useComputedColorScheme,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 
 const NAV_ITEMS = [
   { label: "Sessions",     path: "/",                     sym: "≡"  },
@@ -27,22 +28,47 @@ export function Layout() {
   const { pathname } = useLocation();
   const { toggleColorScheme } = useMantineColorScheme();
   const colorScheme = useComputedColorScheme("dark");
+  const [sidebarOpen, { toggle: toggleSidebar }] = useDisclosure(true);
 
   const activeNav = getActiveNav(pathname);
   const canGoBack = !TOP_LEVEL.has(pathname);
 
   return (
-    <AppShell navbar={{ width: 220, breakpoint: "sm" }} padding={0} style={{ height: "100vh" }}>
+    <AppShell
+      header={{ height: 40 }}
+      navbar={{ width: 220, breakpoint: "sm", collapsed: { desktop: !sidebarOpen, mobile: !sidebarOpen } }}
+      padding={0}
+      style={{ height: "100vh" }}
+    >
+      {/* Header spans full width — hamburger is always visible */}
+      <AppShell.Header
+        style={{
+          borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
+          backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))",
+        }}
+      >
+        <Group h="100%" px={12} gap={6}>
+          <ActionIcon variant="subtle" color="gray" onClick={toggleSidebar} size="sm" title="Toggle sidebar">
+            ☰
+          </ActionIcon>
+          {canGoBack && (
+            <ActionIcon variant="subtle" color="gray" onClick={() => navigate(-1)} size="sm" title="Back">
+              ←
+            </ActionIcon>
+          )}
+        </Group>
+      </AppShell.Header>
+
       <AppShell.Navbar
         style={{
-          backgroundColor: "var(--mantine-color-dark-7)",
-          borderRight: "1px solid var(--mantine-color-dark-4)",
+          backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8))",
+          borderRight: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
           display: "flex",
           flexDirection: "column",
           padding: "12px 8px",
         }}
       >
-        <Text fw={700} size="sm" c="bright" px={8} py={6} mb={8} style={{ letterSpacing: 0.2 }}>
+        <Text fw={700} size="sm" px={8} py={6} mb={8} style={{ letterSpacing: 0.2 }}>
           Gossamer
         </Text>
 
@@ -58,9 +84,7 @@ export function Layout() {
               }
               active={activeNav === path}
               onClick={() => navigate(path)}
-              styles={{
-                root: { borderRadius: 6, marginBottom: 2, fontSize: 13 },
-              }}
+              styles={{ root: { borderRadius: 6, marginBottom: 2, fontSize: 13 } }}
             />
           ))}
         </Box>
@@ -69,7 +93,7 @@ export function Layout() {
           justify="space-between"
           px={8}
           pt={10}
-          style={{ borderTop: "1px solid var(--mantine-color-dark-4)" }}
+          style={{ borderTop: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))" }}
         >
           <Text size="xs" c="dimmed">v0.1</Text>
           <Tooltip label={colorScheme === "dark" ? "Light mode" : "Dark mode"} position="right" withArrow>
@@ -87,24 +111,9 @@ export function Layout() {
           overflow: "hidden",
           height: "100vh",
           padding: 0,
+          paddingTop: 40, // offset for the header
         }}
       >
-        {canGoBack && (
-          <Box
-            style={{
-              display: "flex",
-              alignItems: "center",
-              height: 40,
-              padding: "0 16px",
-              borderBottom: "1px solid var(--mantine-color-dark-4)",
-              flexShrink: 0,
-            }}
-          >
-            <ActionIcon variant="subtle" color="gray" onClick={() => navigate(-1)} size="sm" title="Back">
-              ←
-            </ActionIcon>
-          </Box>
-        )}
         <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <Outlet />
         </Box>

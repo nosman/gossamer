@@ -39,7 +39,7 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-gray-4)", backgroundColor: "var(--mantine-color-gray-0)" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-gray-4)", backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))" }}>
       <Group
         gap={6}
         px={12}

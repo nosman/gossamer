@@ -95,7 +95,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): React.ReactElement {
       {nodes.map((n, i) => {
         if (n.t === "bold") return <strong key={i}><Inline nodes={parseInline(n.s)} /></strong>;
         if (n.t === "italic") return <em key={i}><Inline nodes={parseInline(n.s)} /></em>;
-        if (n.t === "code") return <code key={i} style={{ fontFamily: "monospace", fontSize: 12, backgroundColor: "#f1f5f9", color: "#0f172a", padding: "0 3px", borderRadius: 3 }}>{n.s}</code>;
+        if (n.t === "code") return <code key={i} style={{ fontFamily: "monospace", fontSize: 12, backgroundColor: "light-dark(#f1f5f9, var(--mantine-color-dark-5))", color: "light-dark(#0f172a, var(--mantine-color-dark-0))", padding: "0 3px", borderRadius: 3 }}>{n.s}</code>;
         return <React.Fragment key={i}>{n.s}</React.Fragment>;
       })}
     </>
@@ -113,39 +113,39 @@ export function MarkdownView({ text }: { text: string }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
 
   return (
-    <div style={{ fontSize: 13, color: "#374151", lineHeight: "20px" }}>
+    <div style={{ fontSize: 13, color: "light-dark(#374151, var(--mantine-color-dark-0))", lineHeight: "20px" }}>
       {blocks.map((block, idx) => {
         if (block.kind === "code") {
           return (
-            <div key={idx} style={{ backgroundColor: "#1e293b", borderRadius: 6, padding: 10, margin: "6px 0" }}>
+            <div key={idx} style={{ backgroundColor: "light-dark(#f8fafc, #1e293b)", borderRadius: 6, padding: 10, margin: "6px 0" }}>
               {block.lang && <div style={{ fontSize: 10, color: "#64748b", fontFamily: "monospace", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>{block.lang}</div>}
-              <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 12, color: "#e2e8f0", lineHeight: "18px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{block.code}</pre>
+              <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 12, color: "light-dark(#334155, #e2e8f0)", lineHeight: "18px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{block.code}</pre>
             </div>
           );
         }
         if (block.kind === "h") {
           const Tag = `h${block.level}` as "h1" | "h2" | "h3";
           const fs = block.level === 1 ? 16 : block.level === 2 ? 14 : 13;
-          return <Tag key={idx} style={{ fontSize: fs, fontWeight: 700, color: "#111827", margin: "10px 0 4px" }}><Inline nodes={block.inline} /></Tag>;
+          return <Tag key={idx} style={{ fontSize: fs, fontWeight: 700, color: "light-dark(#111827, var(--mantine-color-dark-0))", margin: "10px 0 4px" }}><Inline nodes={block.inline} /></Tag>;
         }
         if (block.kind === "hr") {
-          return <hr key={idx} style={{ border: "none", borderTop: "1px solid #e5e7eb", margin: "10px 0" }} />;
+          return <hr key={idx} style={{ border: "none", borderTop: "1px solid light-dark(#e5e7eb, var(--mantine-color-dark-4))", margin: "10px 0" }} />;
         }
         if (block.kind === "table") {
           return (
             <table key={idx} style={{ borderCollapse: "collapse", width: "100%", margin: "6px 0", fontSize: 12 }}>
               <thead>
-                <tr style={{ backgroundColor: "#f3f4f6" }}>
+                <tr style={{ backgroundColor: "light-dark(#f3f4f6, var(--mantine-color-dark-6))" }}>
                   {block.headers.map((h, j) => (
-                    <th key={j} style={{ border: "1px solid #e5e7eb", padding: 6, fontWeight: 700, textAlign: "left", color: "#111827" }}><Inline nodes={h} /></th>
+                    <th key={j} style={{ border: "1px solid light-dark(#e5e7eb, var(--mantine-color-dark-4))", padding: 6, fontWeight: 700, textAlign: "left", color: "light-dark(#111827, var(--mantine-color-dark-0))" }}><Inline nodes={h} /></th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {block.rows.map((row, j) => (
-                  <tr key={j} style={{ backgroundColor: j % 2 === 1 ? "#f9fafb" : undefined }}>
+                  <tr key={j} style={{ backgroundColor: j % 2 === 1 ? "light-dark(#f9fafb, var(--mantine-color-dark-6))" : undefined }}>
                     {row.map((cell, k) => (
-                      <td key={k} style={{ border: "1px solid #e5e7eb", padding: 6, color: "#374151" }}><Inline nodes={cell} /></td>
+                      <td key={k} style={{ border: "1px solid light-dark(#e5e7eb, var(--mantine-color-dark-4))", padding: 6, color: "light-dark(#374151, var(--mantine-color-dark-0))" }}><Inline nodes={cell} /></td>
                     ))}
                   </tr>
                 ))}

@@ -81,7 +81,7 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
     <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)" }}>
       <UnstyledButton
         onClick={() => setExpanded((v) => !v)}
-        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "var(--mantine-color-teal-0)" }}
+        style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-6))" }}
       >
         <Box style={{ flex: 1 }}>
           <Group gap={8} mb={2}>
@@ -100,7 +100,7 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
       </UnstyledButton>
 
       <Collapse in={expanded}>
-        <Box style={{ backgroundColor: "#f8fffe", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <Box style={{ backgroundColor: "light-dark(#f8fffe, var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           {sum?.outcome && (
             <Box>
               <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>✓ Outcome</Text>
@@ -206,7 +206,7 @@ export function SessionDetail() {
       {session?.parentSessionId && (
         <UnstyledButton
           onClick={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}
-          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "var(--mantine-color-blue-0)", borderBottom: "1px solid var(--mantine-color-blue-2)", padding: "8px 14px" }}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-blue-2)", padding: "8px 14px" }}
         >
           <Text size="xs" c="blue">↑ Continuation of</Text>
           <Text size="xs" c="blue" ff="monospace" fw={600} td="underline">{session.parentSessionId.slice(0, 8)}…</Text>
@@ -216,7 +216,7 @@ export function SessionDetail() {
         <UnstyledButton
           key={childId}
           onClick={() => navigate(`/sessions/${childId}`, { state: { title: childId.slice(0, 8) + "…" } })}
-          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "var(--mantine-color-green-0)", borderBottom: "1px solid var(--mantine-color-green-2)", padding: "8px 14px" }}
+          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-green-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-green-2)", padding: "8px 14px" }}
         >
           <Text size="xs" c="green">↓ Continued as</Text>
           <Text size="xs" c="green" ff="monospace" fw={600} td="underline">{childId.slice(0, 8)}…</Text>
@@ -224,7 +224,7 @@ export function SessionDetail() {
       ))}
 
       {overview && (
-        <Box style={{ backgroundColor: "var(--mantine-color-gray-0)", borderBottom: "1px solid var(--mantine-color-gray-3)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
           <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }}>Overview</Text>
           <Text size="sm">{overview.summary}</Text>
           {overview.keywords.length > 0 && (
