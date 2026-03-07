@@ -5,13 +5,13 @@ import { fetchSessions, subscribeToUpdates, type Session } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 
 const COLUMNS: { label: string; width: number }[] = [
-  { label: "Session",  width: COL_WIDTHS.session  },
-  { label: "User",     width: COL_WIDTHS.user     },
-  { label: "Repo",     width: COL_WIDTHS.repo     },
-  { label: "Summary",  width: COL_WIDTHS.summary  },
-  { label: "Keywords", width: COL_WIDTHS.keywords },
-  { label: "Started",  width: COL_WIDTHS.started  },
-  { label: "Updated",  width: COL_WIDTHS.updated  },
+  { label: "Session ID",  width: COL_WIDTHS.sessionId      },
+  { label: "User",        width: COL_WIDTHS.user            },
+  { label: "Branch",      width: COL_WIDTHS.branch          },
+  { label: "Summary",     width: COL_WIDTHS.summary         },
+  { label: "Parent",      width: COL_WIDTHS.parentSessionId },
+  { label: "Started",     width: COL_WIDTHS.started         },
+  { label: "Updated",     width: COL_WIDTHS.updated         },
 ];
 
 const TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;

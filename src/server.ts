@@ -23,6 +23,7 @@ interface SessionResponse {
   prompt: string | null;
   summary: string | null;
   keywords: string[];
+  branch: string | null;
 }
 
 interface EventResponse {
@@ -83,6 +84,7 @@ function mapSession(
     keywords: string | null;
   },
   childSessionIds: string[] = [],
+  branch: string | null = null,
 ): SessionResponse {
   return {
     sessionId: s.sessionId,
@@ -98,6 +100,7 @@ function mapSession(
     prompt: s.prompt,
     summary: s.summary,
     keywords: s.keywords ? (JSON.parse(s.keywords) as string[]) : [],
+    branch,
   };
 }
 
@@ -144,7 +147,20 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const sessions = await db.session.findMany({
         orderBy: { updatedAt: "desc" },
       });
-      // Build parent → children map in memory (no extra queries)
+      const sessionIds = sessions.map((s) => s.sessionId);
+
+      // Fetch latest branch per session from CheckpointSessionMetadata
+      const sessionMetas = await db.checkpointSessionMetadata.findMany({
+        where: { sessionId: { in: sessionIds } },
+        select: { sessionId: true, branch: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+      });
+      const branchMap = new Map<string, string | null>();
+      for (const m of sessionMetas) {
+        if (!branchMap.has(m.sessionId)) branchMap.set(m.sessionId, m.branch);
+      }
+
+      // Build parent → children map in memory
       const childMap = new Map<string, string[]>();
       for (const s of sessions) {
         if (s.parentSessionId) {
@@ -153,7 +169,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           childMap.set(s.parentSessionId, arr);
         }
       }
-      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [])));
+      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [], branchMap.get(s.sessionId) ?? null)));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -162,18 +178,23 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // GET /api/sessions/:id
   app.get("/api/sessions/:id", async (req, res) => {
     try {
-      const [session, children] = await Promise.all([
+      const [session, children, latestMeta] = await Promise.all([
         db.session.findUnique({ where: { sessionId: req.params.id } }),
         db.session.findMany({
           where: { parentSessionId: req.params.id },
           select: { sessionId: true },
+        }),
+        db.checkpointSessionMetadata.findFirst({
+          where: { sessionId: req.params.id },
+          select: { branch: true },
+          orderBy: { createdAt: "desc" },
         }),
       ]);
       if (!session) {
         res.status(404).json({ error: "Session not found" });
         return;
       }
-      res.json(mapSession(session, children.map((c) => c.sessionId)));
+      res.json(mapSession(session, children.map((c) => c.sessionId), latestMeta?.branch ?? null));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

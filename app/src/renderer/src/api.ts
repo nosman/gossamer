@@ -15,6 +15,7 @@ export interface Session {
   prompt: string | null;
   summary: string | null;
   keywords: string[];
+  branch: string | null;
 }
 
 export interface Event {
