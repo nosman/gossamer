@@ -1,0 +1,6 @@
+node_modules/
+dist/
+prisma/generated/
+*.db
+*.db-shm
+*.db-wal
