@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
 import { indexAllCheckpoints, indexAllCheckpointsV2 } from "./indexer.js";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -138,6 +139,9 @@ function mapEvent(e: {
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
+  // Strip CLAUDECODE so spawned sessions are not blocked by nested-session detection
+  delete process.env.CLAUDECODE;
+
   const db = await getDb(dbPath);
 
   const app = express();
@@ -550,6 +554,48 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         filesTouched: s.filesTouched.map((f) => f.filePath.path),
         summary:      s.summary ? mapV2Summary(s.summary) : null,
       })));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // POST /api/sessions/spawn
+  app.post("/api/sessions/spawn", async (req, res) => {
+    const { prompt, cwd } = req.body as { prompt?: string; cwd?: string };
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "prompt is required" });
+      return;
+    }
+    try {
+      const gen = query({
+        prompt,
+        options: {
+          cwd: cwd ?? undefined,
+          permissionMode: "acceptEdits",
+          settingSources: ["user", "project"],
+        },
+      });
+
+      // Wait for the first system event to get the session ID, then respond
+      const first = await gen.next();
+      const sessionId: string | null =
+        first.value && typeof first.value === "object" &&
+        (first.value as { type?: string; subtype?: string; session_id?: string }).type === "system" &&
+        (first.value as { session_id?: string }).session_id
+          ? (first.value as { session_id: string }).session_id
+          : null;
+
+      // Continue running in background
+      (async () => {
+        try {
+          for await (const _ of gen) { /* hook handler captures everything */ }
+          console.log("[spawn] query finished, sessionId:", sessionId);
+        } catch (err) {
+          console.error("[spawn] error:", err);
+        }
+      })().catch((err) => console.error("[spawn] outer error:", err));
+
+      res.json({ started: true, sessionId });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

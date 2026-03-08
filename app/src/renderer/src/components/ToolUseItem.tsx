@@ -105,7 +105,7 @@ export function ToolUseItem({ pre, post, failed }: Props) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid var(--mantine-color-gray-1)", cursor: "pointer" }}>
+    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))", cursor: "pointer" }}>
       <Group gap={6}>
         <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
         <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>

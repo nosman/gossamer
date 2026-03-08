@@ -145,6 +145,17 @@ export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckp
   return res.json() as Promise<SessionCheckpoint[]>;
 }
 
+export async function spawnSession(prompt: string, cwd: string): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/sessions/spawn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, cwd }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json() as { started: boolean; sessionId: string | null };
+  return data.sessionId ?? null;
+}
+
 export function subscribeToUpdates(onUpdate: () => void): () => void {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;

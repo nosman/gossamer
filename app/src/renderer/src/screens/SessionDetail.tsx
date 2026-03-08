@@ -1,15 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
-import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse } from "@mantine/core";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Alert, Code } from "@mantine/core";
 import {
   fetchSession,
   fetchSessionEvents,
-  fetchSessionOverview,
   fetchSessionCheckpoints,
+  spawnSession,
   type Session,
   type Event,
-  type InteractionOverview,
   type SessionCheckpoint,
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
@@ -262,9 +261,12 @@ export function SessionDetail() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
-  const [overview, setOverview] = useState<InteractionOverview | null>(null);
+  const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
   const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
+  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  const [spawning, setSpawning] = useState(false);
+  const [spawnedSessionId, setSpawnedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -272,8 +274,8 @@ export function SessionDetail() {
   const { setCrumbs } = useBreadcrumb();
 
   useEffect(() => {
-    Promise.all([fetchSession(id), fetchSessionEvents(id), fetchSessionOverview(id), fetchSessionCheckpoints(id)])
-      .then(([s, evs, ov, checkpoints]) => {
+    Promise.all([fetchSession(id), fetchSessionEvents(id), fetchSessionCheckpoints(id)])
+      .then(([s, evs, checkpoints]) => {
         setSession(s);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
@@ -289,11 +291,11 @@ export function SessionDetail() {
           ...(repo ? [{ label: repo, path: "/" }] : []),
           { label: shortId },
         ]);
-        setOverview(ov);
         const grouped = groupEvents(evs);
         const merged: DisplayItem[] = [];
         let cpIdx = 0;
         const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+        setLatestCheckpoint(sortedCps[sortedCps.length - 1] ?? null);
 
         for (const item of grouped) {
           const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
@@ -337,21 +339,103 @@ export function SessionDetail() {
         </UnstyledButton>
       ))}
 
-      {overview && (
-        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
-          <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: 0.6 }}>Overview</Text>
-          <Text size="sm">{overview.summary}</Text>
-          {overview.keywords.length > 0 && (
-            <Group gap={5}>
-              {overview.keywords.map((kw) => (
-                <Badge key={kw} variant="light" color="gray" size="xs" radius="sm" ff="monospace">{kw}</Badge>
-              ))}
-            </Group>
-          )}
-          <Text size="xs" c="dimmed">
-            {new Date(overview.startedAt).toLocaleString()} → {new Date(overview.endedAt).toLocaleString()}
+      {latestCheckpoint?.summary && (
+        <Box style={{
+          borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
+          padding: "16px 20px",
+          backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+        }}>
+          <Text size="sm" fw={600} lh={1.5} mb={latestCheckpoint.summary.openItems?.length ? 12 : 0}>
+            {latestCheckpoint.summary.intent}
           </Text>
+          {latestCheckpoint.summary.openItems?.length > 0 && (
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={8} style={{ letterSpacing: 0.5 }}>
+                Open items
+              </Text>
+              {latestCheckpoint.summary.openItems.map((item, i) => (
+                <Group key={i} gap={10} align="flex-start" mb={6} wrap="nowrap">
+                  <Checkbox
+                    size="xs"
+                    radius="xl"
+                    checked={selectedItems.has(i)}
+                    onChange={(e) => {
+                      setSelectedItems((prev) => {
+                        const next = new Set(prev);
+                        e.currentTarget.checked ? next.add(i) : next.delete(i);
+                        return next;
+                      });
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ marginTop: 2, flexShrink: 0 }}
+                  />
+                  <Text size="xs" lh={1.5} style={{ cursor: "default" }}>{item}</Text>
+                </Group>
+              ))}
+              {selectedItems.size > 0 && (
+                <Group gap={8} mt={10}>
+                  <Text size="xs" c="dimmed">Work on selection in new session?</Text>
+                  <Tooltip label={spawning ? "Starting…" : "Start new Claude session"} withArrow>
+                    <ActionIcon
+                      size="sm"
+                      variant="light"
+                      color="indigo"
+                      loading={spawning}
+                      onClick={async () => {
+                        if (!session?.cwd) return;
+                        const lines = latestCheckpoint.summary!.openItems
+                          .filter((_, i) => selectedItems.has(i))
+                          .map((item) => `- ${item}`)
+                          .join("\n");
+                        const prompt = `Please work on the following open items:\n${lines}`;
+                        setSpawning(true);
+                        try {
+                          const newId = await spawnSession(prompt, session.cwd);
+                          setSelectedItems(new Set());
+                          setSpawnedSessionId(newId);
+                        } finally {
+                          setSpawning(false);
+                        }
+                      }}
+                    >
+                      →
+                    </ActionIcon>
+                  </Tooltip>
+                </Group>
+              )}
+            </Box>
+          )}
         </Box>
+      )}
+
+      {spawnedSessionId && (
+        <Alert
+          color="teal"
+          variant="light"
+          mx={16}
+          my={8}
+          onClose={() => setSpawnedSessionId(null)}
+          withCloseButton
+          title="Session started"
+        >
+          <Text size="sm" mb={4}>
+            Running in the background. To interact, run in a terminal:
+          </Text>
+          <Group gap={8} align="center">
+            <Code style={{ flex: 1, userSelect: "all" }}>
+              claude --resume {spawnedSessionId}
+            </Code>
+            <Tooltip label="Copy" withArrow>
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                onClick={() => navigator.clipboard.writeText(`claude --resume ${spawnedSessionId}`).catch(() => undefined)}
+              >
+                ⧉
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+        </Alert>
       )}
 
       {items.length === 0 ? (
