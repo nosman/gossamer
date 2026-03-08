@@ -22,9 +22,9 @@ export const COL_WIDTHS = {
 
 function activityDot(updatedAt: string): { color: string; label: string } {
   const diff = Date.now() - new Date(updatedAt).getTime();
-  if (diff < 2 * 60 * 1000)  return { color: "#22c55e", label: "Active" };
-  if (diff < 15 * 60 * 1000) return { color: "#f59e0b", label: "Idle" };
-  return { color: "#d1d5db", label: "Inactive" };
+  if (diff < 2 * 60 * 1000)  return { color: "var(--mantine-color-green-6)", label: "Active" };
+  if (diff < 15 * 60 * 1000) return { color: "var(--mantine-color-yellow-6)", label: "Idle" };
+  return { color: "light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3))", label: "Inactive" };
 }
 
 interface CopyCellProps {

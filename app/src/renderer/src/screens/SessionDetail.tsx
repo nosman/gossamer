@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
-import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Alert, Code } from "@mantine/core";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip } from "@mantine/core";
 import {
   fetchSession,
   fetchSessionEvents,
@@ -78,7 +78,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
         </Group>
         {stop && msg && (
           <Box style={{
-            backgroundColor: "light-dark(#fff, var(--mantine-color-dark-6))",
+            backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-6))",
             border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
             borderRadius: "2px 14px 14px 14px",
             padding: "12px 16px",
@@ -196,7 +196,7 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
       </UnstyledButton>
 
       <Collapse in={expanded}>
-        <Box style={{ backgroundColor: "light-dark(#f8fffe, var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
           {sum?.outcome && (
             <Box>
               <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>✓ Outcome</Text>
@@ -266,7 +266,6 @@ export function SessionDetail() {
   const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [spawning, setSpawning] = useState(false);
-  const [spawnedSessionId, setSpawnedSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -390,9 +389,8 @@ export function SessionDetail() {
                         const prompt = `Please work on the following open items:\n${lines}`;
                         setSpawning(true);
                         try {
-                          const newId = await spawnSession(prompt, session.cwd);
+                          await spawnSession(prompt, session.cwd);
                           setSelectedItems(new Set());
-                          setSpawnedSessionId(newId);
                         } finally {
                           setSpawning(false);
                         }
@@ -406,36 +404,6 @@ export function SessionDetail() {
             </Box>
           )}
         </Box>
-      )}
-
-      {spawnedSessionId && (
-        <Alert
-          color="teal"
-          variant="light"
-          mx={16}
-          my={8}
-          onClose={() => setSpawnedSessionId(null)}
-          withCloseButton
-          title="Session started"
-        >
-          <Text size="sm" mb={4}>
-            Running in the background. To interact, run in a terminal:
-          </Text>
-          <Group gap={8} align="center">
-            <Code style={{ flex: 1, userSelect: "all" }}>
-              claude --resume {spawnedSessionId}
-            </Code>
-            <Tooltip label="Copy" withArrow>
-              <ActionIcon
-                size="sm"
-                variant="subtle"
-                onClick={() => navigator.clipboard.writeText(`claude --resume ${spawnedSessionId}`).catch(() => undefined)}
-              >
-                ⧉
-              </ActionIcon>
-            </Tooltip>
-          </Group>
-        </Alert>
       )}
 
       {items.length === 0 ? (

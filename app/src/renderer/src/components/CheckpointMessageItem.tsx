@@ -102,7 +102,7 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(#fff, var(--mantine-color-dark-7))", padding: "8px 12px" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))", padding: "8px 12px" }}>
       <Group
         gap={8}
         mb={2}
@@ -128,14 +128,15 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
   );
 }
 
+const COMPACT_COLOR = "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))";
 const TYPE_STYLE: Record<string, { sym: string; color: string }> = {
-  progress: { sym: "◆", color: "#94a3b8" },
-  system:   { sym: "⚙", color: "#94a3b8" },
-  "file-history-snapshot": { sym: "📄", color: "#94a3b8" },
+  progress: { sym: "◆", color: COMPACT_COLOR },
+  system:   { sym: "⚙", color: COMPACT_COLOR },
+  "file-history-snapshot": { sym: "📄", color: COMPACT_COLOR },
 };
 
 function CompactRow({ msg }: { msg: CheckpointMessage }) {
-  const style = TYPE_STYLE[msg.type] ?? { sym: "◆", color: "#64748b" };
+  const style = TYPE_STYLE[msg.type] ?? { sym: "◆", color: COMPACT_COLOR };
   const d = msg.data as Record<string, unknown>;
   const hookEvent = str((d.data as Record<string, unknown> | undefined)?.hookEvent);
   return (

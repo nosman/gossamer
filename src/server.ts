@@ -6,7 +6,6 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
 import { indexAllCheckpoints, indexAllCheckpointsV2 } from "./indexer.js";
-import { query } from "@anthropic-ai/claude-agent-sdk";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -567,35 +566,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       return;
     }
     try {
-      const gen = query({
-        prompt,
-        options: {
-          cwd: cwd ?? undefined,
-          permissionMode: "acceptEdits",
-          settingSources: ["user", "project"],
-        },
-      });
-
-      // Wait for the first system event to get the session ID, then respond
-      const first = await gen.next();
-      const sessionId: string | null =
-        first.value && typeof first.value === "object" &&
-        (first.value as { type?: string; subtype?: string; session_id?: string }).type === "system" &&
-        (first.value as { session_id?: string }).session_id
-          ? (first.value as { session_id: string }).session_id
-          : null;
-
-      // Continue running in background
-      (async () => {
-        try {
-          for await (const _ of gen) { /* hook handler captures everything */ }
-          console.log("[spawn] query finished, sessionId:", sessionId);
-        } catch (err) {
-          console.error("[spawn] error:", err);
-        }
-      })().catch((err) => console.error("[spawn] outer error:", err));
-
-      res.json({ started: true, sessionId });
+      const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
+      const safePrompt = prompt.replace(/'/g, "'\\''").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      // Use AppleScript to open a new Terminal window running claude interactively
+      const script = [
+        `tell application "Terminal"`,
+        `  activate`,
+        `  do script "cd '${safeCwd}' && claude '${safePrompt}'"`,
+        `end tell`,
+      ].join("\n");
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+      res.json({ started: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

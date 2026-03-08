@@ -118,7 +118,7 @@ export function MarkdownView({ text }: { text: string }) {
         if (block.kind === "code") {
           return (
             <div key={idx} style={{ backgroundColor: "light-dark(#f8fafc, #1e293b)", borderRadius: 6, padding: 10, margin: "6px 0" }}>
-              {block.lang && <div style={{ fontSize: 10, color: "#64748b", fontFamily: "monospace", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>{block.lang}</div>}
+              {block.lang && <div style={{ fontSize: 10, color: "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))", fontFamily: "monospace", marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>{block.lang}</div>}
               <pre style={{ margin: 0, fontFamily: "monospace", fontSize: 12, color: "light-dark(#334155, #e2e8f0)", lineHeight: "18px", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>{block.code}</pre>
             </div>
           );

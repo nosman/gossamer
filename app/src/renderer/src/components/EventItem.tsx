@@ -78,7 +78,7 @@ function AssistantCard({ event }: { event: Event }) {
           <TimeAgo iso={event.timestamp} />
         </Group>
         <Box style={{
-          backgroundColor: "light-dark(#fff, var(--mantine-color-dark-6))",
+          backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-6))",
           border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
           borderRadius: "2px 14px 14px 14px",
           padding: "12px 16px",
@@ -115,16 +115,17 @@ function SessionEventRow({ event }: { event: Event }) {
 // ── Notification ──────────────────────────────────────────────────────────────
 
 const NOTIF_META: Record<string, { color: string; label: string }> = {
-  permission_prompt: { color: "#b45309", label: "Permission request" },
-  idle_prompt:       { color: "#6b7280", label: "Idle" },
+  permission_prompt: { color: "light-dark(var(--mantine-color-orange-8), var(--mantine-color-orange-4))", label: "Permission request" },
+  idle_prompt:       { color: "light-dark(var(--mantine-color-gray-7), var(--mantine-color-gray-4))", label: "Idle" },
 };
+const NOTIF_DEFAULT_COLOR = "light-dark(var(--mantine-color-gray-7), var(--mantine-color-gray-4))";
 
 function NotificationRow({ event }: { event: Event }) {
   const [expanded, setExpanded] = useState(false);
   const d = data(event);
   const msg = str(d.message);
   const ntype = str(d.notification_type);
-  const meta = NOTIF_META[ntype] ?? { color: "#6b7280", label: ntype || "Notification" };
+  const meta = NOTIF_META[ntype] ?? { color: NOTIF_DEFAULT_COLOR, label: ntype || "Notification" };
   return (
     <Box style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 20px" }}>
       <Box style={{ flex: 1, height: 1, backgroundColor: "light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))" }} />
@@ -147,13 +148,16 @@ function NotificationRow({ event }: { event: Event }) {
 // ── Other system events ───────────────────────────────────────────────────────
 
 const EVENT_COLOR: Record<string, string> = {
-  SubagentStart: "#06b6d4", SubagentStop: "#06b6d4",
-  PreCompact: "#94a3b8", Setup: "#94a3b8", PermissionRequest: "#f59e0b",
+  SubagentStart: "var(--mantine-color-cyan-5)", SubagentStop: "var(--mantine-color-cyan-5)",
+  PreCompact: "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))",
+  Setup: "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))",
+  PermissionRequest: "var(--mantine-color-yellow-6)",
 };
+const EVENT_DEFAULT_COLOR = "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))";
 
 function CompactRow({ event }: { event: Event }) {
   const [expanded, setExpanded] = useState(false);
-  const color = EVENT_COLOR[event.event] ?? "#94a3b8";
+  const color = EVENT_COLOR[event.event] ?? EVENT_DEFAULT_COLOR;
   const d = data(event);
   const body = str(d.message) || str(d.reason) || str(d.source);
   return (
