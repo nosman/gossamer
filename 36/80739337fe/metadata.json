@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "3680739337fe",
+  "strategy": "manual-commit",
+  "branch": "sessions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "app/src/renderer/src/assets/claude-logo.png",
+    "app/src/renderer/src/assets/images.d.ts",
+    "app/src/renderer/src/components/EventItem.tsx",
+    "app/src/renderer/src/screens/SessionDetail.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/36/80739337fe/0/metadata.json",
+      "transcript": "/36/80739337fe/0/full.jsonl",
+      "content_hash": "/36/80739337fe/0/content_hash.txt",
+      "prompt": "/36/80739337fe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 223,
+    "cache_creation_tokens": 710034,
+    "cache_read_tokens": 12698751,
+    "output_tokens": 128362,
+    "api_call_count": 171
+  }
+}
