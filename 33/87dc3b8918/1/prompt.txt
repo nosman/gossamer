@@ -1,0 +1,10 @@
+Please work on the following open items:
+- A broader codebase-wide grep for hardcoded color values (#fff, #000, light Mantine color tokens used without light-dark()) has not been performed and may surface additional issues.
+
+---
+
+git status
+
+---
+
+pwd
