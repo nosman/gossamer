@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
+import { useBreadcrumb } from "../BreadcrumbContext";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse } from "@mantine/core";
 import {
   fetchSession,
@@ -171,11 +172,20 @@ export function SessionDetail() {
   const [error, setError] = useState<string | null>(null);
 
   const id = sessionId!;
+  const { setCrumbs } = useBreadcrumb();
 
   useEffect(() => {
     Promise.all([fetchSession(id), fetchSessionEvents(id), fetchSessionOverview(id), fetchSessionCheckpoints(id)])
       .then(([s, evs, ov, checkpoints]) => {
         setSession(s);
+        const user = s.gitUserName ?? s.gitUserEmail ?? null;
+        const repo = s.repoName ?? null;
+        const shortId = s.sessionId.slice(0, 8) + "…";
+        setCrumbs([
+          ...(user ? [{ label: user, path: "/" }] : []),
+          ...(repo ? [{ label: repo, path: "/" }] : []),
+          { label: shortId },
+        ]);
         setOverview(ov);
         const grouped = groupEvents(evs);
         const merged: DisplayItem[] = [];

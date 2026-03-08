@@ -1,10 +1,11 @@
 import React from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import {
-  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group,
+  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor,
   useMantineColorScheme, useComputedColorScheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
+import { useBreadcrumb } from "./BreadcrumbContext";
 
 const NAV_ITEMS = [
   { label: "Sessions",     path: "/",                     sym: "≡"  },
@@ -29,6 +30,7 @@ export function Layout() {
   const { toggleColorScheme } = useMantineColorScheme();
   const colorScheme = useComputedColorScheme("dark");
   const [sidebarOpen, { toggle: toggleSidebar }] = useDisclosure(true);
+  const { crumbs } = useBreadcrumb();
 
   const activeNav = getActiveNav(pathname);
   const canGoBack = !TOP_LEVEL.has(pathname);
@@ -55,6 +57,30 @@ export function Layout() {
             <ActionIcon variant="subtle" color="gray" onClick={() => navigate(-1)} size="sm" title="Back">
               ←
             </ActionIcon>
+          )}
+          {crumbs.length > 0 && (
+            <Group gap={4} align="center" ml={4}>
+              {crumbs.map((crumb, i) => (
+                <React.Fragment key={i}>
+                  {i > 0 && (
+                    <Text size="sm" c="dimmed" style={{ userSelect: "none" }}>/</Text>
+                  )}
+                  {crumb.path ? (
+                    <Anchor
+                      size="sm"
+                      fw={500}
+                      onClick={() => navigate(crumb.path!)}
+                      style={{ cursor: "pointer" }}
+                      underline="never"
+                    >
+                      {crumb.label}
+                    </Anchor>
+                  ) : (
+                    <Text size="sm" fw={500} c="dimmed">{crumb.label}</Text>
+                  )}
+                </React.Fragment>
+              ))}
+            </Group>
           )}
         </Group>
       </AppShell.Header>
