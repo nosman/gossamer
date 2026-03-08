@@ -40,14 +40,12 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <Box style={{ display: "flex", padding: "4px 20px 4px 58px" }}>
-      <Box style={{
-        flex: 1,
-        border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
-        borderRadius: 8,
-        overflow: "hidden",
-        backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
-      }}>
+    <Box style={{
+      border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
+      borderRadius: 8,
+      overflow: "hidden",
+      backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+    }}>
         <Group
           gap={8}
           px={12}
@@ -70,7 +68,6 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
             ))}
           </Box>
         </Collapse>
-      </Box>
     </Box>
   );
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useParams, useLocation } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse } from "@mantine/core";
 import {
@@ -14,11 +14,115 @@ import {
 } from "../api";
 import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
+import { MarkdownView } from "../components/MarkdownView";
 
 type DisplayItem =
   | { kind: "event"; event: Event }
   | { kind: "toolGroup"; tools: ToolUseData[] }
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
+
+type RenderItem =
+  | { kind: "event"; event: Event }
+  | { kind: "claudeTurn"; toolGroups: ToolUseData[][]; stop: Event | null }
+  | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
+
+function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
+  const result: RenderItem[] = [];
+  let i = 0;
+  while (i < items.length) {
+    const item = items[i];
+    if (item.kind === "toolGroup") {
+      const toolGroups: ToolUseData[][] = [];
+      while (i < items.length && items[i].kind === "toolGroup") {
+        toolGroups.push((items[i] as { kind: "toolGroup"; tools: ToolUseData[] }).tools);
+        i++;
+      }
+      let stop: Event | null = null;
+      if (i < items.length && items[i].kind === "event" && (items[i] as { kind: "event"; event: Event }).event.event === "Stop") {
+        stop = (items[i] as { kind: "event"; event: Event }).event;
+        i++;
+      }
+      result.push({ kind: "claudeTurn", toolGroups, stop });
+    } else if (item.kind === "event" && item.event.event === "Stop") {
+      result.push({ kind: "claudeTurn", toolGroups: [], stop: item.event });
+      i++;
+    } else if (item.kind === "checkpoint") {
+      result.push({ kind: "checkpoint", checkpoint: item.checkpoint });
+      i++;
+    } else {
+      result.push({ kind: "event", event: (item as { kind: "event"; event: Event }).event });
+      i++;
+    }
+  }
+  return result;
+}
+
+function fmt(iso: string): string {
+  const d = new Date(iso);
+  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
+}
+function str(v: unknown): string { return typeof v === "string" ? v : ""; }
+
+function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; stop: Event | null }) {
+  const d = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
+  const msg = str(d.last_assistant_message);
+  const reason = str(d.reason);
+  const [toolsExpanded, setToolsExpanded] = useState(false);
+  const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
+
+  return (
+    <Box style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
+      <Box style={{
+        width: 28, height: 28, borderRadius: "50%",
+        backgroundColor: "var(--mantine-color-orange-6)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        flexShrink: 0, marginTop: 2,
+      }}>
+        <Text size="xs" c="white" fw={800} style={{ lineHeight: 1 }}>C</Text>
+      </Box>
+      <Box style={{ flex: 1, minWidth: 0 }}>
+        <Group gap={8} mb={6} align="center">
+          <Text size="xs" fw={600} c="orange">Claude</Text>
+          {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
+          {stop && <Text size="xs" c="dimmed">{fmt(stop.timestamp)}</Text>}
+        </Group>
+        {stop && msg && (
+          <Box style={{
+            backgroundColor: "light-dark(#fff, var(--mantine-color-dark-6))",
+            border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
+            borderRadius: "2px 14px 14px 14px",
+            padding: "12px 16px",
+            marginBottom: toolGroups.length > 0 ? 8 : 0,
+          }}>
+            <MarkdownView text={msg} />
+          </Box>
+        )}
+        {toolGroups.length > 0 && (
+          <Box>
+            <Group
+              gap={6}
+              mb={4}
+              style={{ cursor: "pointer" }}
+              onClick={() => setToolsExpanded((v) => !v)}
+            >
+              <Text size="xs" c="dimmed">
+                {totalTools} tool {totalTools === 1 ? "use" : "uses"}
+              </Text>
+              <Text size="xs" c="dimmed">{toolsExpanded ? "▲" : "▼"}</Text>
+            </Group>
+            <Collapse in={toolsExpanded}>
+              <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {toolGroups.map((tools, i) => (
+                  <ToolGroupItem key={i} tools={tools} />
+                ))}
+              </Box>
+            </Collapse>
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+}
 
 function groupEvents(events: Event[]): DisplayItem[] {
   const postMap = new Map<string, Event>();
@@ -166,10 +270,9 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
 export function SessionDetail() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
-  const { state } = useLocation();
   const [session, setSession] = useState<Session | null>(null);
   const [overview, setOverview] = useState<InteractionOverview | null>(null);
-  const [items, setItems] = useState<DisplayItem[]>([]);
+  const [items, setItems] = useState<RenderItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -203,7 +306,7 @@ export function SessionDetail() {
         }
         while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
 
-        setItems(merged);
+        setItems(groupClaudeTurns(merged));
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
@@ -257,8 +360,8 @@ export function SessionDetail() {
         <Center p="xl"><Text c="dimmed" size="sm">No events for this session.</Text></Center>
       ) : (
         items.map((item, idx) =>
-          item.kind === "toolGroup" ? (
-            <ToolGroupItem key={`grp-${idx}`} tools={item.tools} />
+          item.kind === "claudeTurn" ? (
+            <ClaudeTurnCard key={`turn-${idx}`} toolGroups={item.toolGroups} stop={item.stop} />
           ) : item.kind === "checkpoint" ? (
             <CheckpointRow
               key={`cp-${item.checkpoint.checkpointId}`}
