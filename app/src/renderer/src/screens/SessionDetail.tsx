@@ -79,7 +79,8 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
   const sum = checkpoint.summary;
 
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)" }}>
+    <Box style={{ padding: "4px 20px 4px 58px" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)", borderRadius: 8, overflow: "hidden" }}>
       <UnstyledButton
         onClick={() => setExpanded((v) => !v)}
         style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-6))" }}
@@ -158,6 +159,7 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
         </Box>
       </Collapse>
     </Box>
+    </Box>
   );
 }
 
@@ -213,6 +215,7 @@ export function SessionDetail() {
 
   return (
     <ScrollArea style={{ flex: 1 }}>
+      <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
       {session?.parentSessionId && (
         <UnstyledButton
           onClick={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}
@@ -269,6 +272,7 @@ export function SessionDetail() {
           )
         )
       )}
+      </Box>
     </ScrollArea>
   );
 }
