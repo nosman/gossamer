@@ -1,0 +1,3 @@
+Please work on the following open items:
+- CheckpointDetail.tsx and CheckpointTimeline.tsx may still have hardcoded light colors not audited in this session
+- ToolUseItem.tsx and CheckpointMessageItem.tsx dark mode colors were patched but not fully verified in the chat transcript layout
