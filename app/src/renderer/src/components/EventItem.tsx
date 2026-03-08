@@ -2,16 +2,13 @@ import React, { useState } from "react";
 import { Box, Badge, Group, Text, Collapse, Avatar } from "@mantine/core";
 import type { Event } from "../api";
 import { MarkdownView } from "./MarkdownView";
+import { TimeAgo } from "./TimeAgo";
 
 export interface UserInfo {
   name: string;
   avatarUrl?: string;
 }
 
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
-}
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 function data(event: Event): Record<string, unknown> { return (event.data ?? {}) as Record<string, unknown>; }
 
@@ -30,7 +27,7 @@ function UserPromptCard({ event, user }: { event: Event; user?: UserInfo }) {
       <Box style={{ maxWidth: "72%", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
         <Group gap={8} align="center">
           {event.blocked && <BlockedBadge />}
-          <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
+          <TimeAgo iso={event.timestamp} />
           <Text size="xs" fw={600} c="indigo">{displayName}</Text>
         </Group>
         <Box style={{
@@ -78,7 +75,7 @@ function AssistantCard({ event }: { event: Event }) {
           <Text size="xs" fw={600} c="orange">Claude</Text>
           {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
           {event.blocked && <BlockedBadge />}
-          <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
+          <TimeAgo iso={event.timestamp} />
         </Group>
         <Box style={{
           backgroundColor: "light-dark(#fff, var(--mantine-color-dark-6))",
@@ -108,7 +105,7 @@ function SessionEventRow({ event }: { event: Event }) {
         <Text size="xs" c="dimmed" fw={500}>{label}</Text>
         {extra && <Badge variant="light" color="gray" size="xs">{extra}</Badge>}
         {cwd && <Text size="xs" c="dimmed" ff="monospace" style={{ maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cwd}</Text>}
-        <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
+        <TimeAgo iso={event.timestamp} />
       </Group>
       <Box style={{ flex: 1, height: 1, backgroundColor: "light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))" }} />
     </Box>
@@ -136,7 +133,7 @@ function NotificationRow({ event }: { event: Event }) {
           <Text size="xs" fw={500} style={{ color: meta.color }}>{meta.label}</Text>
           {msg && <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>}
           {event.blocked && <BlockedBadge />}
-          <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
+          <TimeAgo iso={event.timestamp} />
         </Group>
         <Collapse in={expanded}>
           {msg && <Text size="xs" c="dimmed" fs="italic" pt={2} style={{ maxWidth: 400 }}>{msg}</Text>}
@@ -167,7 +164,7 @@ function CompactRow({ event }: { event: Event }) {
           <Text size="xs" fw={500} style={{ color }}>{event.event}</Text>
           {body && <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>}
           {event.blocked && <BlockedBadge />}
-          <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
+          <TimeAgo iso={event.timestamp} />
         </Group>
         <Collapse in={expanded}>
           {body && <Text size="xs" c="dimmed" fs="italic" pt={2} style={{ maxWidth: 400 }}>{body}</Text>}

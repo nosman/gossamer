@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Table, Text, Anchor, ActionIcon, Tooltip } from "@mantine/core";
 import type { Session } from "../api";
+import { relativeTime, absoluteTime } from "./TimeAgo";
 
 interface Props {
   session: Session;
@@ -18,16 +19,6 @@ export const COL_WIDTHS = {
 } as const;
 
 
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return (
-    String(d.getDate()).padStart(2, "0") + "/" +
-    String(d.getMonth() + 1).padStart(2, "0") + "/" +
-    String(d.getFullYear()).slice(2) + " " +
-    String(d.getHours()).padStart(2, "0") + ":" +
-    String(d.getMinutes()).padStart(2, "0")
-  );
-}
 
 function activityDot(updatedAt: string): { color: string; label: string } {
   const diff = Date.now() - new Date(updatedAt).getTime();
@@ -140,12 +131,12 @@ export function SessionRow({ session, onPress }: Props) {
           )}
         </CopyCell>
 
-        <CopyCell copyValue={fmt(session.startedAt)} width={COL_WIDTHS.started}>
-          <Text size="sm">{fmt(session.startedAt)}</Text>
+        <CopyCell copyValue={absoluteTime(session.startedAt)} width={COL_WIDTHS.started}>
+          <Text size="sm" c="dimmed">{relativeTime(session.startedAt)}</Text>
         </CopyCell>
 
-        <CopyCell copyValue={fmt(session.updatedAt)} width={COL_WIDTHS.updated}>
-          <Text size="sm">{fmt(session.updatedAt)}</Text>
+        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
+          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
         </CopyCell>
       </Table.Tr>
     </>

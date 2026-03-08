@@ -4,20 +4,7 @@ import {
   Center, Loader, Alert, Text, Box, Badge, Group, UnstyledButton, Code, ScrollArea,
 } from "@mantine/core";
 import { fetchCheckpoints, subscribeToUpdates, type Checkpoint } from "../api";
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "";
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString();
-}
+import { TimeAgo } from "../components/TimeAgo";
 
 function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPress: () => void }) {
   const title = checkpoint.summary?.intent ?? checkpoint.checkpointId;
@@ -27,7 +14,6 @@ function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPre
     ? `${(outTokens / 1000).toFixed(1)}k tokens`
     : outTokens > 0 ? `${outTokens} tokens` : null;
   const fileCount = checkpoint.filesTouched.length;
-  const age = timeAgo(checkpoint.createdAt);
 
   return (
     <UnstyledButton
@@ -42,10 +28,10 @@ function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPre
           </Text>
           <Group gap={6} wrap="wrap" align="center">
             <Code fz={11} style={{ borderRadius: 4, padding: "1px 6px" }}>{shortId}</Code>
-            {age && (
+            {checkpoint.createdAt && (
               <>
                 <Text size="xs" c="dimmed">·</Text>
-                <Text size="xs" c="dimmed">⏱ {age}</Text>
+                <TimeAgo iso={checkpoint.createdAt} />
               </>
             )}
             {checkpoint.branch && (

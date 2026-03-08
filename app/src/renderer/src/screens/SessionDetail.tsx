@@ -15,6 +15,7 @@ import {
 import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
+import { TimeAgo } from "../components/TimeAgo";
 import claudeLogo from "../assets/claude-logo.png";
 
 type DisplayItem =
@@ -58,10 +59,6 @@ function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
   return result;
 }
 
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
-}
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 
 function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; stop: Event | null }) {
@@ -78,7 +75,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
         <Group gap={8} mb={6} align="center">
           <Text size="xs" fw={600} c="orange">Claude</Text>
           {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
-          {stop && <Text size="xs" c="dimmed">{fmt(stop.timestamp)}</Text>}
+          {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
         {stop && msg && (
           <Box style={{

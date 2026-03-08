@@ -2,16 +2,12 @@ import React, { useState } from "react";
 import { Box, Badge, Group, Text, Collapse } from "@mantine/core";
 import type { Event } from "../api";
 import { ToolUseItem } from "./ToolUseItem";
+import { relativeTime } from "./TimeAgo";
 
 export interface ToolUseData {
   pre: Event;
   post?: Event;
   failed: boolean;
-}
-
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
 }
 
 function toolName(pre: Event): string {
@@ -34,9 +30,9 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
   const statusColor = anyFailed ? "red" : anyPending ? "blue" : "teal";
   const statusLabel = anyFailed ? "failed" : anyPending ? "running" : "done";
 
-  const timeStart = fmt(tools[0].pre.timestamp);
+  const timeStart = relativeTime(tools[0].pre.timestamp);
   const lastPost  = [...tools].reverse().find((t) => t.post)?.post;
-  const timeEnd   = lastPost ? fmt(lastPost.timestamp) : undefined;
+  const timeEnd   = lastPost ? relativeTime(lastPost.timestamp) : undefined;
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
