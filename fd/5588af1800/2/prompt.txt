@@ -1,0 +1,57 @@
+Display the username / repo-name in the main screen too. When you click into a asession, the session-id should be added to the breadcrumbs
+
+---
+
+Make the individual session page look more like a transcript of a conversation. it should be clear that the user is talking to claude and claude is responding.
+
+---
+
+Nest the tool uses rows into the Claude rows. Display them underneath claude's response
+
+---
+
+Add an avatar and use the github username instead of just "you"
+
+---
+
+Can you use the claude code logo instead of the C for claude's avatar?
+
+---
+
+let's format the timestamps we see relative to the current time. So instead of a date, write "5 mins ago", "7 hours ago", "6 days ago", etc. Hovering over should still show the absolute timestamp and let you copy the date.
+
+---
+
+now let's rework the overview top panel of the individual session view. The page should get the most recent checkpoint associated with the session. The top bar should show the Intent of that session. Underneath, it should show open items as a list.
+
+---
+
+let's make the open items actionable. Put a radio button next to each open item. Once selected, there should be a button underneath the open items saying "Work on selection in new session?" With an arrow button. When the arrow is clicked, a new claude code session should be created with this session as parent. The prompt should be something like "Please work on these items" with the text of the selected open items.
+
+---
+
+We should use the claude-code sdk to do these kinds of things
+
+---
+
+restart the server to get the new backend routes
+
+---
+
+Will the new spawned session show up in my list of active sessions in claude code?
+
+---
+
+I'm not seeing the new session being created. The main sessions screen doesn't show a new active session.
+
+---
+
+let's go with 1
+
+---
+
+How do i actually interact with the new session though? Is there a way to transfer it to an open terminal window?
+
+---
+
+Let's do option A. i want this tool to be platform-agnostic

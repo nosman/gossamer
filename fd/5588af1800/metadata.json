@@ -3,7 +3,7 @@
   "checkpoint_id": "fd5588af1800",
   "strategy": "manual-commit",
   "branch": "sessions",
-  "checkpoints_count": 2,
+  "checkpoints_count": 11,
   "files_touched": [
     "app/src/main/index.ts",
     "app/src/renderer/src/api.ts",
@@ -25,13 +25,19 @@
       "transcript": "/fd/5588af1800/1/full.jsonl",
       "content_hash": "/fd/5588af1800/1/content_hash.txt",
       "prompt": "/fd/5588af1800/1/prompt.txt"
+    },
+    {
+      "metadata": "/fd/5588af1800/2/metadata.json",
+      "transcript": "/fd/5588af1800/2/full.jsonl",
+      "content_hash": "/fd/5588af1800/2/content_hash.txt",
+      "prompt": "/fd/5588af1800/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 167,
-    "cache_creation_tokens": 505542,
-    "cache_read_tokens": 7676939,
-    "output_tokens": 115395,
-    "api_call_count": 121
+    "input_tokens": 2633,
+    "cache_creation_tokens": 1685600,
+    "cache_read_tokens": 33277074,
+    "output_tokens": 294640,
+    "api_call_count": 430
   }
 }
