@@ -1,7 +1,12 @@
 import React, { useState } from "react";
-import { Box, Badge, Group, Text, Collapse } from "@mantine/core";
+import { Box, Badge, Group, Text, Collapse, Avatar } from "@mantine/core";
 import type { Event } from "../api";
 import { MarkdownView } from "./MarkdownView";
+
+export interface UserInfo {
+  name: string;
+  avatarUrl?: string;
+}
 
 function fmt(iso: string): string {
   const d = new Date(iso);
@@ -16,15 +21,17 @@ function BlockedBadge() {
 
 // ── User message ──────────────────────────────────────────────────────────────
 
-function UserPromptCard({ event }: { event: Event }) {
+function UserPromptCard({ event, user }: { event: Event; user?: UserInfo }) {
   const prompt = str(data(event).prompt);
+  const displayName = user?.name ?? "You";
+  const initials = displayName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
-    <Box style={{ display: "flex", justifyContent: "flex-end", padding: "12px 20px 4px" }}>
+    <Box style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", gap: 10, padding: "12px 20px 4px" }}>
       <Box style={{ maxWidth: "72%", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
         <Group gap={8} align="center">
           {event.blocked && <BlockedBadge />}
           <Text size="xs" c="dimmed">{fmt(event.timestamp)}</Text>
-          <Text size="xs" fw={600} c="indigo">You</Text>
+          <Text size="xs" fw={600} c="indigo">{displayName}</Text>
         </Group>
         <Box style={{
           backgroundColor: "light-dark(var(--mantine-color-indigo-6), var(--mantine-color-indigo-8))",
@@ -36,6 +43,16 @@ function UserPromptCard({ event }: { event: Event }) {
           </Text>
         </Box>
       </Box>
+      <Avatar
+        src={user?.avatarUrl}
+        alt={displayName}
+        size={28}
+        radius="xl"
+        color="indigo"
+        style={{ marginTop: 22, flexShrink: 0 }}
+      >
+        {initials}
+      </Avatar>
     </Box>
   );
 }
@@ -163,8 +180,8 @@ function CompactRow({ event }: { event: Event }) {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
-export function EventItem({ event }: { event: Event }) {
-  if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} />;
+export function EventItem({ event, user }: { event: Event; user?: UserInfo }) {
+  if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} />;
   if (event.event === "Stop") return <AssistantCard event={event} />;
   if (event.event === "Notification") return <NotificationRow event={event} />;
   if (event.event === "SessionStart" || event.event === "SessionEnd") return <SessionEventRow event={event} />;

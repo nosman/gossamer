@@ -12,9 +12,10 @@ import {
   type InteractionOverview,
   type SessionCheckpoint,
 } from "../api";
-import { EventItem } from "../components/EventItem";
+import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
+import claudeLogo from "../assets/claude-logo.png";
 
 type DisplayItem =
   | { kind: "event"; event: Event }
@@ -72,14 +73,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
 
   return (
     <Box style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
-      <Box style={{
-        width: 28, height: 28, borderRadius: "50%",
-        backgroundColor: "var(--mantine-color-orange-6)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        flexShrink: 0, marginTop: 2,
-      }}>
-        <Text size="xs" c="white" fw={800} style={{ lineHeight: 1 }}>C</Text>
-      </Box>
+      <img src={claudeLogo} alt="Claude" style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, marginTop: 2 }} />
       <Box style={{ flex: 1, minWidth: 0 }}>
         <Group gap={8} mb={6} align="center">
           <Text size="xs" fw={600} c="orange">Claude</Text>
@@ -273,6 +267,7 @@ export function SessionDetail() {
   const [session, setSession] = useState<Session | null>(null);
   const [overview, setOverview] = useState<InteractionOverview | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
+  const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -286,6 +281,12 @@ export function SessionDetail() {
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
         const shortId = s.sessionId.slice(0, 8) + "…";
+        if (user) {
+          setUserInfo({
+            name: s.gitUserName ?? user,
+            avatarUrl: s.gitUserName ? `https://github.com/${s.gitUserName}.png?size=40` : undefined,
+          });
+        }
         setCrumbs([
           ...(user ? [{ label: user, path: "/" }] : []),
           ...(repo ? [{ label: repo, path: "/" }] : []),
@@ -371,7 +372,7 @@ export function SessionDetail() {
               })}
             />
           ) : (
-            <EventItem key={`evt-${item.event.id}`} event={item.event} />
+            <EventItem key={`evt-${item.event.id}`} event={item.event} user={userInfo} />
           )
         )
       )}
