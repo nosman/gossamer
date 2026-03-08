@@ -1,0 +1,5 @@
+Display the username / repo-name in the main screen too. When you click into a asession, the session-id should be added to the breadcrumbs
+
+---
+
+Make the individual session page look more like a transcript of a conversation. it should be clear that the user is talking to claude and claude is responding.
