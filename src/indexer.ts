@@ -467,23 +467,51 @@ export async function indexCheckpointV2(
       const creates: Promise<unknown>[] = [];
 
       if (sm.open_items?.length) {
-        // Look up prior statuses for this session so they survive new checkpoints being indexed
+        // Look up prior statuses for this session so they survive new checkpoints being indexed.
+        // Fetch ALL non-open prior items (not just exact matches) so we can fuzzy-match rephrased items.
         const priorItems = await db.openItem.findMany({
           where: {
             checkpointSessionSummary: {
               checkpointSessionMetadata: { sessionId },
             },
-            text: { in: sm.open_items },
             status: { notIn: ["open"] },
           },
           select: { text: true, status: true, subSessionId: true },
           distinct: ["text"],
           orderBy: { id: "desc" },
         });
+
+        // Build a map for exact matches and a list for fuzzy fallback
         const priorByText = new Map(priorItems.map((p) => [p.text, p]));
 
+        // Jaccard similarity on word tokens (case-insensitive, punctuation-stripped)
+        function tokenize(s: string): Set<string> {
+          return new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
+        }
+        function jaccardSimilarity(a: string, b: string): number {
+          const ta = tokenize(a);
+          const tb = tokenize(b);
+          let intersection = 0;
+          for (const w of ta) if (tb.has(w)) intersection++;
+          const union = ta.size + tb.size - intersection;
+          return union === 0 ? 0 : intersection / union;
+        }
+
+        function findBestPrior(text: string) {
+          // Exact match first
+          if (priorByText.has(text)) return priorByText.get(text);
+          // Fuzzy fallback: best Jaccard match above 0.5 threshold
+          let best: { text: string; status: string; subSessionId: string | null } | undefined;
+          let bestScore = 0.5; // minimum threshold
+          for (const prior of priorItems) {
+            const score = jaccardSimilarity(text, prior.text);
+            if (score > bestScore) { bestScore = score; best = prior; }
+          }
+          return best;
+        }
+
         creates.push(...sm.open_items.map((text) => {
-          const prior = priorByText.get(text);
+          const prior = findBestPrior(text);
           return db.openItem.upsert({
             where: { checkpointSessionSummaryId_text: { checkpointSessionSummaryId: summaryRecord.id, text } },
             create: {
