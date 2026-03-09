@@ -66,7 +66,7 @@ export async function fetchSessionEvents(id: string): Promise<Event[]> {
 export interface OpenItem {
   id: number;
   text: string;
-  status: "open" | "in_progress" | "complete";
+  status: "open" | "in_progress" | "complete" | "na";
   subSessionId: string | null;
 }
 
@@ -154,7 +154,7 @@ export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckp
 
 export async function updateOpenItemStatus(
   id: number,
-  status: "open" | "in_progress" | "complete",
+  status: "open" | "in_progress" | "complete" | "na",
   subSessionId?: string,
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/open-items/${id}`, {

@@ -467,14 +467,34 @@ export async function indexCheckpointV2(
       const creates: Promise<unknown>[] = [];
 
       if (sm.open_items?.length) {
-        // Upsert so existing status/subSessionId are preserved across re-indexes
-        creates.push(...sm.open_items.map((text) =>
-          db.openItem.upsert({
+        // Look up prior statuses for this session so they survive new checkpoints being indexed
+        const priorItems = await db.openItem.findMany({
+          where: {
+            checkpointSessionSummary: {
+              checkpointSessionMetadata: { sessionId },
+            },
+            text: { in: sm.open_items },
+            status: { notIn: ["open"] },
+          },
+          select: { text: true, status: true, subSessionId: true },
+          distinct: ["text"],
+          orderBy: { id: "desc" },
+        });
+        const priorByText = new Map(priorItems.map((p) => [p.text, p]));
+
+        creates.push(...sm.open_items.map((text) => {
+          const prior = priorByText.get(text);
+          return db.openItem.upsert({
             where: { checkpointSessionSummaryId_text: { checkpointSessionSummaryId: summaryRecord.id, text } },
-            create: { checkpointSessionSummaryId: summaryRecord.id, text },
+            create: {
+              checkpointSessionSummaryId: summaryRecord.id,
+              text,
+              status: prior?.status ?? "open",
+              subSessionId: prior?.subSessionId ?? null,
+            },
             update: {},
-          })
-        ));
+          });
+        }));
         // Remove open items that no longer appear in the source
         creates.push(
           db.openItem.deleteMany({

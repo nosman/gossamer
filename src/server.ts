@@ -562,7 +562,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.patch("/api/open-items/:id", async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const { status, subSessionId } = req.body as { status?: string; subSessionId?: string };
-    const allowed = ["open", "in_progress", "complete"];
+    const allowed = ["open", "in_progress", "complete", "na"];
     if (status !== undefined && !allowed.includes(status)) {
       res.status(400).json({ error: "status must be open, in_progress, or complete" });
       return;

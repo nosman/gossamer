@@ -7,6 +7,7 @@ import {
   fetchSessionEvents,
   fetchSessionCheckpoints,
   spawnSession,
+  updateOpenItemStatus,
   type Session,
   type Event,
   type SessionCheckpoint,
@@ -358,8 +359,8 @@ export function SessionDetail() {
               </Text>
               {openItems.map((item, i) => {
                 const selectable = item.status === "open";
-                const statusColor = item.status === "complete" ? "teal" : item.status === "in_progress" ? "orange" : "gray";
-                const statusLabel = item.status === "in_progress" ? "in progress" : item.status;
+                const statusColor = item.status === "complete" ? "teal" : item.status === "in_progress" ? "orange" : item.status === "na" ? "gray" : "blue";
+                const statusLabel = item.status === "in_progress" ? "in progress" : item.status === "na" ? "n/a" : item.status;
                 return (
                   <Group key={item.id} gap={10} align="flex-start" mb={6} wrap="nowrap">
                     {selectable ? (
@@ -392,7 +393,7 @@ export function SessionDetail() {
                         </Badge>
                       </Menu.Target>
                       <Menu.Dropdown>
-                        {(["open", "in_progress", "complete"] as const).map((s) => (
+                        {(["open", "in_progress", "complete", "na"] as const).map((s) => (
                           <Menu.Item
                             key={s}
                             fw={item.status === s ? 700 : undefined}
@@ -402,7 +403,7 @@ export function SessionDetail() {
                               if (s !== "open") setSelectedItems((prev) => { const n = new Set(prev); n.delete(i); return n; });
                             }}
                           >
-                            {s === "in_progress" ? "in progress" : s}
+                            {s === "in_progress" ? "in progress" : s === "na" ? "n/a" : s}
                           </Menu.Item>
                         ))}
                       </Menu.Dropdown>
