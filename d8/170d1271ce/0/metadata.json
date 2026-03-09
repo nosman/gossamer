@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "d8170d1271ce",
+  "session_id": "913dfa2d-44a7-431f-a671-e43077ed88bb",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-09T05:43:11.985743Z",
+  "branch": "sessions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/indexer.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "bad646078ca3",
+  "token_usage": {
+    "input_tokens": 104,
+    "cache_creation_tokens": 59402,
+    "cache_read_tokens": 3765080,
+    "output_tokens": 20560,
+    "api_call_count": 90
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Build a system that maps checkpoint IDs (extracted from git commit messages) to git commit hashes (OIDs), storing the mapping in a new database table populated during checkpoint indexing.",
+    "outcome": "Created `src/gitUtils.ts` with helpers to extract checkpoint IDs from commit messages and find commits by checkpoint ID, added the `CheckpointIdGitOidJoin` Prisma table, wired the mapping save into the indexer, and verified 39 rows were populated after fixing an `isNew` guard that prevented backfilling already-indexed checkpoints.",
+    "learnings": {
+      "repo": [
+        "Checkpoints are associated with git commits whose message body contains a line matching `Entire-Checkpoint: \u003cid\u003e`.",
+        "The indexer lives in `src/indexer.ts`; `indexCheckpointV2` / `indexAllCheckpointsV2` are the active code paths; the V1 `indexCheckpoint` function was removed during this session.",
+        "The repo path is available as `repoDir` at the server call site in `src/server.ts`.",
+        "All 39 checkpoints were already indexed before the OID-mapping feature landed, so any backfill logic must run unconditionally rather than only for new checkpoints.",
+        "TypeScript narrowing breaks when a boolean alias (`isNew`) is used instead of directly checking the nullable variable — use a non-null assertion after the if/else block."
+      ],
+      "code": [
+        {
+          "path": "src/gitUtils.ts",
+          "finding": "Contains `getCheckpointIdFromCommitMessage` (regex `/^Entire-Checkpoint:\\s*(\\S+)$/m`) and `findCommitForCheckpoint` which searches the provided branch then falls back to `main`/`master`."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "`saveGitOidMapping` helper skips early via `findFirst` if mapping already exists, making repeated index passes cheap. Originally guarded by `isNew`, which was removed to allow backfilling."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "`CheckpointIdGitOidJoin` uses `gitOid` as primary key with an index on `checkpointId`; a single checkpoint ID can theoretically map to multiple git commits."
+        }
+      ],
+      "workflow": [
+        "The `gitlog` npm package requires an absolute repo path and uses a callback API; tested experimentally before writing production code.",
+        "When a Prisma schema changes, both `prisma db push` and a TypeScript rebuild are needed to regenerate the client.",
+        "Background server processes can die silently — always verify with a health-check request after starting."
+      ]
+    },
+    "friction": [
+      "Multiple rounds of Bash experimentation were needed to discover the correct `gitlog` API shape (callback vs promise, path requirements, return type).",
+      "TypeScript narrowing through a boolean alias (`isNew`) failed silently at build time, requiring a non-null assertion workaround.",
+      "The `isNew` guard caused a silent bug where no rows were ever written for already-indexed checkpoints — only caught by querying the table after the server restarted.",
+      "Many Read tool calls on `indexer.ts` were needed to navigate the file, suggesting the file is large and context was repeatedly lost."
+    ],
+    "open_items": [
+      "The `saveGitOidMapping` call now runs on every index pass for every checkpoint; a more targeted approach (e.g., only for checkpoints missing a mapping) could reduce unnecessary DB reads at scale.",
+      "No tests were written for `getCheckpointIdFromCommitMessage` or `findCommitForCheckpoint`.",
+      "The fallback branch search order (provided branch → main → master) is hardcoded; could be made configurable."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-09T05:42:49.303232Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}
