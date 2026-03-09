@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "7791a81172db",
+  "strategy": "manual-commit",
+  "branch": "sessions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "prisma/schema.prisma"
+  ],
+  "sessions": [
+    {
+      "metadata": "/77/91a81172db/0/metadata.json",
+      "transcript": "/77/91a81172db/0/full.jsonl",
+      "content_hash": "/77/91a81172db/0/content_hash.txt",
+      "prompt": "/77/91a81172db/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2611,
+    "cache_creation_tokens": 1453943,
+    "cache_read_tokens": 35574296,
+    "output_tokens": 210888,
+    "api_call_count": 422
+  }
+}
