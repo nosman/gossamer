@@ -3,7 +3,7 @@
   "checkpoint_id": "4d3c53e74056",
   "strategy": "manual-commit",
   "branch": "sessions",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "prisma/schema.prisma",
     "src/handler.ts",
@@ -15,13 +15,19 @@
       "transcript": "/4d/3c53e74056/0/full.jsonl",
       "content_hash": "/4d/3c53e74056/0/content_hash.txt",
       "prompt": "/4d/3c53e74056/0/prompt.txt"
+    },
+    {
+      "metadata": "/4d/3c53e74056/1/metadata.json",
+      "transcript": "/4d/3c53e74056/1/full.jsonl",
+      "content_hash": "/4d/3c53e74056/1/content_hash.txt",
+      "prompt": "/4d/3c53e74056/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 9,
-    "cache_creation_tokens": 17256,
-    "cache_read_tokens": 142903,
-    "output_tokens": 3972,
-    "api_call_count": 7
+    "input_tokens": 2578,
+    "cache_creation_tokens": 1367309,
+    "cache_read_tokens": 32258998,
+    "output_tokens": 205526,
+    "api_call_count": 397
   }
 }
