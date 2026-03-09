@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
-import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip } from "@mantine/core";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
   fetchSession,
   fetchSessionEvents,
@@ -10,6 +10,7 @@ import {
   type Session,
   type Event,
   type SessionCheckpoint,
+  type OpenItem,
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
@@ -235,7 +236,7 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
           {sum?.openItems?.length ? (
             <Box>
               <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◇ Open items</Text>
-              {sum.openItems.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
+              {sum.openItems.map((it, i) => <Text key={i} size="xs">· {it.text}</Text>)}
             </Box>
           ) : null}
           {fileCount > 0 && (
@@ -264,6 +265,7 @@ export function SessionDetail() {
   const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
   const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
+  const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
   const [spawning, setSpawning] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -294,7 +296,9 @@ export function SessionDetail() {
         const merged: DisplayItem[] = [];
         let cpIdx = 0;
         const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
-        setLatestCheckpoint(sortedCps[sortedCps.length - 1] ?? null);
+        const latest = sortedCps[sortedCps.length - 1] ?? null;
+        setLatestCheckpoint(latest);
+        setOpenItems(latest?.summary?.openItems ?? []);
 
         for (const item of grouped) {
           const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
@@ -347,30 +351,66 @@ export function SessionDetail() {
           <Text size="sm" fw={600} lh={1.5} mb={latestCheckpoint.summary.openItems?.length ? 12 : 0}>
             {latestCheckpoint.summary.intent}
           </Text>
-          {latestCheckpoint.summary.openItems?.length > 0 && (
+          {openItems.length > 0 && (
             <Box>
               <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={8} style={{ letterSpacing: 0.5 }}>
                 Open items
               </Text>
-              {latestCheckpoint.summary.openItems.map((item, i) => (
-                <Group key={i} gap={10} align="flex-start" mb={6} wrap="nowrap">
-                  <Checkbox
-                    size="xs"
-                    radius="xl"
-                    checked={selectedItems.has(i)}
-                    onChange={(e) => {
-                      setSelectedItems((prev) => {
-                        const next = new Set(prev);
-                        e.currentTarget.checked ? next.add(i) : next.delete(i);
-                        return next;
-                      });
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ marginTop: 2, flexShrink: 0 }}
-                  />
-                  <Text size="xs" lh={1.5} style={{ cursor: "default" }}>{item}</Text>
-                </Group>
-              ))}
+              {openItems.map((item, i) => {
+                const selectable = item.status === "open";
+                const statusColor = item.status === "complete" ? "teal" : item.status === "in_progress" ? "orange" : "gray";
+                const statusLabel = item.status === "in_progress" ? "in progress" : item.status;
+                return (
+                  <Group key={item.id} gap={10} align="flex-start" mb={6} wrap="nowrap">
+                    {selectable ? (
+                      <Checkbox
+                        size="xs"
+                        radius="xl"
+                        checked={selectedItems.has(i)}
+                        onChange={(e) => {
+                          setSelectedItems((prev) => {
+                            const next = new Set(prev);
+                            e.currentTarget.checked ? next.add(i) : next.delete(i);
+                            return next;
+                          });
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ marginTop: 2, flexShrink: 0 }}
+                      />
+                    ) : (
+                      <Box style={{ width: 16, flexShrink: 0 }} />
+                    )}
+                    <Menu withinPortal position="bottom-start" shadow="sm">
+                      <Menu.Target>
+                        <Badge
+                          color={statusColor}
+                          size="xs"
+                          variant="light"
+                          style={{ cursor: "pointer", flexShrink: 0, marginTop: 2, textTransform: "none" }}
+                        >
+                          {statusLabel}
+                        </Badge>
+                      </Menu.Target>
+                      <Menu.Dropdown>
+                        {(["open", "in_progress", "complete"] as const).map((s) => (
+                          <Menu.Item
+                            key={s}
+                            fw={item.status === s ? 700 : undefined}
+                            onClick={async () => {
+                              await updateOpenItemStatus(item.id, s).catch(() => undefined);
+                              setOpenItems((prev) => prev.map((it) => it.id === item.id ? { ...it, status: s } : it));
+                              if (s !== "open") setSelectedItems((prev) => { const n = new Set(prev); n.delete(i); return n; });
+                            }}
+                          >
+                            {s === "in_progress" ? "in progress" : s}
+                          </Menu.Item>
+                        ))}
+                      </Menu.Dropdown>
+                    </Menu>
+                    <Text size="xs" lh={1.5} c={selectable ? undefined : "dimmed"} style={{ cursor: "default" }}>{item.text}</Text>
+                  </Group>
+                );
+              })}
               {selectedItems.size > 0 && (
                 <Group gap={8} mt={10}>
                   <Text size="xs" c="dimmed">Work on selection in new session?</Text>
@@ -382,14 +422,14 @@ export function SessionDetail() {
                       loading={spawning}
                       onClick={async () => {
                         if (!session?.cwd) return;
-                        const lines = latestCheckpoint.summary!.openItems
-                          .filter((_, i) => selectedItems.has(i))
-                          .map((item) => `- ${item}`)
-                          .join("\n");
+                        const selected = openItems.filter((_, i) => selectedItems.has(i));
+                        const lines = selected.map((item) => `- ${item.text}`).join("\n");
                         const prompt = `Please work on the following open items:\n${lines}`;
                         setSpawning(true);
                         try {
-                          await spawnSession(prompt, session.cwd);
+                          await spawnSession(prompt, session.cwd, selected.map((it) => it.id));
+                          const selectedIds = new Set(selected.map((it) => it.id));
+                          setOpenItems((prev) => prev.map((it) => selectedIds.has(it.id) ? { ...it, status: "in_progress" as const } : it));
                           setSelectedItems(new Set());
                         } finally {
                           setSpawning(false);

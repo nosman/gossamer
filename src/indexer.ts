@@ -456,9 +456,8 @@ export async function indexCheckpointV2(
         select: { id: true },
       });
 
-      // Recreate child arrays on every index pass
+      // Recreate child arrays on every index pass (preserve status/subSessionId on OpenItem)
       await Promise.all([
-        db.openItem.deleteMany(     { where: { checkpointSessionSummaryId: summaryRecord.id } }),
         db.frictionItem.deleteMany( { where: { checkpointSessionSummaryId: summaryRecord.id } }),
         db.repoLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
         db.codeLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
@@ -468,9 +467,22 @@ export async function indexCheckpointV2(
       const creates: Promise<unknown>[] = [];
 
       if (sm.open_items?.length) {
-        creates.push(db.openItem.createMany({
-          data: sm.open_items.map((text) => ({ checkpointSessionSummaryId: summaryRecord.id, text })),
-        }));
+        // Upsert so existing status/subSessionId are preserved across re-indexes
+        creates.push(...sm.open_items.map((text) =>
+          db.openItem.upsert({
+            where: { checkpointSessionSummaryId_text: { checkpointSessionSummaryId: summaryRecord.id, text } },
+            create: { checkpointSessionSummaryId: summaryRecord.id, text },
+            update: {},
+          })
+        ));
+        // Remove open items that no longer appear in the source
+        creates.push(
+          db.openItem.deleteMany({
+            where: { checkpointSessionSummaryId: summaryRecord.id, text: { notIn: sm.open_items } },
+          })
+        );
+      } else {
+        creates.push(db.openItem.deleteMany({ where: { checkpointSessionSummaryId: summaryRecord.id } }));
       }
       if (sm.friction?.length) {
         creates.push(db.frictionItem.createMany({

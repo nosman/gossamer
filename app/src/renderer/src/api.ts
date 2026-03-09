@@ -63,6 +63,13 @@ export async function fetchSessionEvents(id: string): Promise<Event[]> {
   return res.json() as Promise<Event[]>;
 }
 
+export interface OpenItem {
+  id: number;
+  text: string;
+  status: "open" | "in_progress" | "complete";
+  subSessionId: string | null;
+}
+
 export interface CheckpointSummary {
   intent: string;
   outcome: string;
@@ -70,7 +77,7 @@ export interface CheckpointSummary {
   codeLearnings: Array<{ path: string; finding: string }>;
   workflowLearnings: string[];
   friction: string[];
-  openItems: string[];
+  openItems: OpenItem[];
 }
 
 export interface TokenUsage {
@@ -145,11 +152,24 @@ export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckp
   return res.json() as Promise<SessionCheckpoint[]>;
 }
 
-export async function spawnSession(prompt: string, cwd: string): Promise<void> {
+export async function updateOpenItemStatus(
+  id: number,
+  status: "open" | "in_progress" | "complete",
+  subSessionId?: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/open-items/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, ...(subSessionId !== undefined ? { subSessionId } : {}) }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[]): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/spawn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, cwd }),
+    body: JSON.stringify({ prompt, cwd, openItemIds }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }

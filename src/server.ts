@@ -388,7 +388,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   type V2Session = {
     summary: {
       intent: string; outcome: string;
-      openItems: { text: string }[];
+      openItems: { id: number; text: string; status: string; subSessionId: string | null }[];
       frictionItems: { text: string }[];
       repoLearnings: { text: string }[];
       codeLearnings: { path: string; finding: string }[];
@@ -400,7 +400,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     return {
       intent:            summary.intent,
       outcome:           summary.outcome,
-      openItems:         summary.openItems.map((r) => r.text),
+      openItems:         summary.openItems.map((r) => ({ id: r.id, text: r.text, status: r.status, subSessionId: r.subSessionId })),
       friction:          summary.frictionItems.map((r) => r.text),
       repoLearnings:     summary.repoLearnings.map((r) => r.text),
       codeLearnings:     summary.codeLearnings.map((r) => ({ path: r.path, finding: r.finding })),
@@ -558,9 +558,32 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // PATCH /api/open-items/:id
+  app.patch("/api/open-items/:id", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const { status, subSessionId } = req.body as { status?: string; subSessionId?: string };
+    const allowed = ["open", "in_progress", "complete"];
+    if (status !== undefined && !allowed.includes(status)) {
+      res.status(400).json({ error: "status must be open, in_progress, or complete" });
+      return;
+    }
+    try {
+      const updated = await db.openItem.update({
+        where: { id },
+        data: {
+          ...(status !== undefined ? { status } : {}),
+          ...(subSessionId !== undefined ? { subSessionId } : {}),
+        },
+      });
+      res.json({ id: updated.id, status: updated.status, subSessionId: updated.subSessionId });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // POST /api/sessions/spawn
   app.post("/api/sessions/spawn", async (req, res) => {
-    const { prompt, cwd } = req.body as { prompt?: string; cwd?: string };
+    const { prompt, cwd, openItemIds } = req.body as { prompt?: string; cwd?: string; openItemIds?: number[] };
     if (!prompt || typeof prompt !== "string") {
       res.status(400).json({ error: "prompt is required" });
       return;
@@ -576,6 +599,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         `end tell`,
       ].join("\n");
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+      // Mark selected open items as in_progress
+      if (openItemIds?.length) {
+        await db.openItem.updateMany({
+          where: { id: { in: openItemIds } },
+          data: { status: "in_progress" },
+        });
+      }
       res.json({ started: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });

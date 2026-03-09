@@ -65,7 +65,7 @@ function SummaryCard({ summary }: { summary: CheckpointSummary }) {
       <CodeLearningSections                        items={summary.codeLearnings} />
       <SummarySection label="Workflow learnings"  items={summary.workflowLearnings} />
       <SummarySection label="Friction"            items={summary.friction} />
-      <SummarySection label="Open items"          items={summary.openItems} />
+      <SummarySection label="Open items"          items={summary.openItems.map((it) => it.text)} />
     </Box>
   );
 }
