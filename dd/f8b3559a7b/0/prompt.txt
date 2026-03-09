@@ -1,0 +1,122 @@
+Display the username / repo-name in the main screen too. When you click into a asession, the session-id should be added to the breadcrumbs
+
+---
+
+Make the individual session page look more like a transcript of a conversation. it should be clear that the user is talking to claude and claude is responding.
+
+---
+
+Nest the tool uses rows into the Claude rows. Display them underneath claude's response
+
+---
+
+Add an avatar and use the github username instead of just "you"
+
+---
+
+Can you use the claude code logo instead of the C for claude's avatar?
+
+---
+
+let's format the timestamps we see relative to the current time. So instead of a date, write "5 mins ago", "7 hours ago", "6 days ago", etc. Hovering over should still show the absolute timestamp and let you copy the date.
+
+---
+
+now let's rework the overview top panel of the individual session view. The page should get the most recent checkpoint associated with the session. The top bar should show the Intent of that session. Underneath, it should show open items as a list.
+
+---
+
+let's make the open items actionable. Put a radio button next to each open item. Once selected, there should be a button underneath the open items saying "Work on selection in new session?" With an arrow button. When the arrow is clicked, a new claude code session should be created with this session as parent. The prompt should be something like "Please work on these items" with the text of the selected open items.
+
+---
+
+We should use the claude-code sdk to do these kinds of things
+
+---
+
+restart the server to get the new backend routes
+
+---
+
+Will the new spawned session show up in my list of active sessions in claude code?
+
+---
+
+I'm not seeing the new session being created. The main sessions screen doesn't show a new active session.
+
+---
+
+let's go with 1
+
+---
+
+How do i actually interact with the new session though? Is there a way to transfer it to an open terminal window?
+
+---
+
+Let's do option A. i want this tool to be platform-agnostic
+
+---
+
+Actually, let's do the applescript solution, option B. CLicking the arrow should open a new terminal window that called claude resume with the session id.
+
+---
+
+restart the server
+
+---
+
+In the main sessions table, keep it ordered by the updated field
+
+---
+
+let's add two new fields to the OpenItem table in the database. 1. a status field that can be either open, complete, or in progress. 2. a nullable string field called subsessionid.
+
+---
+
+now in the overview panel where it shows open items, let the user manually change the status of the open items. When you click on the "work on selection in new session?" button, this should automatically change the status of the buttoms from open to in_progress. If the buttons are already in_progress or complete, they shouldn't be selectable in the ui.
+
+---
+
+restart the server
+
+---
+
+The individual session view doesn't load anymore, here is the frontend exception: chunk-XPR23Y44.js?v=be8879fb:9932 Uncaught Error: Objects are not valid as a React child (found: object with keys {id, text, status, subSessionId}). If you meant to render a collection of children, use an array instead.
+
+---
+
+The frontend is failing when it makes a request to change the status of the open item. PrismaClientKnownRequestError: \nInvalid `prisma.openItem.update()` invocation:\n\n\nAn operation failed because it depends on one or more records that were required but not found. No record was found for an update."
+
+---
+
+is the id being passed into the api call?
+
+---
+
+the patch worked, however, it doesn't seem to be saving the new status to the database. WE should also be saving the subsessionId to the database.
+
+---
+
+The spawn endpoint should also change the status of the openItem from open to in_progress
+
+---
+
+The openitem status seems to have been overwritten again
+
+---
+
+Actually, it looks correct in the db. However, the UI doesn't show the right status. I'm seeing open when it should be in progress
+
+---
+
+Option 1 makes more sense. Different text means a different open item
+
+---
+
+Seems like setting the item status is broken again: SessionDetail.tsx:400 Uncaught (in promise) ReferenceError: updateOpenItemStatus is not defined
+    at onClick (SessionDetail.tsx:400:31)
+
+---
+
+Add another OpenItem status value called N/A
