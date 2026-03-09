@@ -1,0 +1,2 @@
+Please work on the following open items:
+- Status inheritance across checkpoints only works for identical item text; if AI rephrases an open item in a new checkpoint, status is lost by design

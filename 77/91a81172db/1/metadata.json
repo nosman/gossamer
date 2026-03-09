@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "7791a81172db",
+  "session_id": "a74ef8f2-5ef2-426f-8eab-2d033c049e93",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-09T04:53:05.510311Z",
+  "branch": "sessions",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "prisma/schema.prisma",
+    "src/indexer.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "eb6b99703457",
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 11657,
+    "cache_read_tokens": 83867,
+    "output_tokens": 2033,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Fix status inheritance for open items across checkpoints so that rephrased items (not just identical text) still carry over their prior status.",
+    "outcome": "Implemented fuzzy matching using Jaccard similarity (word-overlap) in indexer.ts with a 0.5 threshold, falling back from exact match to best fuzzy match when fetching prior item statuses.",
+    "learnings": {
+      "repo": [
+        "Prior item status lookup previously used exact text matching via `text: { in: sm.open_items }` Prisma query — any rephrasing broke inheritance.",
+        "The gossamer project uses Prisma ORM for database queries in src/indexer.ts.",
+        "Status inheritance is scoped per session; all non-open prior items for a session are now fetched and matched in-memory."
+      ],
+      "code": [
+        {
+          "path": "src/indexer.ts",
+          "finding": "Added findBestPrior(text) function: tries exact match first, then computes Jaccard similarity (case-insensitive, punctuation-stripped tokenization) against all prior non-open items, returning the best match above 0.5 threshold."
+        }
+      ],
+      "workflow": [
+        "Build verification (TypeScript compile check) was run immediately after editing to confirm no type errors before considering the task complete."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "The 0.5 Jaccard threshold is a heuristic — may need tuning if false positives or false negatives are observed in practice.",
+      "prisma/schema.prisma was listed as modified but no schema changes were described; worth verifying what changed there."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-09T04:52:56.463763Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 32,
+    "agent_percentage": 0
+  }
+}
