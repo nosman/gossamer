@@ -195,8 +195,6 @@ export async function indexCheckpointV2(
     select: { id: true },
   });
 
-  const isNew = !checkpointMeta;
-
   if (!checkpointMeta) {
     let tokenUsageId: number | null = null;
     if (meta.token_usage) tokenUsageId = await createTokenUsage(db, meta.token_usage);
@@ -455,7 +453,7 @@ export async function indexCheckpointV2(
     }
   }
 
-  if (isNew && repoPath) {
+  if (repoPath) {
     await saveGitOidMapping(db, checkpointId, meta.branch, repoPath);
   }
 }
