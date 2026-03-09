@@ -173,7 +173,10 @@ model OpenItem {
   checkpointSessionSummaryId    Int
   checkpointSessionSummary      CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
   text                          String
+  status                        String                    @default("open") // "open" | "in_progress" | "complete"
+  subSessionId                  String?
 
+  @@unique([checkpointSessionSummaryId, text])
   @@index([checkpointSessionSummaryId])
 }
 

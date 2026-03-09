@@ -1403,6 +1403,20 @@ async function main(): Promise<void> {
           // 2. Write to SQLite event log — primary source of truth
           await writeEventLog(db, input, blocked, state);
 
+          // 2b. On SessionStart, link any open items that were passed via env var
+          if (input.hook_event_name === "SessionStart") {
+            const raw = process.env.GOSSAMER_SPAWN_OPEN_ITEMS;
+            if (raw) {
+              const ids = raw.split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0);
+              if (ids.length) {
+                await db.openItem.updateMany({
+                  where: { id: { in: ids } },
+                  data: { subSessionId: input.session_id },
+                });
+              }
+            }
+          }
+
           // 2a. On Stop, generate/update interaction overview (non-fatal)
           if (input.hook_event_name === "Stop") {
             generateInteractionOverview(db, input.session_id, noSummary).catch((err) => {

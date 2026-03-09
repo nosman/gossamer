@@ -591,11 +591,15 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     try {
       const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
       const safePrompt = prompt.replace(/'/g, "'\\''").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      // Pass open item IDs so the SessionStart hook can link the new session back
+      const envPrefix = openItemIds?.length
+        ? `GOSSAMER_SPAWN_OPEN_ITEMS='${openItemIds.join(",")}' `
+        : "";
       // Use AppleScript to open a new Terminal window running claude interactively
       const script = [
         `tell application "Terminal"`,
         `  activate`,
-        `  do script "cd '${safeCwd}' && claude '${safePrompt}'"`,
+        `  do script "cd '${safeCwd}' && ${envPrefix}claude '${safePrompt}'"`,
         `end tell`,
       ].join("\n");
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
