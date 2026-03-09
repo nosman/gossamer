@@ -1,0 +1,2 @@
+Please work on the following open items:
+- subSessionId is never actually populated in the DB — the AppleScript spawn opens a terminal but doesn't return a session ID to store back on the open items
