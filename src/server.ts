@@ -5,7 +5,7 @@ import { createServer } from "http";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
-import { indexAllCheckpoints, indexAllCheckpointsV2 } from "./indexer.js";
+import { indexAllCheckpointsV2 } from "./indexer.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -678,16 +678,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         execSync(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard HEAD`, { stdio: "pipe" });
       } catch { /* non-fatal */ }
       try {
-        const { newMessages } = await indexAllCheckpoints(db, WORKTREE_PATH);
-        if (newMessages > 0) {
-          process.stderr.write(`checkpoint indexer: +${newMessages} new messages\n`);
-          broadcast();
-        }
-      } catch { /* non-fatal */ }
-      try {
-        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH);
+        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
         if (checkpoints > 0) {
-          process.stderr.write(`checkpoint indexer v2: indexed ${checkpoints} checkpoints\n`);
+          process.stderr.write(`checkpoint indexer: indexed ${checkpoints} checkpoints\n`);
           broadcast();
         }
       } catch { /* non-fatal */ }

@@ -218,6 +218,13 @@ model WorkflowItem {
 }
 
 
+model CheckpointIdGitOidJoin {
+  gitOid       String @id
+  checkpointId String
+
+  @@index([checkpointId])
+}
+
 // ------------------------------------------- OLD
 
 model Checkpoint {

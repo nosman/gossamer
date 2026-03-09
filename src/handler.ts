@@ -1248,15 +1248,13 @@ async function main(): Promise<void> {
     .action(async (opts: { dir: string; db: string }) => {
       const { indexAllCheckpoints } = await import("./indexer.js");
       const db = await getDb(expandHome(opts.db));
-      const { checkpoints, newMessages } = await indexAllCheckpoints(
+      const { checkpoints } = await indexAllCheckpoints(
         db,
         expandHome(opts.dir),
-        (id, n) => {
-          if (n > 0) process.stderr.write(`  ${id}: +${n} messages\n`);
-        },
+        (id) => process.stderr.write(`  ${id}\n`),
       );
       process.stderr.write(
-        `index-checkpoints: done — ${newMessages} new messages across ${checkpoints} checkpoint(s)\n`,
+        `index-checkpoints: done — ${checkpoints} checkpoint(s) indexed\n`,
       );
     });
 

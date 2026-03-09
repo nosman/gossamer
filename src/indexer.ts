@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import type { PrismaClient } from "../prisma/generated/client/index.js";
+import { findCommitForCheckpoint } from "./gitUtils.js";
 
 // ─── Raw shapes from the checkpoint files ─────────────────────────────────────
 
@@ -109,6 +110,32 @@ function eventKey(e: FullJsonlEvent): string | null {
   return e.uuid ?? e.messageId ?? null;
 }
 
+// ─── Git OID mapping helper ───────────────────────────────────────────────────
+
+async function saveGitOidMapping(
+  db: PrismaClient,
+  checkpointId: string,
+  branch: string | null | undefined,
+  repoPath: string,
+): Promise<void> {
+  if (!branch) return;
+  const existing = await db.checkpointIdGitOidJoin.findFirst({
+    where: { checkpointId },
+    select: { gitOid: true },
+  });
+  if (existing) return;
+  try {
+    const commit = await findCommitForCheckpoint(repoPath, branch, checkpointId);
+    if (commit) {
+      await db.checkpointIdGitOidJoin.create({
+        data: { gitOid: commit.hash, checkpointId },
+      });
+    }
+  } catch {
+    // non-fatal — git may not be available or branch may not exist
+  }
+}
+
 // ─── Single-checkpoint indexer ────────────────────────────────────────────────
 
 /**
@@ -117,142 +144,6 @@ function eventKey(e: FullJsonlEvent): string | null {
  *
  * @returns Number of new messages written (already-indexed events are skipped).
  */
-export async function indexCheckpoint(
-  db: PrismaClient,
-  checkpointDir: string,
-  checkpointId: string,
-): Promise<number> {
-  const metaPath = join(checkpointDir, "metadata.json");
-  if (!existsSync(metaPath)) {
-    throw new Error(`No metadata.json found at ${checkpointDir}`);
-  }
-
-  const meta = JSON.parse(readFileSync(metaPath, "utf8")) as RootMeta;
-
-  // Upsert root Checkpoint record
-  await db.checkpoint.upsert({
-    where: { checkpointId },
-    create: {
-      checkpointId,
-      cliVersion: meta.cli_version ?? null,
-      branch: meta.branch ?? null,
-      strategy: meta.strategy ?? null,
-      filesTouched: meta.files_touched ? JSON.stringify(meta.files_touched) : null,
-      tokenUsage: meta.token_usage ? JSON.stringify(meta.token_usage) : null,
-    },
-    update: {
-      cliVersion: meta.cli_version ?? null,
-      branch: meta.branch ?? null,
-      strategy: meta.strategy ?? null,
-      filesTouched: meta.files_touched ? JSON.stringify(meta.files_touched) : null,
-      tokenUsage: meta.token_usage ? JSON.stringify(meta.token_usage) : null,
-    },
-  });
-
-  // Find session sub-directories (0/, 1/, 2/, …)
-  const sessionDirs = readdirSync(checkpointDir)
-    .filter((e) => /^\d+$/.test(e) && statSync(join(checkpointDir, e)).isDirectory())
-    .sort((a, b) => parseInt(a) - parseInt(b));
-
-  let totalNew = 0;
-
-  for (const sessionDir of sessionDirs) {
-    const sessionIndex = parseInt(sessionDir, 10);
-    const sessionPath = join(checkpointDir, sessionDir);
-    const sessionMetaPath = join(sessionPath, "metadata.json");
-    if (!existsSync(sessionMetaPath)) continue;
-
-    const sessionMeta = JSON.parse(readFileSync(sessionMetaPath, "utf8")) as SessionMeta;
-    const { session_id: sessionId } = sessionMeta;
-    if (!sessionId) continue;
-
-    // Upsert CheckpointSession
-    const sessionData = {
-      checkpointId,
-      sessionIndex,
-      turnId: sessionMeta.turn_id ?? null,
-      agent: sessionMeta.agent ?? null,
-      createdAt: sessionMeta.created_at ? new Date(sessionMeta.created_at) : null,
-      filesTouched: sessionMeta.files_touched ? JSON.stringify(sessionMeta.files_touched) : null,
-      tokenUsage: sessionMeta.token_usage ? JSON.stringify(sessionMeta.token_usage) : null,
-      initialAttribution: sessionMeta.initial_attribution
-        ? JSON.stringify(sessionMeta.initial_attribution)
-        : null,
-      checkpointTranscriptStart: sessionMeta.checkpoint_transcript_start ?? null,
-      transcriptLinesAtStart: sessionMeta.transcript_lines_at_start ?? null,
-    };
-    await db.checkpointSession.upsert({
-      where: { sessionId },
-      create: { sessionId, ...sessionData },
-      update: sessionData,
-    });
-
-    // Record the checkpoint→session link (idempotent)
-    await db.checkpointSessionLink.upsert({
-      where: { checkpointId_sessionId: { checkpointId, sessionId } },
-      create: { checkpointId, sessionId },
-      update: {},
-    });
-
-    // Upsert CheckpointSummary if present
-    if (sessionMeta.summary) {
-      const sm = sessionMeta.summary;
-      const summaryData = {
-        intent: sm.intent ?? "",
-        outcome: sm.outcome ?? "",
-        learningsRepo: sm.learnings?.repo ? JSON.stringify(sm.learnings.repo) : null,
-        learningsCode: sm.learnings?.code ? JSON.stringify(sm.learnings.code) : null,
-        learningsWorkflow: sm.learnings?.workflow ? JSON.stringify(sm.learnings.workflow) : null,
-        friction: sm.friction ? JSON.stringify(sm.friction) : null,
-        openItems: sm.open_items ? JSON.stringify(sm.open_items) : null,
-      };
-      await db.checkpointSummary.upsert({
-        where: { sessionId },
-        create: { sessionId, ...summaryData },
-        update: summaryData,
-      });
-    }
-
-    // Parse and index full.jsonl
-    const fullPath = join(sessionPath, "full.jsonl");
-    if (!existsSync(fullPath)) continue;
-
-    const events = parseFullJsonl(readFileSync(fullPath, "utf8"));
-
-    for (const event of events) {
-      const key = eventKey(event);
-      if (!key) continue; // can't upsert without a unique key
-
-      // Skip if already indexed
-      const exists = await db.checkpointMessage.findUnique({
-        where: { uuid: key },
-        select: { id: true },
-      });
-      if (exists) continue;
-
-      await db.checkpointMessage.create({
-        data: {
-          uuid: key,
-          sessionId,
-          parentUuid: event.parentUuid ?? null,
-          type: event.type,
-          timestamp: event.timestamp ? new Date(event.timestamp) : null,
-          cwd: event.cwd ?? null,
-          gitBranch: event.gitBranch ?? null,
-          slug: event.slug ?? null,
-          version: event.version ?? null,
-          planContent: event.planContent ?? null,
-          toolUseId: event.toolUseID ?? null,
-          parentToolUseId: event.parentToolUseID ?? null,
-          data: JSON.stringify(event),
-        },
-      });
-      totalNew++;
-    }
-  }
-
-  return totalNew;
-}
 
 // ─── V2 helpers ───────────────────────────────────────────────────────────────
 
@@ -291,6 +182,7 @@ export async function indexCheckpointV2(
   db: PrismaClient,
   checkpointDir: string,
   checkpointId: string,
+  repoPath?: string,
 ): Promise<void> {
   const metaPath = join(checkpointDir, "metadata.json");
   if (!existsSync(metaPath)) throw new Error(`No metadata.json at ${checkpointDir}`);
@@ -302,6 +194,8 @@ export async function indexCheckpointV2(
     where: { checkpointId },
     select: { id: true },
   });
+
+  const isNew = !checkpointMeta;
 
   if (!checkpointMeta) {
     let tokenUsageId: number | null = null;
@@ -560,6 +454,10 @@ export async function indexCheckpointV2(
       await Promise.all(creates);
     }
   }
+
+  if (isNew && repoPath) {
+    await saveGitOidMapping(db, checkpointId, meta.branch, repoPath);
+  }
 }
 
 // ─── V2 full-tree indexer ─────────────────────────────────────────────────────
@@ -568,6 +466,7 @@ export async function indexAllCheckpointsV2(
   db: PrismaClient,
   rootDir: string,
   onProgress?: (checkpointId: string) => void,
+  repoPath?: string,
 ): Promise<{ checkpoints: number }> {
   let totalCheckpoints = 0;
 
@@ -583,7 +482,7 @@ export async function indexAllCheckpointsV2(
       const checkpointId  = shard + rest;
       const checkpointDir = join(shardPath, rest);
       try {
-        await indexCheckpointV2(db, checkpointDir, checkpointId);
+        await indexCheckpointV2(db, checkpointDir, checkpointId, repoPath);
         totalCheckpoints++;
         onProgress?.(checkpointId);
       } catch (err) {
@@ -595,7 +494,7 @@ export async function indexAllCheckpointsV2(
   return { checkpoints: totalCheckpoints };
 }
 
-// ─── Full-tree indexer (V1 / old schema) ─────────────────────────────────────
+// ─── Full-tree indexer ───────────────────────────────────────────────────────
 
 /**
  * Walk a checkpoints root directory and index every checkpoint found.
@@ -608,32 +507,9 @@ export async function indexAllCheckpointsV2(
 export async function indexAllCheckpoints(
   db: PrismaClient,
   rootDir: string,
-  onProgress?: (checkpointId: string, newMessages: number) => void,
-): Promise<{ checkpoints: number; newMessages: number }> {
-  let totalCheckpoints = 0;
-  let totalNew = 0;
-
-  const shards = readdirSync(rootDir)
-    .filter((e) => /^[0-9a-f]{2}$/i.test(e) && statSync(join(rootDir, e)).isDirectory());
-
-  for (const shard of shards) {
-    const shardPath = join(rootDir, shard);
-    const ids = readdirSync(shardPath)
-      .filter((e) => /^[0-9a-f]{10}$/i.test(e) && statSync(join(shardPath, e)).isDirectory());
-
-    for (const rest of ids) {
-      const checkpointId = shard + rest;
-      const checkpointDir = join(shardPath, rest);
-      try {
-        const n = await indexCheckpoint(db, checkpointDir, checkpointId);
-        totalNew += n;
-        totalCheckpoints++;
-        onProgress?.(checkpointId, n);
-      } catch (err) {
-        process.stderr.write(`indexer: skipping ${checkpointId}: ${err}\n`);
-      }
-    }
-  }
-
-  return { checkpoints: totalCheckpoints, newMessages: totalNew };
+  onProgress?: (checkpointId: string) => void,
+  repoPath?: string,
+): Promise<{ checkpoints: number }> {
+  const result = await indexAllCheckpointsV2(db, rootDir, onProgress, repoPath);
+  return { checkpoints: result.checkpoints };
 }
