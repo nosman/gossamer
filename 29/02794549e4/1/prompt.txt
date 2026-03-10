@@ -1,0 +1,68 @@
+Please work on the following open items:
+- subSessionId is never actually populated in the DB — the AppleScript spawn opens a terminal but doesn't return a session ID to store back on the open items
+
+---
+
+Can we also set the parent id of the spawned subsession?
+
+---
+
+I want to let the user "pin" any prompts, tool calls, or checkpoints they want. Create a join table called PinnedEntity with a column for the entity id, a column for the entity type, a boolean for isActive, and a createAt timestamp.
+
+---
+
+let's add another column to pinnedEntity called folderId. Then, a new table called PinFolder with a string name.
+
+---
+
+Now let's add a route to pin or unpin and entity to a specific folder
+
+---
+
+Great now create a new tab in the app drawer for accessing your pins. Clicking it show take you to a new page where it fetches the entity that the pin links to and displays it according to what entity type it is. Each folder should have a dropdown where you can collapse or expand to show everything pinned there
+
+---
+
+now let's make a way for people to actually pin things. The best way to do this will be like in the slack app, where if you hover over a message, little icons show up like "bookmark" or "share". Add a little star icon for pinning. This should only be visible on hover. When the star is clicked, it should pin the selected entity. Make sure you're saving the appropriate type as well. Let's not worry about the folders yet.
+
+---
+
+It shows up on my messages but it doesn't show up on Claude's replies
+
+---
+
+It should also show up on the nested tool calls in the individual session screen
+
+---
+
+restart the server to pick up the backend changes
+
+---
+
+<task-notification>
+<task-id>bm22alc3p</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bm22alc3p.output</output-file>
+<status>completed</status>
+<summary>Background command "Kill existing server and restart" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bm22alc3p.output
+
+---
+
+<task-notification>
+<task-id>bj902gel7</task-id>
+<tool-use-id>toolu_0113sjC83rAxJkvJiMMA6mwk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bj902gel7.output</output-file>
+<status>completed</status>
+<summary>Background command "Force-kill process on port 3000 and restart server" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bj902gel7.output
+
+---
+
+I got rid of the frontend changes. Instead of an icon on hover, let's pin stuff by adding a context menu. Right-clicking anywhere should bring up the context menu
+
+---
+
+Why doesn't this context menu show up when i click on claude's responses?
