@@ -3,7 +3,7 @@
   "checkpoint_id": "2fd939a0c3ad",
   "strategy": "manual-commit",
   "branch": "PinnedEntities",
-  "checkpoints_count": 9,
+  "checkpoints_count": 11,
   "files_touched": [
     "app/src/renderer/src/App.tsx",
     "app/src/renderer/src/Layout.tsx",
@@ -23,13 +23,19 @@
       "transcript": "/2f/d939a0c3ad/1/full.jsonl",
       "content_hash": "/2f/d939a0c3ad/1/content_hash.txt",
       "prompt": "/2f/d939a0c3ad/1/prompt.txt"
+    },
+    {
+      "metadata": "/2f/d939a0c3ad/2/metadata.json",
+      "transcript": "/2f/d939a0c3ad/2/full.jsonl",
+      "content_hash": "/2f/d939a0c3ad/2/content_hash.txt",
+      "prompt": "/2f/d939a0c3ad/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 90,
-    "cache_creation_tokens": 133537,
-    "cache_read_tokens": 4430382,
-    "output_tokens": 39513,
-    "api_call_count": 70
+    "input_tokens": 102,
+    "cache_creation_tokens": 155398,
+    "cache_read_tokens": 5310217,
+    "output_tokens": 56650,
+    "api_call_count": 78
   }
 }
