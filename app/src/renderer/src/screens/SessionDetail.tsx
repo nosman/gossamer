@@ -6,6 +6,7 @@ import {
   fetchSession,
   fetchSessionEvents,
   fetchSessionCheckpoints,
+  fetchCheckpointDiff,
   spawnSession,
   updateOpenItemStatus,
   type Session,
@@ -17,6 +18,7 @@ import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
 import { TimeAgo } from "../components/TimeAgo";
+import { CommitFileTree } from "../components/CommitFileTree";
 import claudeLogo from "../assets/claude-logo.png";
 
 type DisplayItem =
@@ -268,6 +270,7 @@ export function SessionDetail() {
   const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
+  const [commitDiff, setCommitDiff] = useState<string | null>(null);
   const [spawning, setSpawning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -300,6 +303,9 @@ export function SessionDetail() {
         const latest = sortedCps[sortedCps.length - 1] ?? null;
         setLatestCheckpoint(latest);
         setOpenItems(latest?.summary?.openItems ?? []);
+        if (latest) {
+          fetchCheckpointDiff(latest.checkpointId).then(setCommitDiff).catch(() => undefined);
+        }
 
         for (const item of grouped) {
           const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
@@ -442,6 +448,11 @@ export function SessionDetail() {
                   </Tooltip>
                 </Group>
               )}
+            </Box>
+          )}
+          {commitDiff && (
+            <Box mt={openItems.length > 0 ? 16 : 0}>
+              <CommitFileTree rawDiff={commitDiff} />
             </Box>
           )}
         </Box>

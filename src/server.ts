@@ -524,6 +524,24 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // GET /api/v2/checkpoints/:id/diff
+  app.get("/api/v2/checkpoints/:id/diff", async (req, res) => {
+    try {
+      const mapping = await db.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId: req.params.id },
+      });
+      if (!mapping) { res.status(404).json({ error: "No git commit found for this checkpoint" }); return; }
+      if (!repoDir) { res.status(503).json({ error: "No repo directory configured" }); return; }
+      const diff = execSync(
+        `git -C ${JSON.stringify(repoDir)} show --no-color ${mapping.gitOid}`,
+        { maxBuffer: 10 * 1024 * 1024 },
+      ).toString();
+      res.type("text/plain").send(diff);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // GET /api/v2/sessions/:id/checkpoints
   app.get("/api/v2/sessions/:id/checkpoints", async (req, res) => {
     try {

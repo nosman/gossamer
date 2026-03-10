@@ -146,6 +146,13 @@ export interface SessionCheckpoint {
   summary: CheckpointSummary | null;
 }
 
+export async function fetchCheckpointDiff(checkpointId: string): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.text();
+}
+
 export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckpoint[]> {
   const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/checkpoints`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
