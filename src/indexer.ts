@@ -117,20 +117,24 @@ async function saveGitOidMapping(
   checkpointId: string,
   branch: string | null | undefined,
   repoPath: string,
+  existingMappings?: Map<string, string>,
 ): Promise<void> {
   if (!branch) return;
-  const existing = await db.checkpointIdGitOidJoin.findFirst({
-    where: { checkpointId },
-    select: { gitOid: true },
-  });
-  if (existing) return;
   try {
     const commit = await findCommitForCheckpoint(repoPath, branch, checkpointId);
-    if (commit) {
-      await db.checkpointIdGitOidJoin.create({
-        data: { gitOid: commit.hash, checkpointId },
-      });
+    if (!commit) return;
+    const existingOid = existingMappings?.get(checkpointId);
+    if (existingOid === commit.hash) return; // exact (checkpointId, gitOid) pair already recorded
+    // OID is new or changed (e.g. after rebase) — replace old entry if present
+    if (existingOid) {
+      await db.checkpointIdGitOidJoin.delete({ where: { gitOid: existingOid } }).catch(() => {});
     }
+    await db.checkpointIdGitOidJoin.upsert({
+      where: { gitOid: commit.hash },
+      create: { gitOid: commit.hash, checkpointId },
+      update: { checkpointId },
+    });
+    existingMappings?.set(checkpointId, commit.hash);
   } catch {
     // non-fatal — git may not be available or branch may not exist
   }
@@ -183,6 +187,7 @@ export async function indexCheckpointV2(
   checkpointDir: string,
   checkpointId: string,
   repoPath?: string,
+  mappedCheckpointIds?: Set<string>,
 ): Promise<void> {
   const metaPath = join(checkpointDir, "metadata.json");
   if (!existsSync(metaPath)) throw new Error(`No metadata.json at ${checkpointDir}`);
@@ -453,7 +458,7 @@ export async function indexCheckpointV2(
     }
   }
 
-  if (repoPath) {
+  if (repoPath && !mappedCheckpointIds?.has(checkpointId)) {
     await saveGitOidMapping(db, checkpointId, meta.branch, repoPath);
   }
 }
@@ -468,6 +473,14 @@ export async function indexAllCheckpointsV2(
 ): Promise<{ checkpoints: number }> {
   let totalCheckpoints = 0;
 
+  // Pre-fetch all checkpoint IDs that already have a git OID mapping so we
+  // can skip the per-checkpoint DB read inside saveGitOidMapping.
+  let mappedCheckpointIds: Set<string> | undefined;
+  if (repoPath) {
+    const rows = await db.checkpointIdGitOidJoin.findMany({ select: { checkpointId: true } });
+    mappedCheckpointIds = new Set(rows.map((r) => r.checkpointId));
+  }
+
   const shards = readdirSync(rootDir)
     .filter((e) => /^[0-9a-f]{2}$/i.test(e) && statSync(join(rootDir, e)).isDirectory());
 
@@ -480,7 +493,8 @@ export async function indexAllCheckpointsV2(
       const checkpointId  = shard + rest;
       const checkpointDir = join(shardPath, rest);
       try {
-        await indexCheckpointV2(db, checkpointDir, checkpointId, repoPath);
+        await indexCheckpointV2(db, checkpointDir, checkpointId, repoPath, mappedCheckpointIds);
+        mappedCheckpointIds?.add(checkpointId); // keep set current for this pass
         totalCheckpoints++;
         onProgress?.(checkpointId);
       } catch (err) {
