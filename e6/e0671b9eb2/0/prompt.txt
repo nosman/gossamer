@@ -1,0 +1,2 @@
+Please work on the following open items:
+- The `saveGitOidMapping` call now runs on every index pass for every checkpoint; a more targeted approach (e.g., only for checkpoints missing a mapping) could reduce unnecessary DB reads at scale.
