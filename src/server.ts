@@ -581,6 +581,154 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // GET /api/pins — all folders + unfoldered pins with resolved entity data
+  app.get("/api/pins", async (_req, res) => {
+    try {
+      const [folders, unfolderedPins] = await Promise.all([
+        db.pinFolder.findMany({
+          include: { pins: { orderBy: { createdAt: "desc" as const } } },
+        }),
+        db.pinnedEntity.findMany({
+          where: { folderId: null },
+          orderBy: { createdAt: "desc" as const },
+        }),
+      ]);
+
+      const allPins = [...folders.flatMap((f) => f.pins), ...unfolderedPins];
+      const eventIds = allPins
+        .filter((p) => p.entityType === "event")
+        .map((p) => parseInt(p.entityId, 10))
+        .filter((n) => Number.isFinite(n));
+      const toolCallUuids = allPins
+        .filter((p) => p.entityType === "tool_call")
+        .map((p) => p.entityId);
+      const checkpointIds = allPins
+        .filter((p) => p.entityType === "checkpoint")
+        .map((p) => p.entityId);
+
+      const [events, toolCalls, checkpointSessions] = await Promise.all([
+        eventIds.length
+          ? db.event.findMany({ where: { id: { in: eventIds } } })
+          : Promise.resolve([]),
+        toolCallUuids.length
+          ? db.checkpointMessage.findMany({ where: { uuid: { in: toolCallUuids } } })
+          : Promise.resolve([]),
+        checkpointIds.length
+          ? db.checkpointSessionMetadata.findMany({
+              where: { checkpointId: { in: checkpointIds } },
+              include: V2_SESSION_INCLUDE,
+              orderBy: V2_SESSION_ORDER,
+            })
+          : Promise.resolve([]),
+      ]);
+
+      const eventMap = new Map(events.map((e) => [String(e.id), e]));
+      const toolCallMap = new Map(toolCalls.map((t) => [t.uuid, t]));
+      // Prefer sessions that have a summary; first-seen otherwise
+      const checkpointMap = new Map<string, (typeof checkpointSessions)[0]>();
+      for (const s of checkpointSessions) {
+        if (!checkpointMap.has(s.checkpointId) || s.summary) {
+          checkpointMap.set(s.checkpointId, s);
+        }
+      }
+
+      function resolveEntity(pin: { entityId: string; entityType: string }) {
+        if (pin.entityType === "event") {
+          const e = eventMap.get(pin.entityId);
+          return e ? mapEvent(e) : null;
+        }
+        if (pin.entityType === "tool_call") {
+          const t = toolCallMap.get(pin.entityId);
+          if (!t) return null;
+          let parsedData: unknown;
+          try { parsedData = JSON.parse(t.data as string); } catch { parsedData = t.data; }
+          return {
+            uuid: t.uuid,
+            sessionId: t.sessionId,
+            type: t.type,
+            timestamp: t.timestamp?.toISOString() ?? null,
+            toolUseId: t.toolUseId,
+            data: parsedData,
+          };
+        }
+        if (pin.entityType === "checkpoint") {
+          const c = checkpointMap.get(pin.entityId);
+          if (!c) return null;
+          return {
+            checkpointId: c.checkpointId,
+            sessionId: c.sessionId,
+            branch: c.branch,
+            createdAt: c.createdAt?.toISOString() ?? null,
+            summary: c.summary ? mapV2Summary(c.summary) : null,
+          };
+        }
+        return null;
+      }
+
+      type RawPin = { id: number; entityId: string; entityType: string; isActive: boolean; createdAt: Date; folderId: number | null };
+      const mapPin = (pin: RawPin) => ({
+        id: pin.id,
+        entityId: pin.entityId,
+        entityType: pin.entityType,
+        isActive: pin.isActive,
+        createdAt: pin.createdAt.toISOString(),
+        folderId: pin.folderId,
+        entity: resolveEntity(pin),
+      });
+
+      res.json({
+        folders: folders.map((f) => ({
+          id: f.id,
+          name: f.name,
+          pins: f.pins.map(mapPin),
+        })),
+        unfoldered: unfolderedPins.map(mapPin),
+      });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // PUT /api/pins/:entityType/:entityId
+  // Pin or unpin an entity. Body: { folderId?: number | null, isActive?: boolean }
+  // Creates the pin if it doesn't exist, updates it if it does.
+  app.put("/api/pins/:entityType/:entityId", async (req, res) => {
+    const { entityType, entityId } = req.params;
+    const { folderId, isActive } = req.body as { folderId?: number | null; isActive?: boolean };
+    try {
+      const pin = await db.pinnedEntity.upsert({
+        where: { entityId_entityType: { entityId, entityType } },
+        create: {
+          entityId,
+          entityType,
+          isActive: isActive ?? true,
+          ...(folderId != null ? { folderId } : {}),
+        },
+        update: {
+          ...(isActive !== undefined ? { isActive } : {}),
+          ...(folderId !== undefined ? { folderId } : {}),
+        },
+        include: { folder: true },
+      });
+      res.json(pin);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // DELETE /api/pins/:entityType/:entityId — remove a pin entirely
+  app.delete("/api/pins/:entityType/:entityId", async (req, res) => {
+    const { entityType, entityId } = req.params;
+    try {
+      await db.pinnedEntity.delete({
+        where: { entityId_entityType: { entityId, entityType } },
+      });
+      res.status(204).send();
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // POST /api/sessions/spawn
   app.post("/api/sessions/spawn", async (req, res) => {
     const { prompt, cwd, openItemIds, parentSessionId } = req.body as { prompt?: string; cwd?: string; openItemIds?: number[]; parentSessionId?: string };

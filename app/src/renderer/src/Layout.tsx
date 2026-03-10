@@ -12,15 +12,17 @@ const NAV_ITEMS = [
   { label: "Session Tree", path: "/session-tree",         sym: "⬡"  },
   { label: "Checkpoints",  path: "/checkpoints",          sym: "⬛" },
   { label: "Timeline",     path: "/checkpoints/timeline", sym: "◎"  },
+  { label: "Pins",         path: "/pins",                 sym: "◈"  },
 ] as const;
 
-const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline"]);
+const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline", "/pins"]);
 
 function getActiveNav(pathname: string): string {
   if (pathname === "/" || pathname.startsWith("/sessions/")) return "/";
   if (pathname === "/session-tree") return "/session-tree";
   if (pathname === "/checkpoints/timeline") return "/checkpoints/timeline";
   if (pathname.startsWith("/checkpoints")) return "/checkpoints";
+  if (pathname === "/pins") return "/pins";
   return "";
 }
 

@@ -218,6 +218,26 @@ model WorkflowItem {
 }
 
 
+model PinFolder {
+  id        Int            @id @default(autoincrement())
+  name      String
+  pins      PinnedEntity[]
+}
+
+model PinnedEntity {
+  id         Int       @id @default(autoincrement())
+  entityId   String
+  entityType String    // "event" | "tool_call" | "checkpoint"
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  folderId   Int?
+  folder     PinFolder? @relation(fields: [folderId], references: [id])
+
+  @@unique([entityId, entityType])
+  @@index([entityType, isActive])
+  @@index([folderId])
+}
+
 model CheckpointIdGitOidJoin {
   gitOid       String @id
   checkpointId String

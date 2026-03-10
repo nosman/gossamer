@@ -165,6 +165,77 @@ export async function updateOpenItemStatus(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export interface PinnedEntityEvent {
+  id: number;
+  timestamp: string;
+  event: string;
+  sessionId: string;
+  blocked: boolean;
+  data: unknown;
+  summary: string | null;
+  keywords: string[];
+}
+
+export interface PinnedEntityToolCall {
+  uuid: string;
+  sessionId: string;
+  type: string;
+  timestamp: string | null;
+  toolUseId: string | null;
+  data: unknown;
+}
+
+export interface PinnedEntityCheckpoint {
+  checkpointId: string;
+  sessionId: string;
+  branch: string | null;
+  createdAt: string | null;
+  summary: CheckpointSummary | null;
+}
+
+export interface PinnedEntity {
+  id: number;
+  entityId: string;
+  entityType: "event" | "tool_call" | "checkpoint";
+  isActive: boolean;
+  createdAt: string;
+  folderId: number | null;
+  entity: PinnedEntityEvent | PinnedEntityToolCall | PinnedEntityCheckpoint | null;
+}
+
+export interface PinFolder {
+  id: number;
+  name: string;
+  pins: PinnedEntity[];
+}
+
+export interface PinsResponse {
+  folders: PinFolder[];
+  unfoldered: PinnedEntity[];
+}
+
+export async function fetchPins(): Promise<PinsResponse> {
+  const res = await fetch(`${API_BASE}/pins`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<PinsResponse>;
+}
+
+export async function pinEntity(entityType: string, entityId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/pins/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ isActive: true }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function unpinEntity(entityType: string, entityId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/pins/${encodeURIComponent(entityType)}/${encodeURIComponent(entityId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[], parentSessionId?: string): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/spawn`, {
     method: "POST",
