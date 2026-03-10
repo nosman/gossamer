@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Box, Badge, Group, Text, Collapse, Code } from "@mantine/core";
 import type { Event } from "../api";
 import { relativeTime } from "./TimeAgo";
+import { usePinContextMenu } from "./usePinContextMenu";
 
 interface Props {
   pre: Event;
@@ -89,6 +90,7 @@ function renderInput(toolName: string, inp: Record<string, unknown>): React.Reac
 
 export function ToolUseItem({ pre, post, failed }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const { onContextMenu, menuElement } = usePinContextMenu("event", String(pre.id));
   const preData = pre.data as Record<string, unknown>;
   const toolName = typeof preData.tool_name === "string" ? preData.tool_name : "?";
   const hint = toolHint(toolName, pre.data);
@@ -105,7 +107,8 @@ export function ToolUseItem({ pre, post, failed }: Props) {
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))", cursor: "pointer" }}>
+    <Box onClick={() => setExpanded((v) => !v)} onContextMenu={onContextMenu} style={{ padding: "5px 12px", borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))", cursor: "pointer" }}>
+      {menuElement}
       <Group gap={6}>
         <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
         <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>

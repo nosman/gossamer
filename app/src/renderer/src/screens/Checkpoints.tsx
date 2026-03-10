@@ -5,8 +5,10 @@ import {
 } from "@mantine/core";
 import { fetchCheckpoints, subscribeToUpdates, type Checkpoint } from "../api";
 import { TimeAgo } from "../components/TimeAgo";
+import { usePinContextMenu } from "../components/usePinContextMenu";
 
 function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPress: () => void }) {
+  const { onContextMenu, menuElement } = usePinContextMenu("checkpoint", checkpoint.checkpointId);
   const title = checkpoint.summary?.intent ?? checkpoint.checkpointId;
   const shortId = checkpoint.checkpointId.slice(0, 12);
   const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
@@ -18,9 +20,11 @@ function CheckpointCard({ checkpoint, onPress }: { checkpoint: Checkpoint; onPre
   return (
     <UnstyledButton
       onClick={onPress}
+      onContextMenu={onContextMenu}
       style={{ width: "100%", display: "block", padding: "16px 20px", borderBottom: "1px solid var(--mantine-color-dark-4)" }}
       styles={{ root: { "&:hover": { backgroundColor: "var(--mantine-color-dark-5)" } } }}
     >
+      {menuElement}
       <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xl">
         <Box style={{ flex: 1, minWidth: 0 }}>
           <Text fw={600} size="sm" mb={6} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

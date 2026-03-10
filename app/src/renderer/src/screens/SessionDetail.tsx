@@ -17,6 +17,7 @@ import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
 import { TimeAgo } from "../components/TimeAgo";
+import { usePinContextMenu } from "../components/usePinContextMenu";
 import claudeLogo from "../assets/claude-logo.png";
 
 type DisplayItem =
@@ -68,9 +69,11 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
   const reason = str(d.reason);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
+  const { onContextMenu, menuElement } = usePinContextMenu("event", stop ? String(stop.id) : "");
 
   return (
-    <Box style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
+    <Box onContextMenu={stop ? onContextMenu : undefined} style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
+      {menuElement}
       <img src={claudeLogo} alt="Claude" style={{ width: 28, height: 28, borderRadius: "50%", flexShrink: 0, marginTop: 2 }} />
       <Box style={{ flex: 1, minWidth: 0 }}>
         <Group gap={8} mb={6} align="center">

@@ -3,6 +3,7 @@ import { Box, Badge, Group, Text, Collapse, Avatar } from "@mantine/core";
 import type { Event } from "../api";
 import { MarkdownView } from "./MarkdownView";
 import { TimeAgo } from "./TimeAgo";
+import { usePinContextMenu } from "./usePinContextMenu";
 
 export interface UserInfo {
   name: string;
@@ -182,9 +183,19 @@ function CompactRow({ event }: { event: Event }) {
 // ── Export ────────────────────────────────────────────────────────────────────
 
 export function EventItem({ event, user }: { event: Event; user?: UserInfo }) {
-  if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} />;
-  if (event.event === "Stop") return <AssistantCard event={event} />;
-  if (event.event === "Notification") return <NotificationRow event={event} />;
-  if (event.event === "SessionStart" || event.event === "SessionEnd") return <SessionEventRow event={event} />;
-  return <CompactRow event={event} />;
+  const { onContextMenu, menuElement } = usePinContextMenu("event", String(event.id));
+
+  let inner: React.ReactNode;
+  if (event.event === "UserPromptSubmit") inner = <UserPromptCard event={event} user={user} />;
+  else if (event.event === "Stop") inner = <AssistantCard event={event} />;
+  else if (event.event === "Notification") inner = <NotificationRow event={event} />;
+  else if (event.event === "SessionStart" || event.event === "SessionEnd") inner = <SessionEventRow event={event} />;
+  else inner = <CompactRow event={event} />;
+
+  return (
+    <Box onContextMenu={onContextMenu}>
+      {inner}
+      {menuElement}
+    </Box>
+  );
 }

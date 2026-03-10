@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Box, Group, Text, Badge, Code, Collapse } from "@mantine/core";
 import type { CheckpointMessage } from "../api";
 import { MarkdownView } from "./MarkdownView";
+import { usePinContextMenu } from "./usePinContextMenu";
 
 interface TextBlock    { type: "text";        text: string }
 interface ToolUseBlock  { type: "tool_use";   id: string; name: string; input: unknown }
@@ -69,14 +70,17 @@ function UserCard({ msg }: { msg: CheckpointMessage }) {
   if (!text.trim()) return null;
 
   const [expanded, setExpanded] = useState(false);
+  const { onContextMenu, menuElement } = usePinContextMenu("tool_call", msg.uuid);
   const preview = text.slice(0, 120).replace(/\n+/g, " ");
   const hasMore = text.length > 120;
 
   return (
     <Box
       onClick={hasMore ? () => setExpanded((v) => !v) : undefined}
+      onContextMenu={onContextMenu}
       style={{ borderLeft: "4px solid var(--mantine-color-indigo-5)", backgroundColor: "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-6))", padding: "8px 12px", cursor: hasMore ? "pointer" : "default" }}
     >
+      {menuElement}
       <Group gap={8} mb={2}>
         <Text size="xs" fw={700} c="indigo" tt="uppercase" style={{ letterSpacing: 0.5, flexShrink: 0 }}>→ User</Text>
         <Text size="xs" fw={600} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{preview}</Text>
@@ -100,9 +104,11 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
   const preview = fullText.slice(0, 120).replace(/\n+/g, " ");
   const hasMore = fullText.length > 120;
   const [expanded, setExpanded] = useState(false);
+  const { onContextMenu, menuElement } = usePinContextMenu("tool_call", msg.uuid);
 
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))", padding: "8px 12px" }}>
+    <Box onContextMenu={onContextMenu} style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))", padding: "8px 12px" }}>
+      {menuElement}
       <Group
         gap={8}
         mb={2}
