@@ -428,7 +428,7 @@ export function SessionDetail() {
                         const prompt = `Please work on the following open items:\n${lines}`;
                         setSpawning(true);
                         try {
-                          await spawnSession(prompt, session.cwd, selected.map((it) => it.id));
+                          await spawnSession(prompt, session.cwd, selected.map((it) => it.id), session.sessionId);
                           const selectedIds = new Set(selected.map((it) => it.id));
                           setOpenItems((prev) => prev.map((it) => selectedIds.has(it.id) ? { ...it, status: "in_progress" as const } : it));
                           setSelectedItems(new Set());

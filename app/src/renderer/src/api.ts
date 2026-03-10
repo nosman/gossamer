@@ -165,11 +165,11 @@ export async function updateOpenItemStatus(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
-export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[]): Promise<void> {
+export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[], parentSessionId?: string): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/spawn`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, cwd, openItemIds }),
+    body: JSON.stringify({ prompt, cwd, openItemIds, parentSessionId }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }

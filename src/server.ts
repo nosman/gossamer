@@ -583,7 +583,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // POST /api/sessions/spawn
   app.post("/api/sessions/spawn", async (req, res) => {
-    const { prompt, cwd, openItemIds } = req.body as { prompt?: string; cwd?: string; openItemIds?: number[] };
+    const { prompt, cwd, openItemIds, parentSessionId } = req.body as { prompt?: string; cwd?: string; openItemIds?: number[]; parentSessionId?: string };
     if (!prompt || typeof prompt !== "string") {
       res.status(400).json({ error: "prompt is required" });
       return;
@@ -591,10 +591,11 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     try {
       const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
       const safePrompt = prompt.replace(/'/g, "'\\''").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-      // Pass open item IDs so the SessionStart hook can link the new session back
-      const envPrefix = openItemIds?.length
-        ? `GOSSAMER_SPAWN_OPEN_ITEMS='${openItemIds.join(",")}' `
-        : "";
+      // Pass open item IDs and parent session so the SessionStart hook can link back
+      const envParts: string[] = [];
+      if (openItemIds?.length) envParts.push(`GOSSAMER_SPAWN_OPEN_ITEMS='${openItemIds.join(",")}'`);
+      if (parentSessionId) envParts.push(`GOSSAMER_SPAWN_PARENT_SESSION='${parentSessionId.replace(/'/g, "")}'`);
+      const envPrefix = envParts.length ? envParts.join(" ") + " " : "";
       // Use AppleScript to open a new Terminal window running claude interactively
       const script = [
         `tell application "Terminal"`,

@@ -1380,17 +1380,24 @@ async function main(): Promise<void> {
           // Auto-link plan→implementation sessions: a SessionStart that fires within
           // 30 s of a SessionEnd in the same cwd is treated as a continuation.
           if (input.hook_event_name === "SessionStart" && !state.agentParents[input.session_id]) {
-            const recentEnd = await db.event.findFirst({
-              where: { event: "SessionEnd", timestamp: { gte: new Date(Date.now() - 30_000) } },
-              orderBy: { timestamp: "desc" },
-            });
-            if (recentEnd) {
-              const prev = await db.session.findUnique({
-                where: { sessionId: recentEnd.sessionId },
-                select: { cwd: true },
+            // Explicit parent passed via spawn env var takes priority
+            const spawnParent = process.env.GOSSAMER_SPAWN_PARENT_SESSION;
+            if (spawnParent) {
+              state.agentParents[input.session_id] = spawnParent;
+            } else {
+              // Fall back to auto-linking: a SessionStart within 30s of a SessionEnd in same cwd
+              const recentEnd = await db.event.findFirst({
+                where: { event: "SessionEnd", timestamp: { gte: new Date(Date.now() - 30_000) } },
+                orderBy: { timestamp: "desc" },
               });
-              if (prev?.cwd === input.cwd) {
-                state.agentParents[input.session_id] = recentEnd.sessionId;
+              if (recentEnd) {
+                const prev = await db.session.findUnique({
+                  where: { sessionId: recentEnd.sessionId },
+                  select: { cwd: true },
+                });
+                if (prev?.cwd === input.cwd) {
+                  state.agentParents[input.session_id] = recentEnd.sessionId;
+                }
               }
             }
           }
