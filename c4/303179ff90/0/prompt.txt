@@ -1,0 +1,6 @@
+Please work on the following open items:
+- The `saveGitOidMapping` call now runs on every index pass for every checkpoint; a more targeted approach (e.g., only for checkpoints missing a mapping) could reduce unnecessary DB reads at scale.
+
+---
+
+We should fetch by both checkpoint id and git hashid together. After all, if i rebase a branch i can manually change the mapping between git commit and checkpoint id. Therefore, the same checkpointid might be mapped to a new oid.

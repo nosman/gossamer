@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "c4303179ff90",
+  "session_id": "189ffe14-37bb-42e4-9061-1185568b10bd",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-11T02:45:02.983511Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "082d4973a0bb",
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 34447,
+    "cache_read_tokens": 246694,
+    "output_tokens": 6480,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Optimize `saveGitOidMapping` to avoid redundant DB reads on every index pass for every checkpoint by pre-fetching already-mapped checkpoints once.",
+    "outcome": "Refactored to pre-fetch a Map\u003ccheckpointId, gitOid\u003e once before the loop, then skip or upsert based on exact (checkpointId, gitOid) pair matching to correctly handle rebased branches where the same checkpointId may map to a new OID.",
+    "learnings": {
+      "repo": [
+        "The `gitOid` field is `@id` in the Prisma schema, meaning mappings are keyed by OID, not checkpointId — a checkpointId can be remapped to a new OID after a rebase.",
+        "`indexAllCheckpointsV2` iterates all checkpoints and calls `indexCheckpointV2` per checkpoint; this is the hot path where N+1 DB queries were occurring.",
+        "The correct deduplication key for git-checkpoint mappings is the (checkpointId, gitOid) pair, not checkpointId alone."
+      ],
+      "code": [
+        {
+          "path": "src/indexer.ts",
+          "finding": "`saveGitOidMapping` previously did a `findFirst` DB read per checkpoint; now skips if the (checkpointId, gitOid) pair already exists in the pre-fetched map, upserts if the OID changed."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "`indexCheckpointV2` accepts an optional `mappedCheckpointIds` parameter (changed to a Map\u003cstring, string\u003e) passed from `indexAllCheckpointsV2`."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "`indexAllCheckpointsV2` now does a single `findMany` upfront to populate Map\u003ccheckpointId, gitOid\u003e before the checkpoint loop."
+        }
+      ],
+      "workflow": [
+        "Build verification via `npm run build` was used after each refactor to catch TypeScript errors early.",
+        "User caught a correctness gap mid-session (rebase invalidates checkpointId-only deduplication), requiring a second design revision before the session ended."
+      ]
+    },
+    "friction": [
+      "Initial optimization used a Set\u003ccheckpointId\u003e which was logically incorrect — rebase scenarios require tracking the full (checkpointId, gitOid) pair, requiring a rework of the approach."
+    ],
+    "open_items": [
+      "The in-memory Map is updated after a successful mapping creation within a pass, but it's unclear if `saveGitOidMapping` now correctly upserts when the OID changes (transcript ends before build verification of the second edit).",
+      "Consider whether the pre-fetched Map should be invalidated or refreshed across multiple index passes if the indexer runs continuously."
+    ]
+  }
+}
