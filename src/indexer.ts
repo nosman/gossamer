@@ -253,20 +253,42 @@ export async function indexCheckpointV2(
     // Read actual hash content (not the file path)
     const contentHash = existsSync(hashFile) ? readFileSync(hashFile, "utf8").trim() : null;
 
-    const sessionLink = await db.sessionLink.create({
-      data: {
-        checkpointMetadataId: checkpointMeta.id,
-        metadata:   existsSync(metadataFile)   ? metadataFile   : null,
-        transcript: existsSync(transcriptFile) ? transcriptFile : null,
-        context:    existsSync(contextFile)    ? contextFile    : null,
-        contentHash,
-        prompt:     existsSync(promptFile)     ? promptFile     : null,
-      },
-      select: { id: true },
-    });
+    // Look up an existing SessionLink for this transcript path.
+    const transcriptVal = existsSync(transcriptFile) ? transcriptFile : null;
+    const existing = transcriptVal
+      ? await db.sessionLink.findFirst({
+          where: { checkpointMetadataId: checkpointMeta.id, transcript: transcriptVal },
+          select: { id: true, contentHash: true },
+        })
+      : null;
 
-    if (existsSync(transcriptFile)) {
-      await indexFullJsonl(db, transcriptFile, sessionLink.id);
+    // If the content hash hasn't changed, this session is fully indexed — skip it.
+    if (existing && contentHash && existing.contentHash === contentHash) continue;
+
+    let sessionLink: { id: number };
+    if (existing) {
+      // Hash changed (JSONL grew) — update the stored hash and re-index.
+      sessionLink = await db.sessionLink.update({
+        where: { id: existing.id },
+        data: { contentHash },
+        select: { id: true },
+      });
+    } else {
+      sessionLink = await db.sessionLink.create({
+        data: {
+          checkpointMetadataId: checkpointMeta.id,
+          metadata:   existsSync(metadataFile)   ? metadataFile   : null,
+          transcript: transcriptVal,
+          context:    existsSync(contextFile)    ? contextFile    : null,
+          contentHash,
+          prompt:     existsSync(promptFile)     ? promptFile     : null,
+        },
+        select: { id: true },
+      });
+    }
+
+    if (transcriptVal) {
+      await indexFullJsonl(db, transcriptVal, sessionLink.id);
     }
 
     if (!existsSync(metadataFile)) continue;

@@ -759,8 +759,15 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
       try {
-        // Pull latest commits into the worktree working tree
-        execSync(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard HEAD`, { stdio: "pipe" });
+        // Fetch latest commits and advance the worktree to the branch tip
+        execSync(
+          `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
+          { stdio: "pipe" },
+        );
+        execSync(
+          `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard FETCH_HEAD`,
+          { stdio: "pipe" },
+        );
       } catch { /* non-fatal */ }
       try {
         const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
