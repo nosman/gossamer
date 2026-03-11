@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton, Avatar } from "@mantine/core";
+import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton, Avatar, Chip } from "@mantine/core";
 import { fetchSearch, type SearchResult } from "../api";
 import { TimeAgo } from "../components/TimeAgo";
 import claudeLogo from "../assets/claude-logo.png";
@@ -37,7 +37,7 @@ const CONTENT_LABEL: Record<string, string> = {
 
 function ResultCard({ r, onClick }: { r: SearchResult; onClick: () => void }) {
   const isHuman = r.logEventType === "user" && r.contentType !== "tool_result";
-  const isClaude = r.logEventType === "assistant" || r.contentType === "thinking";
+  const isClaude = r.logEventType === "assistant" || r.contentType === "thinking" || r.contentType === "tool_result";
 
   const displayName = r.gitUserName ?? r.gitUserEmail ?? "You";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
@@ -108,6 +108,14 @@ function ResultCard({ r, onClick }: { r: SearchResult; onClick: () => void }) {
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
+const TYPE_FILTERS: { value: string; label: string; contentType: string | null }[] = [
+  { value: "all",         label: "All",         contentType: null          },
+  { value: "message",     label: "Message",     contentType: "text"        },
+  { value: "tool_call",   label: "Tool call",   contentType: "tool_use"    },
+  { value: "tool_result", label: "Tool result", contentType: "tool_result" },
+  { value: "thinking",    label: "Thinking",    contentType: "thinking"    },
+];
+
 export function Search() {
   const navigate = useNavigate();
   const [params] = useSearchParams();
@@ -116,6 +124,7 @@ export function Search() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [typeFilter, setTypeFilter] = useState("all");
 
   useEffect(() => {
     if (!query) { setResults([]); return; }
@@ -133,20 +142,35 @@ export function Search() {
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   if (error)   return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
+  const activeFilter = TYPE_FILTERS.find((f) => f.value === typeFilter)!;
+  const filtered = activeFilter.contentType
+    ? results.filter((r) => r.contentType === activeFilter.contentType)
+    : results;
+
   return (
     <ScrollArea style={{ flex: 1 }}>
       <Box style={{ maxWidth: 860, margin: "0 auto", padding: "16px 20px 40px" }}>
-        <Group mb={16} gap={8} align="center">
+        <Group mb={12} gap={8} align="center">
           <Text size="sm" fw={600}>Results for</Text>
           <Text size="sm" fw={700} c="indigo" ff="monospace">"{query}"</Text>
-          <Text size="sm" c="dimmed">— {results.length} match{results.length !== 1 ? "es" : ""}</Text>
+          <Text size="sm" c="dimmed">— {filtered.length} match{filtered.length !== 1 ? "es" : ""}</Text>
         </Group>
 
-        {results.length === 0 ? (
+        <Chip.Group value={typeFilter} onChange={(v) => setTypeFilter(v as string)}>
+          <Group gap={6} mb={16}>
+            {TYPE_FILTERS.map((f) => (
+              <Chip key={f.value} value={f.value} size="xs" variant="light" color="indigo">
+                {f.label}
+              </Chip>
+            ))}
+          </Group>
+        </Chip.Group>
+
+        {filtered.length === 0 ? (
           <Center p="xl"><Text c="dimmed" size="sm">No results found.</Text></Center>
         ) : (
           <Box style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {results.map((r) => (
+            {filtered.map((r) => (
               <ResultCard
                 key={r.logContentId}
                 r={r}

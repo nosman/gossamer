@@ -135,7 +135,8 @@ export async function searchLogContent(
         contentType,
         toolName,
         snippet(LogContentFts, -1, '«', '»', '…', 24)   AS snippet,
-        rank
+        -- Weight text/thinking 10× higher than toolResultContent/toolInput.
+        bm25(LogContentFts, 10, 10, 1, 1)                AS rank
       FROM LogContentFts
       WHERE LogContentFts MATCH ?
       ORDER BY rank
