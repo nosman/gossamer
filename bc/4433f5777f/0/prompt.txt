@@ -1,0 +1,1 @@
+Add a search bar in the top section of the ui. This search bar should take in a search term and call the new endpoint we just made
