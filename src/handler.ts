@@ -1248,15 +1248,13 @@ async function main(): Promise<void> {
     .action(async (opts: { dir: string; db: string }) => {
       const { indexAllCheckpoints } = await import("./indexer.js");
       const db = await getDb(expandHome(opts.db));
-      const { checkpoints, newMessages } = await indexAllCheckpoints(
+      const { checkpoints } = await indexAllCheckpoints(
         db,
         expandHome(opts.dir),
-        (id, n) => {
-          if (n > 0) process.stderr.write(`  ${id}: +${n} messages\n`);
-        },
+        (id) => process.stderr.write(`  ${id}\n`),
       );
       process.stderr.write(
-        `index-checkpoints: done — ${newMessages} new messages across ${checkpoints} checkpoint(s)\n`,
+        `index-checkpoints: done — ${checkpoints} checkpoint(s) indexed\n`,
       );
     });
 
@@ -1382,17 +1380,24 @@ async function main(): Promise<void> {
           // Auto-link plan→implementation sessions: a SessionStart that fires within
           // 30 s of a SessionEnd in the same cwd is treated as a continuation.
           if (input.hook_event_name === "SessionStart" && !state.agentParents[input.session_id]) {
-            const recentEnd = await db.event.findFirst({
-              where: { event: "SessionEnd", timestamp: { gte: new Date(Date.now() - 30_000) } },
-              orderBy: { timestamp: "desc" },
-            });
-            if (recentEnd) {
-              const prev = await db.session.findUnique({
-                where: { sessionId: recentEnd.sessionId },
-                select: { cwd: true },
+            // Explicit parent passed via spawn env var takes priority
+            const spawnParent = process.env.GOSSAMER_SPAWN_PARENT_SESSION;
+            if (spawnParent) {
+              state.agentParents[input.session_id] = spawnParent;
+            } else {
+              // Fall back to auto-linking: a SessionStart within 30s of a SessionEnd in same cwd
+              const recentEnd = await db.event.findFirst({
+                where: { event: "SessionEnd", timestamp: { gte: new Date(Date.now() - 30_000) } },
+                orderBy: { timestamp: "desc" },
               });
-              if (prev?.cwd === input.cwd) {
-                state.agentParents[input.session_id] = recentEnd.sessionId;
+              if (recentEnd) {
+                const prev = await db.session.findUnique({
+                  where: { sessionId: recentEnd.sessionId },
+                  select: { cwd: true },
+                });
+                if (prev?.cwd === input.cwd) {
+                  state.agentParents[input.session_id] = recentEnd.sessionId;
+                }
               }
             }
           }
@@ -1402,6 +1407,20 @@ async function main(): Promise<void> {
 
           // 2. Write to SQLite event log — primary source of truth
           await writeEventLog(db, input, blocked, state);
+
+          // 2b. On SessionStart, link any open items that were passed via env var
+          if (input.hook_event_name === "SessionStart") {
+            const raw = process.env.GOSSAMER_SPAWN_OPEN_ITEMS;
+            if (raw) {
+              const ids = raw.split(",").map(Number).filter((n) => Number.isFinite(n) && n > 0);
+              if (ids.length) {
+                await db.openItem.updateMany({
+                  where: { id: { in: ids } },
+                  data: { subSessionId: input.session_id },
+                });
+              }
+            }
+          }
 
           // 2a. On Stop, generate/update interaction overview (non-fatal)
           if (input.hook_event_name === "Stop") {

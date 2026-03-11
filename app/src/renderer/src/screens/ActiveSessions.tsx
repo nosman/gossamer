@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Center, Loader, Alert, Text, Table, Box } from "@mantine/core";
 import { fetchSessions, subscribeToUpdates, type Session } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
+import { useBreadcrumb } from "../BreadcrumbContext";
 
 const COLUMNS: { label: string; width: number }[] = [
   { label: "Session ID",  width: COL_WIDTHS.sessionId      },
@@ -21,18 +22,30 @@ export function ActiveSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { setCrumbs } = useBreadcrumb();
 
   const load = useCallback(async () => {
     try {
-      setSessions(await fetchSessions());
+      const data = await fetchSessions();
+      setSessions(data);
       setError(null);
+      return data;
     } catch (err) {
       setError(String(err));
+      return [] as Session[];
     }
   }, []);
 
   useEffect(() => {
-    load().finally(() => setLoading(false));
+    load().then((data) => {
+      const first = data[0];
+      const user = first?.gitUserName ?? first?.gitUserEmail ?? null;
+      const repo = first?.repoName ?? null;
+      setCrumbs([
+        ...(user ? [{ label: user }] : []),
+        ...(repo ? [{ label: repo }] : []),
+      ]);
+    }).finally(() => setLoading(false));
     return subscribeToUpdates(() => { load().catch(() => undefined); });
   }, [load]);
 

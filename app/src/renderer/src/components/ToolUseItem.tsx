@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Box, Badge, Group, Text, Collapse, Code } from "@mantine/core";
 import type { Event } from "../api";
+import { relativeTime } from "./TimeAgo";
 
 interface Props {
   pre: Event;
@@ -8,10 +9,6 @@ interface Props {
   failed: boolean;
 }
 
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0") + ":" + String(d.getSeconds()).padStart(2, "0");
-}
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 
 function toolHint(toolName: string, data: unknown): string {
@@ -103,12 +100,12 @@ export function ToolUseItem({ pre, post, failed }: Props) {
     const postData = post.data as Record<string, unknown>;
     outputStr = failed ? truncated(postData.error) : truncated(postData.tool_response);
   }
-  const timeStart = fmt(pre.timestamp);
-  const timeEnd = post ? fmt(post.timestamp) : undefined;
+  const timeStart = relativeTime(pre.timestamp);
+  const timeEnd = post ? relativeTime(post.timestamp) : undefined;
   const showRange = timeEnd && timeEnd !== timeStart;
 
   return (
-    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid var(--mantine-color-gray-1)", cursor: "pointer" }}>
+    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))", cursor: "pointer" }}>
       <Group gap={6}>
         <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
         <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>

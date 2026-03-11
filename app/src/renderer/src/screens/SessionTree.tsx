@@ -52,9 +52,9 @@ function relativeTime(iso: string): string {
 
 function activityColor(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
-  if (diff < 2 * 60 * 1000) return "#22c55e";
-  if (diff < 15 * 60 * 1000) return "#f59e0b";
-  return "#d1d5db";
+  if (diff < 2 * 60 * 1000) return "var(--mantine-color-green-6)";
+  if (diff < 15 * 60 * 1000) return "var(--mantine-color-yellow-6)";
+  return "light-dark(var(--mantine-color-gray-4), var(--mantine-color-dark-3))";
 }
 
 const INDENT = 22;
@@ -76,7 +76,7 @@ function TreeNode({
   return (
     <UnstyledButton
       onClick={onPress}
-      style={{ width: "100%", display: "flex", flexDirection: "row", alignItems: "flex-start", paddingTop: 10, paddingBottom: 10, paddingRight: 16, paddingLeft: 12 + depth * INDENT, borderBottom: "1px solid var(--mantine-color-gray-1)", gap: 8 }}
+      style={{ width: "100%", display: "flex", flexDirection: "row", alignItems: "flex-start", paddingTop: 10, paddingBottom: 10, paddingRight: 16, paddingLeft: 12 + depth * INDENT, borderBottom: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))", gap: 8 }}
     >
       <div
         role="button"

@@ -37,7 +37,7 @@ function ToolUseRow({ block, result }: { block: ToolUseBlock; result?: ToolResul
   })();
 
   return (
-    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "4px 0", borderBottom: "1px solid var(--mantine-color-gray-1)", cursor: "pointer" }}>
+    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "4px 0", borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))", cursor: "pointer" }}>
       <Group gap={6}>
         <Text size="xs" c={result ? "green" : "blue"} fw={700} style={{ width: 14, textAlign: "center" }}>{result ? "✓" : "▶"}</Text>
         <Text size="xs" fw={600} ff="monospace" style={{ flexShrink: 0 }}>{block.name}</Text>
@@ -75,7 +75,7 @@ function UserCard({ msg }: { msg: CheckpointMessage }) {
   return (
     <Box
       onClick={hasMore ? () => setExpanded((v) => !v) : undefined}
-      style={{ borderLeft: "4px solid var(--mantine-color-indigo-5)", backgroundColor: "var(--mantine-color-indigo-0)", padding: "8px 12px", cursor: hasMore ? "pointer" : "default" }}
+      style={{ borderLeft: "4px solid var(--mantine-color-indigo-5)", backgroundColor: "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-6))", padding: "8px 12px", cursor: hasMore ? "pointer" : "default" }}
     >
       <Group gap={8} mb={2}>
         <Text size="xs" fw={700} c="indigo" tt="uppercase" style={{ letterSpacing: 0.5, flexShrink: 0 }}>→ User</Text>
@@ -102,7 +102,7 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "#fff", padding: "8px 12px" }}>
+    <Box style={{ borderLeft: "4px solid var(--mantine-color-orange-4)", backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))", padding: "8px 12px" }}>
       <Group
         gap={8}
         mb={2}
@@ -118,7 +118,7 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
         {fullText && <MarkdownView text={fullText} />}
       </Collapse>
       {toolUses.length > 0 && (
-        <Box mt={4} style={{ borderTop: "1px solid var(--mantine-color-gray-1)" }}>
+        <Box mt={4} style={{ borderTop: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-5))" }}>
           {toolUses.map((tu) => (
             <ToolUseRow key={tu.id} block={tu} result={toolResults.get(tu.id)} />
           ))}
@@ -128,18 +128,19 @@ function AssistantCard({ msg, toolResults }: { msg: CheckpointMessage; toolResul
   );
 }
 
+const COMPACT_COLOR = "light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-4))";
 const TYPE_STYLE: Record<string, { sym: string; color: string }> = {
-  progress: { sym: "◆", color: "#94a3b8" },
-  system:   { sym: "⚙", color: "#94a3b8" },
-  "file-history-snapshot": { sym: "📄", color: "#94a3b8" },
+  progress: { sym: "◆", color: COMPACT_COLOR },
+  system:   { sym: "⚙", color: COMPACT_COLOR },
+  "file-history-snapshot": { sym: "📄", color: COMPACT_COLOR },
 };
 
 function CompactRow({ msg }: { msg: CheckpointMessage }) {
-  const style = TYPE_STYLE[msg.type] ?? { sym: "◆", color: "#64748b" };
+  const style = TYPE_STYLE[msg.type] ?? { sym: "◆", color: COMPACT_COLOR };
   const d = msg.data as Record<string, unknown>;
   const hookEvent = str((d.data as Record<string, unknown> | undefined)?.hookEvent);
   return (
-    <Group gap={6} px={12} py="3px" style={{ borderBottom: "1px solid var(--mantine-color-gray-0)" }}>
+    <Group gap={6} px={12} py="3px" style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6))" }}>
       <Text size="xs" style={{ color: style.color, width: 14, textAlign: "center" }}>{style.sym}</Text>
       <Text size="xs" style={{ color: style.color, flex: 1 }}>{msg.type}{hookEvent ? ` · ${hookEvent}` : ""}</Text>
       <Text size="xs" c="dimmed">{fmt(msg.timestamp)}</Text>

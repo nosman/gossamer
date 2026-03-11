@@ -81,6 +81,7 @@ model SessionLink {
   context              String?
   contentHash          String?
   prompt               String?
+  logEvents            LogEvent[]
 
   @@index([checkpointMetadataId])
 }
@@ -173,7 +174,10 @@ model OpenItem {
   checkpointSessionSummaryId    Int
   checkpointSessionSummary      CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
   text                          String
+  status                        String                    @default("open") // "open" | "in_progress" | "complete" | "na"
+  subSessionId                  String?
 
+  @@unique([checkpointSessionSummaryId, text])
   @@index([checkpointSessionSummaryId])
 }
 
@@ -214,6 +218,104 @@ model WorkflowItem {
   @@index([checkpointSessionMetadataId])
 }
 
+
+model CheckpointIdGitOidJoin {
+  gitOid       String @id
+  checkpointId String
+
+  @@index([checkpointId])
+}
+
+// ─── Full JSONL log tables ─────────────────────────────────────────────────────
+// One row per line in full.jsonl, with normalized sub-tables for content blocks,
+// token usage, progress events, and system events.
+
+model LogEvent {
+  id              Int             @id @default(autoincrement())
+  uuid            String?         @unique  // present on most event types
+  messageId       String?         @unique  // used by file-history-snapshot instead of uuid
+  sessionId       String?
+  parentUuid      String?
+  type            String          // user | assistant | progress | system | file-history-snapshot
+  timestamp       DateTime?
+  cwd             String?
+  gitBranch       String?
+  version         String?
+  slug            String?
+  isSidechain     Boolean?
+  userType        String?
+  toolUseId       String?
+  parentToolUseId String?
+  requestId       String?         // present on assistant events
+  data            String          // full raw JSON of the event line
+  sessionLinkId   Int?
+  sessionLink     SessionLink?    @relation(fields: [sessionLinkId], references: [id])
+  contents        LogContent[]
+  usage           LogUsage?
+  hookProgress    LogHookProgress?
+  systemData      LogSystemEvent?
+
+  @@index([sessionId])
+  @@index([type])
+  @@index([sessionLinkId])
+}
+
+// One row per content block within a user or assistant message.
+model LogContent {
+  id                Int       @id @default(autoincrement())
+  logEventId        Int
+  logEvent          LogEvent  @relation(fields: [logEventId], references: [id])
+  role              String    // user | assistant
+  contentIndex      Int       // 0-based position in the content array
+  contentType       String    // text | thinking | tool_use | tool_result
+  text              String?   // type=text
+  thinking          String?   // type=thinking
+  toolUseId         String?   // type=tool_use (id field) or type=tool_result (tool_use_id field)
+  toolName          String?   // type=tool_use
+  toolInput         String?   // type=tool_use, JSON text of input object
+  toolResultContent String?   // type=tool_result, stringified content
+  isError           Boolean?  // type=tool_result
+
+  @@index([logEventId])
+  @@index([toolUseId])
+}
+
+// Token usage summary for assistant messages.
+model LogUsage {
+  id                       Int      @id @default(autoincrement())
+  logEventId               Int      @unique
+  logEvent                 LogEvent @relation(fields: [logEventId], references: [id])
+  model                    String?
+  stopReason               String?
+  inputTokens              Int      @default(0)
+  cacheCreationInputTokens Int      @default(0)
+  cacheReadInputTokens     Int      @default(0)
+  outputTokens             Int      @default(0)
+}
+
+// The `data` sub-object present on progress events (type=hook_progress).
+model LogHookProgress {
+  id         Int      @id @default(autoincrement())
+  logEventId Int      @unique
+  logEvent   LogEvent @relation(fields: [logEventId], references: [id])
+  type       String?  // e.g. hook_progress
+  hookEvent  String?  // e.g. PreToolUse, PostToolUse
+  hookName   String?  // e.g. PreToolUse:Read
+  command    String?  // shell command that was run
+}
+
+// Extra fields for system events.
+model LogSystemEvent {
+  id                    Int      @id @default(autoincrement())
+  logEventId            Int      @unique
+  logEvent              LogEvent @relation(fields: [logEventId], references: [id])
+  subtype               String?  // e.g. stop_hook_summary, turn_duration
+  hookCount             Int?
+  stopReason            String?
+  preventedContinuation Boolean?
+  level                 String?
+  durationMs            Int?     // present on turn_duration subtype
+}
 
 // ------------------------------------------- OLD
 

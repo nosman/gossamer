@@ -51,7 +51,7 @@ function CodeLearningSections({ items }: { items: Array<{ path: string; finding:
 
 function SummaryCard({ summary }: { summary: CheckpointSummary }) {
   return (
-    <Box style={{ backgroundColor: "var(--mantine-color-teal-0)", borderBottom: "1px solid var(--mantine-color-teal-2)", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
+    <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-teal-2), var(--mantine-color-teal-8))", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
       <Text size="xs" fw={700} c="teal" tt="uppercase" style={{ letterSpacing: 0.6 }}>Summary</Text>
       <Box>
         <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Intent</Text>
@@ -65,7 +65,7 @@ function SummaryCard({ summary }: { summary: CheckpointSummary }) {
       <CodeLearningSections                        items={summary.codeLearnings} />
       <SummarySection label="Workflow learnings"  items={summary.workflowLearnings} />
       <SummarySection label="Friction"            items={summary.friction} />
-      <SummarySection label="Open items"          items={summary.openItems} />
+      <SummarySection label="Open items"          items={summary.openItems.map((it) => it.text)} />
     </Box>
   );
 }
@@ -112,7 +112,7 @@ export function CheckpointDetail() {
 
   return (
     <ScrollArea style={{ flex: 1 }}>
-      <Group gap={6} p="xs" style={{ backgroundColor: "var(--mantine-color-gray-0)", borderBottom: "1px solid var(--mantine-color-gray-3)" }} wrap="wrap">
+      <Group gap={6} p="xs" style={{ backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-5))" }} wrap="wrap">
         {Object.entries(counts).map(([type, count]) => (
           <Badge key={type} variant="light" color="gray" size="sm" ff="monospace">{type} {count}</Badge>
         ))}

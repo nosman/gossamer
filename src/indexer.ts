@@ -17,6 +17,8 @@
 import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import type { PrismaClient } from "../prisma/generated/client/index.js";
+import { findCommitForCheckpoint } from "./gitUtils.js";
+import { setupLogContentFts, syncLogContentFts } from "./search.js";
 
 // ─── Raw shapes from the checkpoint files ─────────────────────────────────────
 
@@ -109,6 +111,36 @@ function eventKey(e: FullJsonlEvent): string | null {
   return e.uuid ?? e.messageId ?? null;
 }
 
+// ─── Git OID mapping helper ───────────────────────────────────────────────────
+
+async function saveGitOidMapping(
+  db: PrismaClient,
+  checkpointId: string,
+  branch: string | null | undefined,
+  repoPath: string,
+  existingMappings?: Map<string, string>,
+): Promise<void> {
+  if (!branch) return;
+  try {
+    const commit = await findCommitForCheckpoint(repoPath, branch, checkpointId);
+    if (!commit) return;
+    const existingOid = existingMappings?.get(checkpointId);
+    if (existingOid === commit.hash) return; // exact (checkpointId, gitOid) pair already recorded
+    // OID is new or changed (e.g. after rebase) — replace old entry if present
+    if (existingOid) {
+      await db.checkpointIdGitOidJoin.delete({ where: { gitOid: existingOid } }).catch(() => {});
+    }
+    await db.checkpointIdGitOidJoin.upsert({
+      where: { gitOid: commit.hash },
+      create: { gitOid: commit.hash, checkpointId },
+      update: { checkpointId },
+    });
+    existingMappings?.set(checkpointId, commit.hash);
+  } catch {
+    // non-fatal — git may not be available or branch may not exist
+  }
+}
+
 // ─── Single-checkpoint indexer ────────────────────────────────────────────────
 
 /**
@@ -117,142 +149,6 @@ function eventKey(e: FullJsonlEvent): string | null {
  *
  * @returns Number of new messages written (already-indexed events are skipped).
  */
-export async function indexCheckpoint(
-  db: PrismaClient,
-  checkpointDir: string,
-  checkpointId: string,
-): Promise<number> {
-  const metaPath = join(checkpointDir, "metadata.json");
-  if (!existsSync(metaPath)) {
-    throw new Error(`No metadata.json found at ${checkpointDir}`);
-  }
-
-  const meta = JSON.parse(readFileSync(metaPath, "utf8")) as RootMeta;
-
-  // Upsert root Checkpoint record
-  await db.checkpoint.upsert({
-    where: { checkpointId },
-    create: {
-      checkpointId,
-      cliVersion: meta.cli_version ?? null,
-      branch: meta.branch ?? null,
-      strategy: meta.strategy ?? null,
-      filesTouched: meta.files_touched ? JSON.stringify(meta.files_touched) : null,
-      tokenUsage: meta.token_usage ? JSON.stringify(meta.token_usage) : null,
-    },
-    update: {
-      cliVersion: meta.cli_version ?? null,
-      branch: meta.branch ?? null,
-      strategy: meta.strategy ?? null,
-      filesTouched: meta.files_touched ? JSON.stringify(meta.files_touched) : null,
-      tokenUsage: meta.token_usage ? JSON.stringify(meta.token_usage) : null,
-    },
-  });
-
-  // Find session sub-directories (0/, 1/, 2/, …)
-  const sessionDirs = readdirSync(checkpointDir)
-    .filter((e) => /^\d+$/.test(e) && statSync(join(checkpointDir, e)).isDirectory())
-    .sort((a, b) => parseInt(a) - parseInt(b));
-
-  let totalNew = 0;
-
-  for (const sessionDir of sessionDirs) {
-    const sessionIndex = parseInt(sessionDir, 10);
-    const sessionPath = join(checkpointDir, sessionDir);
-    const sessionMetaPath = join(sessionPath, "metadata.json");
-    if (!existsSync(sessionMetaPath)) continue;
-
-    const sessionMeta = JSON.parse(readFileSync(sessionMetaPath, "utf8")) as SessionMeta;
-    const { session_id: sessionId } = sessionMeta;
-    if (!sessionId) continue;
-
-    // Upsert CheckpointSession
-    const sessionData = {
-      checkpointId,
-      sessionIndex,
-      turnId: sessionMeta.turn_id ?? null,
-      agent: sessionMeta.agent ?? null,
-      createdAt: sessionMeta.created_at ? new Date(sessionMeta.created_at) : null,
-      filesTouched: sessionMeta.files_touched ? JSON.stringify(sessionMeta.files_touched) : null,
-      tokenUsage: sessionMeta.token_usage ? JSON.stringify(sessionMeta.token_usage) : null,
-      initialAttribution: sessionMeta.initial_attribution
-        ? JSON.stringify(sessionMeta.initial_attribution)
-        : null,
-      checkpointTranscriptStart: sessionMeta.checkpoint_transcript_start ?? null,
-      transcriptLinesAtStart: sessionMeta.transcript_lines_at_start ?? null,
-    };
-    await db.checkpointSession.upsert({
-      where: { sessionId },
-      create: { sessionId, ...sessionData },
-      update: sessionData,
-    });
-
-    // Record the checkpoint→session link (idempotent)
-    await db.checkpointSessionLink.upsert({
-      where: { checkpointId_sessionId: { checkpointId, sessionId } },
-      create: { checkpointId, sessionId },
-      update: {},
-    });
-
-    // Upsert CheckpointSummary if present
-    if (sessionMeta.summary) {
-      const sm = sessionMeta.summary;
-      const summaryData = {
-        intent: sm.intent ?? "",
-        outcome: sm.outcome ?? "",
-        learningsRepo: sm.learnings?.repo ? JSON.stringify(sm.learnings.repo) : null,
-        learningsCode: sm.learnings?.code ? JSON.stringify(sm.learnings.code) : null,
-        learningsWorkflow: sm.learnings?.workflow ? JSON.stringify(sm.learnings.workflow) : null,
-        friction: sm.friction ? JSON.stringify(sm.friction) : null,
-        openItems: sm.open_items ? JSON.stringify(sm.open_items) : null,
-      };
-      await db.checkpointSummary.upsert({
-        where: { sessionId },
-        create: { sessionId, ...summaryData },
-        update: summaryData,
-      });
-    }
-
-    // Parse and index full.jsonl
-    const fullPath = join(sessionPath, "full.jsonl");
-    if (!existsSync(fullPath)) continue;
-
-    const events = parseFullJsonl(readFileSync(fullPath, "utf8"));
-
-    for (const event of events) {
-      const key = eventKey(event);
-      if (!key) continue; // can't upsert without a unique key
-
-      // Skip if already indexed
-      const exists = await db.checkpointMessage.findUnique({
-        where: { uuid: key },
-        select: { id: true },
-      });
-      if (exists) continue;
-
-      await db.checkpointMessage.create({
-        data: {
-          uuid: key,
-          sessionId,
-          parentUuid: event.parentUuid ?? null,
-          type: event.type,
-          timestamp: event.timestamp ? new Date(event.timestamp) : null,
-          cwd: event.cwd ?? null,
-          gitBranch: event.gitBranch ?? null,
-          slug: event.slug ?? null,
-          version: event.version ?? null,
-          planContent: event.planContent ?? null,
-          toolUseId: event.toolUseID ?? null,
-          parentToolUseId: event.parentToolUseID ?? null,
-          data: JSON.stringify(event),
-        },
-      });
-      totalNew++;
-    }
-  }
-
-  return totalNew;
-}
 
 // ─── V2 helpers ───────────────────────────────────────────────────────────────
 
@@ -291,6 +187,8 @@ export async function indexCheckpointV2(
   db: PrismaClient,
   checkpointDir: string,
   checkpointId: string,
+  repoPath?: string,
+  mappedCheckpointIds?: Set<string>,
 ): Promise<void> {
   const metaPath = join(checkpointDir, "metadata.json");
   if (!existsSync(metaPath)) throw new Error(`No metadata.json at ${checkpointDir}`);
@@ -355,16 +253,43 @@ export async function indexCheckpointV2(
     // Read actual hash content (not the file path)
     const contentHash = existsSync(hashFile) ? readFileSync(hashFile, "utf8").trim() : null;
 
-    await db.sessionLink.create({
-      data: {
-        checkpointMetadataId: checkpointMeta.id,
-        metadata:   existsSync(metadataFile)   ? metadataFile   : null,
-        transcript: existsSync(transcriptFile) ? transcriptFile : null,
-        context:    existsSync(contextFile)    ? contextFile    : null,
-        contentHash,
-        prompt:     existsSync(promptFile)     ? promptFile     : null,
-      },
-    });
+    // Look up an existing SessionLink for this transcript path.
+    const transcriptVal = existsSync(transcriptFile) ? transcriptFile : null;
+    const existing = transcriptVal
+      ? await db.sessionLink.findFirst({
+          where: { checkpointMetadataId: checkpointMeta.id, transcript: transcriptVal },
+          select: { id: true, contentHash: true },
+        })
+      : null;
+
+    // If the content hash hasn't changed, this session is fully indexed — skip it.
+    if (existing && contentHash && existing.contentHash === contentHash) continue;
+
+    let sessionLink: { id: number };
+    if (existing) {
+      // Hash changed (JSONL grew) — update the stored hash and re-index.
+      sessionLink = await db.sessionLink.update({
+        where: { id: existing.id },
+        data: { contentHash },
+        select: { id: true },
+      });
+    } else {
+      sessionLink = await db.sessionLink.create({
+        data: {
+          checkpointMetadataId: checkpointMeta.id,
+          metadata:   existsSync(metadataFile)   ? metadataFile   : null,
+          transcript: transcriptVal,
+          context:    existsSync(contextFile)    ? contextFile    : null,
+          contentHash,
+          prompt:     existsSync(promptFile)     ? promptFile     : null,
+        },
+        select: { id: true },
+      });
+    }
+
+    if (transcriptVal) {
+      await indexFullJsonl(db, transcriptVal, sessionLink.id);
+    }
 
     if (!existsSync(metadataFile)) continue;
 
@@ -456,9 +381,8 @@ export async function indexCheckpointV2(
         select: { id: true },
       });
 
-      // Recreate child arrays on every index pass
+      // Recreate child arrays on every index pass (preserve status/subSessionId on OpenItem)
       await Promise.all([
-        db.openItem.deleteMany(     { where: { checkpointSessionSummaryId: summaryRecord.id } }),
         db.frictionItem.deleteMany( { where: { checkpointSessionSummaryId: summaryRecord.id } }),
         db.repoLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
         db.codeLearning.deleteMany( { where: { checkpointSessionMetadataId: summaryRecord.id } }),
@@ -468,9 +392,70 @@ export async function indexCheckpointV2(
       const creates: Promise<unknown>[] = [];
 
       if (sm.open_items?.length) {
-        creates.push(db.openItem.createMany({
-          data: sm.open_items.map((text) => ({ checkpointSessionSummaryId: summaryRecord.id, text })),
+        // Look up prior statuses for this session so they survive new checkpoints being indexed.
+        // Fetch ALL non-open prior items (not just exact matches) so we can fuzzy-match rephrased items.
+        const priorItems = await db.openItem.findMany({
+          where: {
+            checkpointSessionSummary: {
+              checkpointSessionMetadata: { sessionId },
+            },
+            status: { notIn: ["open"] },
+          },
+          select: { text: true, status: true, subSessionId: true },
+          distinct: ["text"],
+          orderBy: { id: "desc" },
+        });
+
+        // Build a map for exact matches and a list for fuzzy fallback
+        const priorByText = new Map(priorItems.map((p) => [p.text, p]));
+
+        // Jaccard similarity on word tokens (case-insensitive, punctuation-stripped)
+        function tokenize(s: string): Set<string> {
+          return new Set(s.toLowerCase().replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean));
+        }
+        function jaccardSimilarity(a: string, b: string): number {
+          const ta = tokenize(a);
+          const tb = tokenize(b);
+          let intersection = 0;
+          for (const w of ta) if (tb.has(w)) intersection++;
+          const union = ta.size + tb.size - intersection;
+          return union === 0 ? 0 : intersection / union;
+        }
+
+        function findBestPrior(text: string) {
+          // Exact match first
+          if (priorByText.has(text)) return priorByText.get(text);
+          // Fuzzy fallback: best Jaccard match above 0.5 threshold
+          let best: { text: string; status: string; subSessionId: string | null } | undefined;
+          let bestScore = 0.5; // minimum threshold
+          for (const prior of priorItems) {
+            const score = jaccardSimilarity(text, prior.text);
+            if (score > bestScore) { bestScore = score; best = prior; }
+          }
+          return best;
+        }
+
+        creates.push(...sm.open_items.map((text) => {
+          const prior = findBestPrior(text);
+          return db.openItem.upsert({
+            where: { checkpointSessionSummaryId_text: { checkpointSessionSummaryId: summaryRecord.id, text } },
+            create: {
+              checkpointSessionSummaryId: summaryRecord.id,
+              text,
+              status: prior?.status ?? "open",
+              subSessionId: prior?.subSessionId ?? null,
+            },
+            update: {},
+          });
         }));
+        // Remove open items that no longer appear in the source
+        creates.push(
+          db.openItem.deleteMany({
+            where: { checkpointSessionSummaryId: summaryRecord.id, text: { notIn: sm.open_items } },
+          })
+        );
+      } else {
+        creates.push(db.openItem.deleteMany({ where: { checkpointSessionSummaryId: summaryRecord.id } }));
       }
       if (sm.friction?.length) {
         creates.push(db.frictionItem.createMany({
@@ -500,6 +485,172 @@ export async function indexCheckpointV2(
       await Promise.all(creates);
     }
   }
+
+  if (repoPath && !mappedCheckpointIds?.has(checkpointId)) {
+    await saveGitOidMapping(db, checkpointId, meta.branch, repoPath);
+  }
+}
+
+// ─── Full JSONL log indexer ───────────────────────────────────────────────────
+
+/**
+ * Parse a full.jsonl transcript file and write normalized rows to the LogEvent
+ * family of tables.  Already-indexed events (matched by uuid or messageId) are
+ * skipped so this function is safe to call multiple times on the same file.
+ *
+ * @param sessionLinkId  Optional FK into SessionLink so events can be traced
+ *                       back to the checkpoint/session that produced them.
+ */
+export async function indexFullJsonl(
+  db: PrismaClient,
+  transcriptPath: string,
+  sessionLinkId?: number,
+): Promise<{ events: number }> {
+  const content = readFileSync(transcriptPath, "utf8");
+  const events = parseFullJsonl(content);
+
+  // Pre-load known uuids / messageIds to skip duplicates without per-row queries.
+  const [existingUuids, existingMessageIds] = await Promise.all([
+    db.logEvent.findMany({ where: { uuid: { not: null } }, select: { uuid: true } })
+      .then((rows) => new Set(rows.map((r) => r.uuid as string))),
+    db.logEvent.findMany({ where: { messageId: { not: null } }, select: { messageId: true } })
+      .then((rows) => new Set(rows.map((r) => r.messageId as string))),
+  ]);
+
+  let count = 0;
+
+  for (const event of events) {
+    // Deduplication: skip if this event was already indexed.
+    if (event.uuid && existingUuids.has(event.uuid)) continue;
+    if (event.messageId && existingMessageIds.has(event.messageId)) continue;
+
+    const msg = event.message as Record<string, unknown> | undefined;
+
+    const logEvent = await db.logEvent.create({
+      data: {
+        uuid:            event.uuid            ?? null,
+        messageId:       event.messageId       ?? null,
+        sessionId:       event.sessionId       ?? null,
+        parentUuid:      event.parentUuid      ?? null,
+        type:            event.type,
+        timestamp:       event.timestamp ? new Date(event.timestamp) : null,
+        cwd:             event.cwd             ?? null,
+        gitBranch:       event.gitBranch       ?? null,
+        version:         event.version         ?? null,
+        slug:            event.slug            ?? null,
+        isSidechain:     event.isSidechain     ?? null,
+        userType:        event.userType        ?? null,
+        toolUseId:       event.toolUseID       ?? null,
+        parentToolUseId: event.parentToolUseID ?? null,
+        requestId:       (event.requestId as string | undefined) ?? null,
+        data:            JSON.stringify(event),
+        sessionLinkId:   sessionLinkId         ?? null,
+      },
+      select: { id: true },
+    });
+
+    // ── user / assistant: parse message content blocks ──────────────────────
+    if ((event.type === "user" || event.type === "assistant") && msg) {
+      const role = (msg.role as string | undefined) ?? event.type;
+      const rawContent = msg.content;
+      const contentArray: Record<string, unknown>[] =
+        Array.isArray(rawContent)
+          ? (rawContent as Record<string, unknown>[])
+          : typeof rawContent === "string"
+          ? [{ type: "text", text: rawContent }]
+          : [];
+
+      for (let i = 0; i < contentArray.length; i++) {
+        const c = contentArray[i];
+        const cType = (c.type as string | undefined) ?? "text";
+
+        // Stringify tool_result content if it's not already a string.
+        let toolResultContent: string | null = null;
+        if (cType === "tool_result") {
+          toolResultContent =
+            typeof c.content === "string"
+              ? c.content
+              : c.content != null
+              ? JSON.stringify(c.content)
+              : null;
+        }
+
+        await db.logContent.create({
+          data: {
+            logEventId:        logEvent.id,
+            role,
+            contentIndex:      i,
+            contentType:       cType,
+            text:              (c.text as string | undefined)         ?? null,
+            thinking:          (c.thinking as string | undefined)     ?? null,
+            toolUseId:         (c.id as string | undefined)           // tool_use block
+                            ?? (c.tool_use_id as string | undefined)  // tool_result block
+                            ?? null,
+            toolName:          (c.name as string | undefined)         ?? null,
+            toolInput:         c.input != null ? JSON.stringify(c.input) : null,
+            toolResultContent,
+            isError:           (c.is_error as boolean | undefined)    ?? null,
+          },
+        });
+      }
+
+      // ── assistant: token usage ────────────────────────────────────────────
+      if (event.type === "assistant") {
+        const u = msg.usage as Record<string, unknown> | undefined;
+        if (u) {
+          await db.logUsage.create({
+            data: {
+              logEventId:               logEvent.id,
+              model:                    (msg.model as string | undefined)       ?? null,
+              stopReason:               (msg.stop_reason as string | undefined) ?? null,
+              inputTokens:              Number(u.input_tokens               ?? 0),
+              cacheCreationInputTokens: Number(u.cache_creation_input_tokens ?? 0),
+              cacheReadInputTokens:     Number(u.cache_read_input_tokens     ?? 0),
+              outputTokens:             Number(u.output_tokens               ?? 0),
+            },
+          });
+        }
+      }
+    }
+
+    // ── progress: hook_progress data ─────────────────────────────────────────
+    if (event.type === "progress") {
+      const d = event.data as Record<string, unknown> | undefined;
+      await db.logHookProgress.create({
+        data: {
+          logEventId: logEvent.id,
+          type:       (d?.type      as string | undefined) ?? null,
+          hookEvent:  (d?.hookEvent as string | undefined) ?? null,
+          hookName:   (d?.hookName  as string | undefined) ?? null,
+          command:    (d?.command   as string | undefined) ?? null,
+        },
+      });
+    }
+
+    // ── system events ─────────────────────────────────────────────────────────
+    if (event.type === "system") {
+      const e = event as Record<string, unknown>;
+      await db.logSystemEvent.create({
+        data: {
+          logEventId:            logEvent.id,
+          subtype:               (e.subtype               as string  | undefined) ?? null,
+          hookCount:             (e.hookCount              as number  | undefined) ?? null,
+          stopReason:            (e.stopReason             as string  | undefined) ?? null,
+          preventedContinuation: (e.preventedContinuation  as boolean | undefined) ?? null,
+          level:                 (e.level                 as string  | undefined) ?? null,
+          durationMs:            (e.durationMs             as number  | undefined) ?? null,
+        },
+      });
+    }
+
+    // Mark as seen so a duplicate later in the same file is also skipped.
+    if (event.uuid)      existingUuids.add(event.uuid);
+    if (event.messageId) existingMessageIds.add(event.messageId);
+
+    count++;
+  }
+
+  return { events: count };
 }
 
 // ─── V2 full-tree indexer ─────────────────────────────────────────────────────
@@ -508,8 +659,17 @@ export async function indexAllCheckpointsV2(
   db: PrismaClient,
   rootDir: string,
   onProgress?: (checkpointId: string) => void,
+  repoPath?: string,
 ): Promise<{ checkpoints: number }> {
   let totalCheckpoints = 0;
+
+  // Pre-fetch all checkpoint IDs that already have a git OID mapping so we
+  // can skip the per-checkpoint DB read inside saveGitOidMapping.
+  let mappedCheckpointIds: Set<string> | undefined;
+  if (repoPath) {
+    const rows = await db.checkpointIdGitOidJoin.findMany({ select: { checkpointId: true } });
+    mappedCheckpointIds = new Set(rows.map((r) => r.checkpointId));
+  }
 
   const shards = readdirSync(rootDir)
     .filter((e) => /^[0-9a-f]{2}$/i.test(e) && statSync(join(rootDir, e)).isDirectory());
@@ -523,7 +683,8 @@ export async function indexAllCheckpointsV2(
       const checkpointId  = shard + rest;
       const checkpointDir = join(shardPath, rest);
       try {
-        await indexCheckpointV2(db, checkpointDir, checkpointId);
+        await indexCheckpointV2(db, checkpointDir, checkpointId, repoPath, mappedCheckpointIds);
+        mappedCheckpointIds?.add(checkpointId); // keep set current for this pass
         totalCheckpoints++;
         onProgress?.(checkpointId);
       } catch (err) {
@@ -532,10 +693,14 @@ export async function indexAllCheckpointsV2(
     }
   }
 
+  // Sync FTS index with any new LogContent rows added during this pass
+  await setupLogContentFts(db);
+  await syncLogContentFts(db);
+
   return { checkpoints: totalCheckpoints };
 }
 
-// ─── Full-tree indexer (V1 / old schema) ─────────────────────────────────────
+// ─── Full-tree indexer ───────────────────────────────────────────────────────
 
 /**
  * Walk a checkpoints root directory and index every checkpoint found.
@@ -548,32 +713,9 @@ export async function indexAllCheckpointsV2(
 export async function indexAllCheckpoints(
   db: PrismaClient,
   rootDir: string,
-  onProgress?: (checkpointId: string, newMessages: number) => void,
-): Promise<{ checkpoints: number; newMessages: number }> {
-  let totalCheckpoints = 0;
-  let totalNew = 0;
-
-  const shards = readdirSync(rootDir)
-    .filter((e) => /^[0-9a-f]{2}$/i.test(e) && statSync(join(rootDir, e)).isDirectory());
-
-  for (const shard of shards) {
-    const shardPath = join(rootDir, shard);
-    const ids = readdirSync(shardPath)
-      .filter((e) => /^[0-9a-f]{10}$/i.test(e) && statSync(join(shardPath, e)).isDirectory());
-
-    for (const rest of ids) {
-      const checkpointId = shard + rest;
-      const checkpointDir = join(shardPath, rest);
-      try {
-        const n = await indexCheckpoint(db, checkpointDir, checkpointId);
-        totalNew += n;
-        totalCheckpoints++;
-        onProgress?.(checkpointId, n);
-      } catch (err) {
-        process.stderr.write(`indexer: skipping ${checkpointId}: ${err}\n`);
-      }
-    }
-  }
-
-  return { checkpoints: totalCheckpoints, newMessages: totalNew };
+  onProgress?: (checkpointId: string) => void,
+  repoPath?: string,
+): Promise<{ checkpoints: number }> {
+  const result = await indexAllCheckpointsV2(db, rootDir, onProgress, repoPath);
+  return { checkpoints: result.checkpoints };
 }

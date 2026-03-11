@@ -63,6 +63,13 @@ export async function fetchSessionEvents(id: string): Promise<Event[]> {
   return res.json() as Promise<Event[]>;
 }
 
+export interface OpenItem {
+  id: number;
+  text: string;
+  status: "open" | "in_progress" | "complete" | "na";
+  subSessionId: string | null;
+}
+
 export interface CheckpointSummary {
   intent: string;
   outcome: string;
@@ -70,7 +77,7 @@ export interface CheckpointSummary {
   codeLearnings: Array<{ path: string; finding: string }>;
   workflowLearnings: string[];
   friction: string[];
-  openItems: string[];
+  openItems: OpenItem[];
 }
 
 export interface TokenUsage {
@@ -143,6 +150,104 @@ export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckp
   const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/checkpoints`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<SessionCheckpoint[]>;
+}
+
+export interface LogContentBlock {
+  contentType: string;        // text | thinking | tool_use | tool_result
+  contentIndex: number;
+  text: string | null;
+  thinking: string | null;
+  toolUseId: string | null;
+  toolName: string | null;
+  toolInput: unknown | null;
+  toolResultContent: string | null;
+  isError: boolean | null;
+}
+
+export interface LogEventItem {
+  id: number;
+  uuid: string | null;
+  sessionId: string | null;
+  parentUuid: string | null;
+  type: string;               // user | assistant | progress | system | file-history-snapshot
+  timestamp: string | null;
+  cwd: string | null;
+  gitBranch: string | null;
+  slug: string | null;
+  isSidechain: boolean | null;
+  toolUseId: string | null;
+  parentToolUseId: string | null;
+  contents: LogContentBlock[];
+  usage: {
+    model: string | null;
+    stopReason: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens: number;
+    cacheReadInputTokens: number;
+  } | null;
+  hookProgress: {
+    type: string | null;
+    hookEvent: string | null;
+    hookName: string | null;
+    command: string | null;
+  } | null;
+  systemData: {
+    subtype: string | null;
+    hookCount: number | null;
+    stopReason: string | null;
+    preventedContinuation: boolean | null;
+    level: string | null;
+    durationMs: number | null;
+  } | null;
+}
+
+export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
+  const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/log-events`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LogEventItem[]>;
+}
+
+export interface SearchResult {
+  logContentId: number;
+  logEventId: number;
+  sessionId: string;
+  timestamp: string | null;
+  contentType: string;
+  toolName: string | null;
+  logEventType: string;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
+  snippet: string;
+  rank: number;
+}
+
+export async function fetchSearch(query: string, limit = 50): Promise<SearchResult[]> {
+  const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<SearchResult[]>;
+}
+
+export async function updateOpenItemStatus(
+  id: number,
+  status: "open" | "in_progress" | "complete" | "na",
+  subSessionId?: string,
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/open-items/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, ...(subSessionId !== undefined ? { subSessionId } : {}) }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[], parentSessionId?: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/spawn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, cwd, openItemIds, parentSessionId }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export function subscribeToUpdates(onUpdate: () => void): () => void {

@@ -5,7 +5,8 @@ import { createServer } from "http";
 import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
-import { indexAllCheckpoints, indexAllCheckpointsV2 } from "./indexer.js";
+import { indexAllCheckpointsV2 } from "./indexer.js";
+import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -138,7 +139,14 @@ function mapEvent(e: {
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
+  // Strip CLAUDECODE so spawned sessions are not blocked by nested-session detection
+  delete process.env.CLAUDECODE;
+
   const db = await getDb(dbPath);
+
+  // Ensure FTS table exists and is up-to-date on startup
+  await setupLogContentFts(db);
+  await syncLogContentFts(db);
 
   const app = express();
   app.use(cors());
@@ -236,6 +244,71 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         orderBy: { timestamp: "asc" },
       });
       res.json(events.map(mapEvent));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/v2/sessions/:id/log-events
+  app.get("/api/v2/sessions/:id/log-events", async (req, res) => {
+    try {
+      const events = await db.logEvent.findMany({
+        where:   { sessionId: req.params.id },
+        orderBy: { timestamp: "asc" },
+        include: {
+          contents:    { orderBy: { contentIndex: "asc" } },
+          usage:       true,
+          hookProgress: true,
+          systemData:  true,
+        },
+      });
+      res.json(events.map((e) => ({
+        id:              e.id,
+        uuid:            e.uuid,
+        sessionId:       e.sessionId,
+        parentUuid:      e.parentUuid,
+        type:            e.type,
+        timestamp:       e.timestamp?.toISOString() ?? null,
+        cwd:             e.cwd,
+        gitBranch:       e.gitBranch,
+        slug:            e.slug,
+        isSidechain:     e.isSidechain,
+        toolUseId:       e.toolUseId,
+        parentToolUseId: e.parentToolUseId,
+        contents: e.contents.map((c) => ({
+          contentType:       c.contentType,
+          contentIndex:      c.contentIndex,
+          text:              c.text,
+          thinking:          c.thinking,
+          toolUseId:         c.toolUseId,
+          toolName:          c.toolName,
+          toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
+          toolResultContent: c.toolResultContent,
+          isError:           c.isError,
+        })),
+        usage: e.usage ? {
+          model:                    e.usage.model,
+          stopReason:               e.usage.stopReason,
+          inputTokens:              e.usage.inputTokens,
+          outputTokens:             e.usage.outputTokens,
+          cacheCreationInputTokens: e.usage.cacheCreationInputTokens,
+          cacheReadInputTokens:     e.usage.cacheReadInputTokens,
+        } : null,
+        hookProgress: e.hookProgress ? {
+          type:      e.hookProgress.type,
+          hookEvent: e.hookProgress.hookEvent,
+          hookName:  e.hookProgress.hookName,
+          command:   e.hookProgress.command,
+        } : null,
+        systemData: e.systemData ? {
+          subtype:               e.systemData.subtype,
+          hookCount:             e.systemData.hookCount,
+          stopReason:            e.systemData.stopReason,
+          preventedContinuation: e.systemData.preventedContinuation,
+          level:                 e.systemData.level,
+          durationMs:            e.systemData.durationMs,
+        } : null,
+      })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -385,7 +458,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   type V2Session = {
     summary: {
       intent: string; outcome: string;
-      openItems: { text: string }[];
+      openItems: { id: number; text: string; status: string; subSessionId: string | null }[];
       frictionItems: { text: string }[];
       repoLearnings: { text: string }[];
       codeLearnings: { path: string; finding: string }[];
@@ -397,7 +470,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     return {
       intent:            summary.intent,
       outcome:           summary.outcome,
-      openItems:         summary.openItems.map((r) => r.text),
+      openItems:         summary.openItems.map((r) => ({ id: r.id, text: r.text, status: r.status, subSessionId: r.subSessionId })),
       friction:          summary.frictionItems.map((r) => r.text),
       repoLearnings:     summary.repoLearnings.map((r) => r.text),
       codeLearnings:     summary.codeLearnings.map((r) => ({ path: r.path, finding: r.finding })),
@@ -555,6 +628,79 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // PATCH /api/open-items/:id
+  app.patch("/api/open-items/:id", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const { status, subSessionId } = req.body as { status?: string; subSessionId?: string };
+    const allowed = ["open", "in_progress", "complete", "na"];
+    if (status !== undefined && !allowed.includes(status)) {
+      res.status(400).json({ error: "status must be open, in_progress, or complete" });
+      return;
+    }
+    try {
+      const updated = await db.openItem.update({
+        where: { id },
+        data: {
+          ...(status !== undefined ? { status } : {}),
+          ...(subSessionId !== undefined ? { subSessionId } : {}),
+        },
+      });
+      res.json({ id: updated.id, status: updated.status, subSessionId: updated.subSessionId });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // POST /api/sessions/spawn
+  app.post("/api/sessions/spawn", async (req, res) => {
+    const { prompt, cwd, openItemIds, parentSessionId } = req.body as { prompt?: string; cwd?: string; openItemIds?: number[]; parentSessionId?: string };
+    if (!prompt || typeof prompt !== "string") {
+      res.status(400).json({ error: "prompt is required" });
+      return;
+    }
+    try {
+      const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
+      const safePrompt = prompt.replace(/'/g, "'\\''").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      // Pass open item IDs and parent session so the SessionStart hook can link back
+      const envParts: string[] = [];
+      if (openItemIds?.length) envParts.push(`GOSSAMER_SPAWN_OPEN_ITEMS='${openItemIds.join(",")}'`);
+      if (parentSessionId) envParts.push(`GOSSAMER_SPAWN_PARENT_SESSION='${parentSessionId.replace(/'/g, "")}'`);
+      const envPrefix = envParts.length ? envParts.join(" ") + " " : "";
+      // Use AppleScript to open a new Terminal window running claude interactively
+      const script = [
+        `tell application "Terminal"`,
+        `  activate`,
+        `  do script "cd '${safeCwd}' && ${envPrefix}claude '${safePrompt}'"`,
+        `end tell`,
+      ].join("\n");
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+      // Mark selected open items as in_progress
+      if (openItemIds?.length) {
+        await db.openItem.updateMany({
+          where: { id: { in: openItemIds } },
+          data: { status: "in_progress" },
+        });
+      }
+      res.json({ started: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/search?q=TEXT[&limit=N]
+  app.get("/api/search", async (req, res) => {
+    const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";
+    const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit)  : 50;
+    if (!q) { res.status(400).json({ error: "q is required" }); return; }
+    try {
+      const results = await searchLogContent(db, q, Math.min(limit, 200));
+      res.json(results);
+    } catch (err) {
+      // FTS5 MATCH errors (bad syntax) come back as exceptions
+      res.status(400).json({ error: String(err) });
+    }
+  });
+
   // Create HTTP server and attach WebSocket server (shared port)
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
@@ -613,20 +759,20 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
       try {
-        // Pull latest commits into the worktree working tree
-        execSync(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard HEAD`, { stdio: "pipe" });
+        // Fetch latest commits and advance the worktree to the branch tip
+        execSync(
+          `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
+          { stdio: "pipe" },
+        );
+        execSync(
+          `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard FETCH_HEAD`,
+          { stdio: "pipe" },
+        );
       } catch { /* non-fatal */ }
       try {
-        const { newMessages } = await indexAllCheckpoints(db, WORKTREE_PATH);
-        if (newMessages > 0) {
-          process.stderr.write(`checkpoint indexer: +${newMessages} new messages\n`);
-          broadcast();
-        }
-      } catch { /* non-fatal */ }
-      try {
-        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH);
+        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
         if (checkpoints > 0) {
-          process.stderr.write(`checkpoint indexer v2: indexed ${checkpoints} checkpoints\n`);
+          process.stderr.write(`checkpoint indexer: indexed ${checkpoints} checkpoints\n`);
           broadcast();
         }
       } catch { /* non-fatal */ }
