@@ -1,0 +1,9 @@
+we want to parse entire cli logs instead of directly parsing claude code hook payloads. Create some new database tables that match the structure of the json log events. Then, write code to parse the jsonl log file and write corresponding rows to the table
+
+---
+
+An example of the jsonl log file is: /private/tmp/gossamer-checkpoints/18/de4c3369b3/0/full.jsonl
+
+---
+
+Reindex the checkpoints to see if it works
