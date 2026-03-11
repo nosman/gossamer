@@ -1,0 +1,30 @@
+<task-notification>
+<task-id>b6n9wyc50</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/b6n9wyc50.output</output-file>
+<status>failed</status>
+<summary>Background command "Start Expo dev server for web" failed with exit code 7</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/b6n9wyc50.output
+
+---
+
+<task-notification>
+<task-id>bjbu9r17n</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bjbu9r17n.output</output-file>
+<status>failed</status>
+<summary>Background command "Restart server" failed with exit code 144</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bjbu9r17n.output
+
+---
+
+<task-notification>
+<task-id>bips648j2</task-id>
+<tool-use-id>toolu_01KVnrninpK7X4RRYEDi4JsT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bips648j2.output</output-file>
+<status>completed</status>
+<summary>Background command "Start Electron dev server again" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-stephanostsoucas-gossamer/tasks/bips648j2.output
