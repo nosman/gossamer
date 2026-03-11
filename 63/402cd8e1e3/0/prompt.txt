@@ -1,0 +1,14 @@
+Please work on the following open items:
+- tool_result authorship attribution (treated as Claude-side) is a design assumption that may need revisiting if tool results from human-run tools are added.
+
+---
+
+I'm also seeing incorrect attributions in some cases. The search result will sometimes say user for a tool result, which is wrong. Tool calls always get attributed to claude tho
+
+---
+
+Let's add some filters to the search. I want to be able to filter by type: message, tool_call, tool_result, thinking. The UI should let me pick a filter.
+
+---
+
+Can you weigh the message and thinking search results more heavily when computing relevance with BM25?
