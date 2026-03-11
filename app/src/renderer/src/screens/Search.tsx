@@ -1,24 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton } from "@mantine/core";
+import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton, Avatar } from "@mantine/core";
 import { fetchSearch, type SearchResult } from "../api";
 import { TimeAgo } from "../components/TimeAgo";
+import claudeLogo from "../assets/claude-logo.png";
 
-const CONTENT_TYPE_COLOR: Record<string, string> = {
-  text:              "indigo",
-  thinking:          "violet",
-  tool_use:          "teal",
-  tool_result:       "cyan",
-};
+// ── Snippet renderer ──────────────────────────────────────────────────────────
 
-/** Replace «…» markers with bold spans for display. */
 function Snippet({ raw }: { raw: string }) {
   const parts = raw.split(/(«[^»]*»)/g);
   return (
-    <Text size="xs" c="dimmed" ff="monospace" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+    <Text size="xs" ff="monospace" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.6 }}>
       {parts.map((part, i) =>
         part.startsWith("«") && part.endsWith("»") ? (
-          <Text key={i} component="span" size="xs" fw={700} c="yellow.6" ff="monospace">
+          <Text key={i} component="span" size="xs" fw={700} c="yellow.5" ff="monospace">
             {part.slice(1, -1)}
           </Text>
         ) : (
@@ -28,6 +23,90 @@ function Snippet({ raw }: { raw: string }) {
     </Text>
   );
 }
+
+// ── Content-type label ────────────────────────────────────────────────────────
+
+const CONTENT_LABEL: Record<string, string> = {
+  text:            "message",
+  thinking:        "thinking",
+  tool_use:        "tool call",
+  tool_result:     "tool result",
+};
+
+// ── Per-result card ───────────────────────────────────────────────────────────
+
+function ResultCard({ r, onClick }: { r: SearchResult; onClick: () => void }) {
+  const isHuman = r.logEventType === "user" && r.contentType !== "tool_result";
+  const isClaude = r.logEventType === "assistant" || r.contentType === "thinking";
+
+  const displayName = r.gitUserName ?? r.gitUserEmail ?? "You";
+  const initials = displayName.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase();
+  const avatarUrl = r.gitUserName ? `https://github.com/${r.gitUserName}.png?size=40` : undefined;
+
+  return (
+    <UnstyledButton
+      onClick={onClick}
+      style={{
+        display: "block",
+        width: "100%",
+        border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
+        borderRadius: 10,
+        overflow: "hidden",
+        backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))",
+      }}
+    >
+      {/* Row header */}
+      <Group
+        gap={8}
+        px={12}
+        py={7}
+        style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6))" }}
+      >
+        {isClaude ? (
+          <img src={claudeLogo} alt="Claude" style={{ width: 18, height: 18, borderRadius: "50%", flexShrink: 0 }} />
+        ) : (
+          <Avatar src={avatarUrl} size={18} radius="xl" color="indigo" style={{ flexShrink: 0 }}>
+            <Text size="xs" fw={700} style={{ fontSize: 9 }}>{initials}</Text>
+          </Avatar>
+        )}
+
+        <Text size="xs" fw={600} c={isClaude ? "orange" : "indigo"}>
+          {isClaude ? "Claude" : displayName}
+        </Text>
+
+        <Badge size="xs" variant="light" color={isClaude ? "orange" : "indigo"}>
+          {CONTENT_LABEL[r.contentType] ?? r.contentType}
+        </Badge>
+
+        {r.toolName && (
+          <Badge size="xs" color="teal" variant="dot">
+            {r.toolName}
+          </Badge>
+        )}
+
+        <Box style={{ flex: 1 }} />
+
+        <Text size="xs" ff="monospace" c="dimmed">{r.sessionId.slice(0, 8)}…</Text>
+        {r.timestamp && <TimeAgo iso={r.timestamp} />}
+      </Group>
+
+      {/* Snippet body */}
+      <Box
+        px={12}
+        py={8}
+        style={{
+          backgroundColor: isClaude
+            ? "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8))"
+            : "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-8))",
+        }}
+      >
+        <Snippet raw={r.snippet} />
+      </Box>
+    </UnstyledButton>
+  );
+}
+
+// ── Screen ────────────────────────────────────────────────────────────────────
 
 export function Search() {
   const navigate = useNavigate();
@@ -51,7 +130,6 @@ export function Search() {
   if (!query) {
     return <Center style={{ flex: 1 }}><Text c="dimmed">Enter a search term above.</Text></Center>;
   }
-
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   if (error)   return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
@@ -67,40 +145,13 @@ export function Search() {
         {results.length === 0 ? (
           <Center p="xl"><Text c="dimmed" size="sm">No results found.</Text></Center>
         ) : (
-          <Box style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Box style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {results.map((r) => (
-              <UnstyledButton
+              <ResultCard
                 key={r.logContentId}
+                r={r}
                 onClick={() => navigate(`/sessions/${r.sessionId}`)}
-                style={{
-                  display: "block",
-                  border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))",
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))",
-                }}
-              >
-                <Group gap={8} mb={6} wrap="nowrap">
-                  <Badge
-                    size="xs"
-                    color={CONTENT_TYPE_COLOR[r.contentType] ?? "gray"}
-                    variant="light"
-                    style={{ flexShrink: 0 }}
-                  >
-                    {r.contentType}
-                  </Badge>
-                  {r.toolName && (
-                    <Badge size="xs" color="gray" variant="outline" style={{ flexShrink: 0 }}>
-                      {r.toolName}
-                    </Badge>
-                  )}
-                  <Text size="xs" ff="monospace" c="dimmed" style={{ flexShrink: 0 }}>
-                    {r.sessionId.slice(0, 8)}…
-                  </Text>
-                  {r.timestamp && <TimeAgo iso={r.timestamp} />}
-                </Group>
-                <Snippet raw={r.snippet} />
-              </UnstyledButton>
+              />
             ))}
           </Box>
         )}

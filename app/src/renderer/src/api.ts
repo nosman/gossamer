@@ -215,6 +215,9 @@ export interface SearchResult {
   timestamp: string | null;
   contentType: string;
   toolName: string | null;
+  logEventType: string;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
   snippet: string;
   rank: number;
 }

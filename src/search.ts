@@ -72,6 +72,10 @@ export interface LogContentSearchResult {
   timestamp: string | null;
   contentType: string;
   toolName: string | null;
+  /** "user" | "assistant" — which side of the conversation this content came from. */
+  logEventType: string;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
   /** FTS5 snippet with «match» markers around matched terms. */
   snippet: string;
   /** BM25 rank (more negative = better match). */
@@ -101,34 +105,57 @@ export async function searchLogContent(
     timestamp: string | null;
     contentType: string;
     toolName: string | null;
+    logEventType: string;
+    gitUserName: string | null;
+    gitUserEmail: string | null;
     snippet: string;
     rank: number;
   };
 
+  // Run FTS match in a subquery first, then join for extra metadata.
   const rows = await db.$queryRawUnsafe<Row[]>(`
     SELECT
-      rowid                                                    AS logContentId,
-      logEventId,
-      sessionId,
-      timestamp,
-      contentType,
-      toolName,
-      snippet(LogContentFts, -1, '«', '»', '…', 24)          AS snippet,
-      rank
-    FROM LogContentFts
-    WHERE LogContentFts MATCH ?
-    ORDER BY rank
-    LIMIT ?
+      fts.logContentId,
+      fts.logEventId,
+      fts.sessionId,
+      fts.timestamp,
+      fts.contentType,
+      fts.toolName,
+      fts.snippet,
+      fts.rank,
+      le.type   AS logEventType,
+      s.gitUserName,
+      s.gitUserEmail
+    FROM (
+      SELECT
+        rowid                                              AS logContentId,
+        logEventId,
+        sessionId,
+        timestamp,
+        contentType,
+        toolName,
+        snippet(LogContentFts, -1, '«', '»', '…', 24)   AS snippet,
+        rank
+      FROM LogContentFts
+      WHERE LogContentFts MATCH ?
+      ORDER BY rank
+      LIMIT ?
+    ) fts
+    JOIN LogEvent le ON le.id = fts.logEventId
+    LEFT JOIN Session s ON s.sessionId = fts.sessionId
   `, query, limit);
 
   return rows.map((r) => ({
-    logContentId: Number(r.logContentId),
-    logEventId:   Number(r.logEventId),
-    sessionId:    r.sessionId,
-    timestamp:    r.timestamp,
-    contentType:  r.contentType,
-    toolName:     r.toolName || null,
-    snippet:      r.snippet,
-    rank:         r.rank,
+    logContentId:  Number(r.logContentId),
+    logEventId:    Number(r.logEventId),
+    sessionId:     r.sessionId,
+    timestamp:     r.timestamp,
+    contentType:   r.contentType,
+    toolName:      r.toolName || null,
+    logEventType:  r.logEventType,
+    gitUserName:   r.gitUserName || null,
+    gitUserEmail:  r.gitUserEmail || null,
+    snippet:       r.snippet,
+    rank:          r.rank,
   }));
 }
