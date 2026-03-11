@@ -1,0 +1,1 @@
+Instead of just showing the type of search result, we need to show it if was a human or an ai who initiated it. Similarly to how we show the conversation in the single session ui, show the avatars and names of who entered the prompt or tool use.
