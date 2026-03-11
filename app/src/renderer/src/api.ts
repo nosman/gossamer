@@ -208,6 +208,23 @@ export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
   return res.json() as Promise<LogEventItem[]>;
 }
 
+export interface SearchResult {
+  logContentId: number;
+  logEventId: number;
+  sessionId: string;
+  timestamp: string | null;
+  contentType: string;
+  toolName: string | null;
+  snippet: string;
+  rank: number;
+}
+
+export async function fetchSearch(query: string, limit = 50): Promise<SearchResult[]> {
+  const res = await fetch(`${API_BASE}/search?q=${encodeURIComponent(query)}&limit=${limit}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<SearchResult[]>;
+}
+
 export async function updateOpenItemStatus(
   id: number,
   status: "open" | "in_progress" | "complete" | "na",

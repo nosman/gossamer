@@ -1,7 +1,7 @@
-import React from "react";
+import React, { useState } from "react";
 import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import {
-  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor,
+  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor, TextInput,
   useMantineColorScheme, useComputedColorScheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
@@ -31,6 +31,7 @@ export function Layout() {
   const colorScheme = useComputedColorScheme("dark");
   const [sidebarOpen, { toggle: toggleSidebar }] = useDisclosure(true);
   const { crumbs } = useBreadcrumb();
+  const [searchValue, setSearchValue] = useState("");
 
   const activeNav = getActiveNav(pathname);
   const canGoBack = !TOP_LEVEL.has(pathname);
@@ -49,7 +50,7 @@ export function Layout() {
           backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-7))",
         }}
       >
-        <Group h="100%" px={12} gap={6}>
+        <Group h="100%" px={12} gap={6} style={{ flex: 1 }}>
           <ActionIcon variant="subtle" color="gray" onClick={toggleSidebar} size="sm" title="Toggle sidebar">
             ☰
           </ActionIcon>
@@ -82,6 +83,20 @@ export function Layout() {
               ))}
             </Group>
           )}
+          <Box style={{ flex: 1 }} />
+          <TextInput
+            placeholder="Search logs…"
+            size="xs"
+            radius="md"
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && searchValue.trim()) {
+                navigate(`/search?q=${encodeURIComponent(searchValue.trim())}`);
+              }
+            }}
+            style={{ width: 220 }}
+          />
         </Group>
       </AppShell.Header>
 
