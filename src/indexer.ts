@@ -252,7 +252,7 @@ export async function indexCheckpointV2(
     // Read actual hash content (not the file path)
     const contentHash = existsSync(hashFile) ? readFileSync(hashFile, "utf8").trim() : null;
 
-    await db.sessionLink.create({
+    const sessionLink = await db.sessionLink.create({
       data: {
         checkpointMetadataId: checkpointMeta.id,
         metadata:   existsSync(metadataFile)   ? metadataFile   : null,
@@ -261,7 +261,12 @@ export async function indexCheckpointV2(
         contentHash,
         prompt:     existsSync(promptFile)     ? promptFile     : null,
       },
+      select: { id: true },
     });
+
+    if (existsSync(transcriptFile)) {
+      await indexFullJsonl(db, transcriptFile, sessionLink.id);
+    }
 
     if (!existsSync(metadataFile)) continue;
 
@@ -461,6 +466,168 @@ export async function indexCheckpointV2(
   if (repoPath && !mappedCheckpointIds?.has(checkpointId)) {
     await saveGitOidMapping(db, checkpointId, meta.branch, repoPath);
   }
+}
+
+// ─── Full JSONL log indexer ───────────────────────────────────────────────────
+
+/**
+ * Parse a full.jsonl transcript file and write normalized rows to the LogEvent
+ * family of tables.  Already-indexed events (matched by uuid or messageId) are
+ * skipped so this function is safe to call multiple times on the same file.
+ *
+ * @param sessionLinkId  Optional FK into SessionLink so events can be traced
+ *                       back to the checkpoint/session that produced them.
+ */
+export async function indexFullJsonl(
+  db: PrismaClient,
+  transcriptPath: string,
+  sessionLinkId?: number,
+): Promise<{ events: number }> {
+  const content = readFileSync(transcriptPath, "utf8");
+  const events = parseFullJsonl(content);
+
+  // Pre-load known uuids / messageIds to skip duplicates without per-row queries.
+  const [existingUuids, existingMessageIds] = await Promise.all([
+    db.logEvent.findMany({ where: { uuid: { not: null } }, select: { uuid: true } })
+      .then((rows) => new Set(rows.map((r) => r.uuid as string))),
+    db.logEvent.findMany({ where: { messageId: { not: null } }, select: { messageId: true } })
+      .then((rows) => new Set(rows.map((r) => r.messageId as string))),
+  ]);
+
+  let count = 0;
+
+  for (const event of events) {
+    // Deduplication: skip if this event was already indexed.
+    if (event.uuid && existingUuids.has(event.uuid)) continue;
+    if (event.messageId && existingMessageIds.has(event.messageId)) continue;
+
+    const msg = event.message as Record<string, unknown> | undefined;
+
+    const logEvent = await db.logEvent.create({
+      data: {
+        uuid:            event.uuid            ?? null,
+        messageId:       event.messageId       ?? null,
+        sessionId:       event.sessionId       ?? null,
+        parentUuid:      event.parentUuid      ?? null,
+        type:            event.type,
+        timestamp:       event.timestamp ? new Date(event.timestamp) : null,
+        cwd:             event.cwd             ?? null,
+        gitBranch:       event.gitBranch       ?? null,
+        version:         event.version         ?? null,
+        slug:            event.slug            ?? null,
+        isSidechain:     event.isSidechain     ?? null,
+        userType:        event.userType        ?? null,
+        toolUseId:       event.toolUseID       ?? null,
+        parentToolUseId: event.parentToolUseID ?? null,
+        requestId:       (event.requestId as string | undefined) ?? null,
+        data:            JSON.stringify(event),
+        sessionLinkId:   sessionLinkId         ?? null,
+      },
+      select: { id: true },
+    });
+
+    // ── user / assistant: parse message content blocks ──────────────────────
+    if ((event.type === "user" || event.type === "assistant") && msg) {
+      const role = (msg.role as string | undefined) ?? event.type;
+      const rawContent = msg.content;
+      const contentArray: Record<string, unknown>[] =
+        Array.isArray(rawContent)
+          ? (rawContent as Record<string, unknown>[])
+          : typeof rawContent === "string"
+          ? [{ type: "text", text: rawContent }]
+          : [];
+
+      for (let i = 0; i < contentArray.length; i++) {
+        const c = contentArray[i];
+        const cType = (c.type as string | undefined) ?? "text";
+
+        // Stringify tool_result content if it's not already a string.
+        let toolResultContent: string | null = null;
+        if (cType === "tool_result") {
+          toolResultContent =
+            typeof c.content === "string"
+              ? c.content
+              : c.content != null
+              ? JSON.stringify(c.content)
+              : null;
+        }
+
+        await db.logContent.create({
+          data: {
+            logEventId:        logEvent.id,
+            role,
+            contentIndex:      i,
+            contentType:       cType,
+            text:              (c.text as string | undefined)         ?? null,
+            thinking:          (c.thinking as string | undefined)     ?? null,
+            toolUseId:         (c.id as string | undefined)           // tool_use block
+                            ?? (c.tool_use_id as string | undefined)  // tool_result block
+                            ?? null,
+            toolName:          (c.name as string | undefined)         ?? null,
+            toolInput:         c.input != null ? JSON.stringify(c.input) : null,
+            toolResultContent,
+            isError:           (c.is_error as boolean | undefined)    ?? null,
+          },
+        });
+      }
+
+      // ── assistant: token usage ────────────────────────────────────────────
+      if (event.type === "assistant") {
+        const u = msg.usage as Record<string, unknown> | undefined;
+        if (u) {
+          await db.logUsage.create({
+            data: {
+              logEventId:               logEvent.id,
+              model:                    (msg.model as string | undefined)       ?? null,
+              stopReason:               (msg.stop_reason as string | undefined) ?? null,
+              inputTokens:              Number(u.input_tokens               ?? 0),
+              cacheCreationInputTokens: Number(u.cache_creation_input_tokens ?? 0),
+              cacheReadInputTokens:     Number(u.cache_read_input_tokens     ?? 0),
+              outputTokens:             Number(u.output_tokens               ?? 0),
+            },
+          });
+        }
+      }
+    }
+
+    // ── progress: hook_progress data ─────────────────────────────────────────
+    if (event.type === "progress") {
+      const d = event.data as Record<string, unknown> | undefined;
+      await db.logHookProgress.create({
+        data: {
+          logEventId: logEvent.id,
+          type:       (d?.type      as string | undefined) ?? null,
+          hookEvent:  (d?.hookEvent as string | undefined) ?? null,
+          hookName:   (d?.hookName  as string | undefined) ?? null,
+          command:    (d?.command   as string | undefined) ?? null,
+        },
+      });
+    }
+
+    // ── system events ─────────────────────────────────────────────────────────
+    if (event.type === "system") {
+      const e = event as Record<string, unknown>;
+      await db.logSystemEvent.create({
+        data: {
+          logEventId:            logEvent.id,
+          subtype:               (e.subtype               as string  | undefined) ?? null,
+          hookCount:             (e.hookCount              as number  | undefined) ?? null,
+          stopReason:            (e.stopReason             as string  | undefined) ?? null,
+          preventedContinuation: (e.preventedContinuation  as boolean | undefined) ?? null,
+          level:                 (e.level                 as string  | undefined) ?? null,
+          durationMs:            (e.durationMs             as number  | undefined) ?? null,
+        },
+      });
+    }
+
+    // Mark as seen so a duplicate later in the same file is also skipped.
+    if (event.uuid)      existingUuids.add(event.uuid);
+    if (event.messageId) existingMessageIds.add(event.messageId);
+
+    count++;
+  }
+
+  return { events: count };
 }
 
 // ─── V2 full-tree indexer ─────────────────────────────────────────────────────
