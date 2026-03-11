@@ -4,7 +4,7 @@ import { useBreadcrumb } from "../BreadcrumbContext";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
   fetchSession,
-  fetchSessionEvents,
+  fetchLogEvents,
   fetchSessionCheckpoints,
   spawnSession,
   updateOpenItemStatus,
@@ -12,6 +12,7 @@ import {
   type Event,
   type SessionCheckpoint,
   type OpenItem,
+  type LogEventItem,
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
@@ -114,6 +115,107 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
       </Box>
     </Box>
   );
+}
+
+/**
+ * Convert LogEventItems (from full.jsonl tables) into pseudo-Event objects that
+ * match the shape the existing UI components expect.  This lets all downstream
+ * grouping and rendering code remain unchanged.
+ */
+function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
+  const result: Event[] = [];
+  let id = -1;
+  let lastAssistantText: string | null = null;
+
+  const filtered = logEvents.filter(
+    (e) => !e.isSidechain && e.type !== "file-history-snapshot" && e.type !== "progress",
+  );
+
+  // Virtual SessionStart divider
+  const first = filtered[0];
+  if (first) {
+    result.push({ id: id--, timestamp: first.timestamp ?? "", event: "SessionStart", sessionId: first.sessionId ?? "", blocked: false, data: { cwd: first.cwd ?? "" }, summary: null, keywords: [] });
+  }
+
+  for (const le of filtered) {
+    const ts  = le.timestamp ?? "";
+    const sid = le.sessionId ?? "";
+
+    if (le.type === "user") {
+      const toolResults = le.contents.filter((c) => c.contentType === "tool_result");
+      const textBlocks  = le.contents.filter((c) => c.contentType === "text");
+
+      if (toolResults.length > 0) {
+        for (const tr of toolResults) {
+          const failed = tr.isError === true;
+          result.push({
+            id: id--,
+            timestamp: ts,
+            event: failed ? "PostToolUseFailure" : "PostToolUse",
+            sessionId: sid,
+            blocked: false,
+            data: {
+              tool_use_id:   tr.toolUseId,
+              tool_response: !failed ? (tr.toolResultContent ?? "") : undefined,
+              error:          failed ? (tr.toolResultContent ?? "") : undefined,
+            },
+            summary: null, keywords: [],
+          });
+        }
+      } else if (textBlocks.length > 0) {
+        const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [] });
+      }
+
+    } else if (le.type === "assistant") {
+      const toolUses   = le.contents.filter((c) => c.contentType === "tool_use");
+      const textBlocks = le.contents.filter((c) => c.contentType === "text");
+
+      if (textBlocks.length > 0) {
+        lastAssistantText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+      }
+
+      for (const tu of toolUses) {
+        result.push({
+          id: id--,
+          timestamp: ts,
+          event: "PreToolUse",
+          sessionId: sid,
+          blocked: false,
+          data: { tool_name: tu.toolName ?? "?", tool_use_id: tu.toolUseId, tool_input: tu.toolInput },
+          summary: null, keywords: [],
+        });
+      }
+
+    } else if (le.type === "system" && le.systemData?.subtype === "stop_hook_summary") {
+      result.push({
+        id: id--,
+        timestamp: ts,
+        event: "Stop",
+        sessionId: sid,
+        blocked: le.systemData.preventedContinuation ?? false,
+        data: { last_assistant_message: lastAssistantText ?? "", reason: le.systemData.stopReason ?? "" },
+        summary: null, keywords: [],
+      });
+      lastAssistantText = null;
+    }
+  }
+
+  // Flush any trailing assistant text that had no stop event
+  if (lastAssistantText !== null && filtered.length > 0) {
+    const last = filtered[filtered.length - 1];
+    result.push({
+      id: id--,
+      timestamp: last.timestamp ?? "",
+      event: "Stop",
+      sessionId: last.sessionId ?? "",
+      blocked: false,
+      data: { last_assistant_message: lastAssistantText, reason: "" },
+      summary: null, keywords: [],
+    });
+  }
+
+  return result;
 }
 
 function groupEvents(events: Event[]): DisplayItem[] {
@@ -276,8 +378,8 @@ export function SessionDetail() {
   const { setCrumbs } = useBreadcrumb();
 
   useEffect(() => {
-    Promise.all([fetchSession(id), fetchSessionEvents(id), fetchSessionCheckpoints(id)])
-      .then(([s, evs, checkpoints]) => {
+    Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
+      .then(([s, logEvs, checkpoints]) => {
         setSession(s);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
@@ -293,7 +395,7 @@ export function SessionDetail() {
           ...(repo ? [{ label: repo, path: "/" }] : []),
           { label: shortId },
         ]);
-        const grouped = groupEvents(evs);
+        const grouped = groupEvents(logEventsToEvents(logEvs));
         const merged: DisplayItem[] = [];
         let cpIdx = 0;
         const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);

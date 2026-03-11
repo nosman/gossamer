@@ -18,6 +18,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import type { PrismaClient } from "../prisma/generated/client/index.js";
 import { findCommitForCheckpoint } from "./gitUtils.js";
+import { setupLogContentFts, syncLogContentFts } from "./search.js";
 
 // ─── Raw shapes from the checkpoint files ─────────────────────────────────────
 
@@ -669,6 +670,10 @@ export async function indexAllCheckpointsV2(
       }
     }
   }
+
+  // Sync FTS index with any new LogContent rows added during this pass
+  await setupLogContentFts(db);
+  await syncLogContentFts(db);
 
   return { checkpoints: totalCheckpoints };
 }

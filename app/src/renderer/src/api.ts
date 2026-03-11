@@ -152,6 +152,62 @@ export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckp
   return res.json() as Promise<SessionCheckpoint[]>;
 }
 
+export interface LogContentBlock {
+  contentType: string;        // text | thinking | tool_use | tool_result
+  contentIndex: number;
+  text: string | null;
+  thinking: string | null;
+  toolUseId: string | null;
+  toolName: string | null;
+  toolInput: unknown | null;
+  toolResultContent: string | null;
+  isError: boolean | null;
+}
+
+export interface LogEventItem {
+  id: number;
+  uuid: string | null;
+  sessionId: string | null;
+  parentUuid: string | null;
+  type: string;               // user | assistant | progress | system | file-history-snapshot
+  timestamp: string | null;
+  cwd: string | null;
+  gitBranch: string | null;
+  slug: string | null;
+  isSidechain: boolean | null;
+  toolUseId: string | null;
+  parentToolUseId: string | null;
+  contents: LogContentBlock[];
+  usage: {
+    model: string | null;
+    stopReason: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens: number;
+    cacheReadInputTokens: number;
+  } | null;
+  hookProgress: {
+    type: string | null;
+    hookEvent: string | null;
+    hookName: string | null;
+    command: string | null;
+  } | null;
+  systemData: {
+    subtype: string | null;
+    hookCount: number | null;
+    stopReason: string | null;
+    preventedContinuation: boolean | null;
+    level: string | null;
+    durationMs: number | null;
+  } | null;
+}
+
+export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
+  const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/log-events`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LogEventItem[]>;
+}
+
 export async function updateOpenItemStatus(
   id: number,
   status: "open" | "in_progress" | "complete" | "na",

@@ -6,6 +6,7 @@ import { execSync } from "child_process";
 import { existsSync } from "fs";
 import { getDb } from "./db.js";
 import { indexAllCheckpointsV2 } from "./indexer.js";
+import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -143,6 +144,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   const db = await getDb(dbPath);
 
+  // Ensure FTS table exists and is up-to-date on startup
+  await setupLogContentFts(db);
+  await syncLogContentFts(db);
+
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -239,6 +244,71 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         orderBy: { timestamp: "asc" },
       });
       res.json(events.map(mapEvent));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/v2/sessions/:id/log-events
+  app.get("/api/v2/sessions/:id/log-events", async (req, res) => {
+    try {
+      const events = await db.logEvent.findMany({
+        where:   { sessionId: req.params.id },
+        orderBy: { timestamp: "asc" },
+        include: {
+          contents:    { orderBy: { contentIndex: "asc" } },
+          usage:       true,
+          hookProgress: true,
+          systemData:  true,
+        },
+      });
+      res.json(events.map((e) => ({
+        id:              e.id,
+        uuid:            e.uuid,
+        sessionId:       e.sessionId,
+        parentUuid:      e.parentUuid,
+        type:            e.type,
+        timestamp:       e.timestamp?.toISOString() ?? null,
+        cwd:             e.cwd,
+        gitBranch:       e.gitBranch,
+        slug:            e.slug,
+        isSidechain:     e.isSidechain,
+        toolUseId:       e.toolUseId,
+        parentToolUseId: e.parentToolUseId,
+        contents: e.contents.map((c) => ({
+          contentType:       c.contentType,
+          contentIndex:      c.contentIndex,
+          text:              c.text,
+          thinking:          c.thinking,
+          toolUseId:         c.toolUseId,
+          toolName:          c.toolName,
+          toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
+          toolResultContent: c.toolResultContent,
+          isError:           c.isError,
+        })),
+        usage: e.usage ? {
+          model:                    e.usage.model,
+          stopReason:               e.usage.stopReason,
+          inputTokens:              e.usage.inputTokens,
+          outputTokens:             e.usage.outputTokens,
+          cacheCreationInputTokens: e.usage.cacheCreationInputTokens,
+          cacheReadInputTokens:     e.usage.cacheReadInputTokens,
+        } : null,
+        hookProgress: e.hookProgress ? {
+          type:      e.hookProgress.type,
+          hookEvent: e.hookProgress.hookEvent,
+          hookName:  e.hookProgress.hookName,
+          command:   e.hookProgress.command,
+        } : null,
+        systemData: e.systemData ? {
+          subtype:               e.systemData.subtype,
+          hookCount:             e.systemData.hookCount,
+          stopReason:            e.systemData.stopReason,
+          preventedContinuation: e.systemData.preventedContinuation,
+          level:                 e.systemData.level,
+          durationMs:            e.systemData.durationMs,
+        } : null,
+      })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -614,6 +684,20 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       res.json({ started: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/search?q=TEXT[&limit=N]
+  app.get("/api/search", async (req, res) => {
+    const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";
+    const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit)  : 50;
+    if (!q) { res.status(400).json({ error: "q is required" }); return; }
+    try {
+      const results = await searchLogContent(db, q, Math.min(limit, 200));
+      res.json(results);
+    } catch (err) {
+      // FTS5 MATCH errors (bad syntax) come back as exceptions
+      res.status(400).json({ error: String(err) });
     }
   });
 
