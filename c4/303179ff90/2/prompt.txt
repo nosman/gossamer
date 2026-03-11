@@ -1,0 +1,40 @@
+each checkpoint is associated with a commit. The commit message will be structured like "
+    Try and match OpenItems across checkpoints. If the ai rephrases an issue that was already closed, we keep it closed instead of making a new open issue
+    
+    Entire-Checkpoint: 7791a81172db". Write a function to get the checkpoint id from the commit message.
+
+---
+
+Add it to a gitUtils.ts file
+
+---
+
+using the npm gitlog library, write a function that takes a saved Checkpoint's branch and id, calls git log on that branch, extracts the entire-commit ids using the previous helper, and returns the commit with the matching checkpoint id. If it can't find it, also check master or main branches for that checkpoint id.
+
+---
+
+Create a table called CheckpointIdGitOidJoin that maps a checkpointId to a git oid (hash id)
+
+---
+
+Now, when we detect a new checkpoint when indexing, use the previous findCommitForCheckpoint function to find the commit hash, then save the checkpoint -> oid mapping to our new table.
+
+---
+
+Restart the server so we can test it
+
+---
+
+When i query the new CheckpointIdGitOidJoin, i don't get any rows.
+
+---
+
+For the top checkpoint in the individual session view, fetch the linked commit id. use "git show <commit id>" to get a diff. Install a javascript diff library for the frontend to display a list of changed files like this
+
+---
+
+Move the file tree component to show next to the session dialog. Move the session dialog to be right-aligned
+
+---
+
+this is very messed up. You see in the screenshot that the file tree takes up 2/3 of the screen and the open items take 1/3. I want the file tree to be UNDER the open items and side-by-side with the dialog
