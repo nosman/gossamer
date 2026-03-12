@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "3dbab7b40d09",
+  "session_id": "fe35d57b-b594-401b-9d47-2c6fb3bf4b76",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T01:11:47.467808Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "72552342eadd",
+  "token_usage": {
+    "input_tokens": 185,
+    "cache_creation_tokens": 157213,
+    "cache_read_tokens": 15488464,
+    "output_tokens": 66389,
+    "api_call_count": 167
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Make the gossamer indexer/poll loop more robust by relocating worktree and DB paths into the git root, then extend session indexing to cover shadow branches (in-progress sessions), and fix resulting UI regressions in the sessions list and detail pages.",
+    "outcome": "Shadow branch indexing works with 4 live sessions tracked across 6 branches; worktree and DB now live under `.gossamer/` in the repo root; session list shows live/checkpoint sessions with intent summaries; session detail refreshes live on new checkpoints and shadow updates; git user/repo name restored in UI.",
+    "learnings": {
+      "repo": [
+        "Shadow branches follow the pattern `entire/\u003ccommit-short-hash\u003e-\u003csomething\u003e` and contain both `.gossamer/checkpoints/` and `.entire/metadata/\u003csession-id\u003e/` for in-progress sessions.",
+        "The same session spans multiple shadow branches as transcripts grow, so deduplication must use a per-session set of blob SHAs (`seenBlobShas` JSON array) rather than a single `fullJsonlBlobSha`.",
+        "`getDb()` in `src/db.ts` already calls `mkdirSync(dirname(abs), { recursive: true })` at line 51, so no additional directory creation is needed before DB initialization.",
+        "The `entire` tool commits directly to the local `entire/checkpoints/v1` branch ref; `FETCH_HEAD` is stale when SSH remote fetch fails, making `reset --hard FETCH_HEAD` a silent no-op.",
+        "FTS (full-text search) tables are virtual tables managed by application code, not the Prisma schema — they get rebuilt automatically and cause spurious `data loss` warnings on `prisma db push`."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "finding": "Worktree reset changed from `reset --hard FETCH_HEAD` to `reset --hard ${CHECKPOINT_BRANCH}` — uses the local branch ref which is always current when entire commits locally, decoupling correctness from remote SSH availability."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "`getGitUser()` helper reads `git config user.name/email`, resolved once at startup relative to `repoDir` and injected into all session responses to restore the GitHub avatar/username in the UI."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "`indexAllShadowBranches` reads shadow branch content via `git ls-tree` + `git cat-file blob` directly — no worktree needed for shadow branches, only for the committed checkpoint branch."
+        },
+        {
+          "path": "app/src/renderer/src/screens/SessionDetail.tsx",
+          "finding": "Detail page was static after initial load; added `subscribeToUpdates` in a second `useEffect` to re-fetch log events and checkpoints on WebSocket broadcast, enabling live updates."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "Added `ShadowSession` table with `seenBlobShas String` (JSON array) to track all blob SHAs indexed per session, and optional `shadowSessionId` FK on `LogEvent`."
+        }
+      ],
+      "workflow": [
+        "When a `replace_all` edit targets a string that appears at multiple indentation levels (e.g., the same key in two different API route handlers), it will miss instances with different leading whitespace — each indentation level needs a separate Edit call.",
+        "Deleting the DB and running `prisma db push` is the fastest recovery path when schema migrations conflict with virtual/FTS tables that Prisma doesn't manage.",
+        "Shadow branch indexing at 5s intervals vs. checkpoint polling at 30s intervals creates a two-tier latency model: live session updates are near-real-time, checkpoint promotion appears within 30s."
+      ]
+    },
+    "friction": [
+      "`reset --hard FETCH_HEAD` silently did nothing when SSH remote fetch failed, causing the worktree to appear up-to-date (no errors) while actually being stale — hard to diagnose.",
+      "Prisma `db push` refused to proceed due to FTS virtual tables it didn't create, requiring `--force-reset` / manual DB deletion to recover.",
+      "Two `replace_all` edits for `gitUserName: null` and `repoName: null` each missed a second occurrence in the `:id` endpoint due to differing indentation, requiring a follow-up fix each time.",
+      "The old worktree registered at `/private/tmp/gossamer-checkpoints` blocked creation of the new `.gossamer/checkpoints` worktree and had to be manually pruned before the server could start."
+    ],
+    "open_items": [
+      "New checkpoints appear in session detail within at most 30 seconds (the checkpoint poll interval) — could be reduced or made event-driven if lower latency is needed.",
+      "Shadow branch indexing uses `git branch` on the worktree which only sees local branches; remote-only shadow branches from other machines would be missed unless a fetch succeeds.",
+      "The legacy `Session` table is no longer consulted for session listing but may still exist in the DB — no migration or cleanup was done to remove stale rows.",
+      "SSH key availability for remote fetch is silently swallowed; if the remote diverges from the local branch (e.g., force-push), the worktree will never update."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T01:11:14.543162Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 41,
+    "agent_percentage": 0
+  }
+}

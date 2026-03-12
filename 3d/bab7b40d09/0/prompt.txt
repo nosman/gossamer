@@ -1,0 +1,33 @@
+let's make the indexer/poll loop more robust. Instead of checking out the entire/checkpoints/v1 branch into /private/tmp, check it out into a directory underneath the git root directory. Let's also put the default sqlite db in a hidden .gossamer directory in the root git directory. let the user specify alternative paths but use these as the default
+
+---
+
+restart the server and index all entire checkpoints from an empty state
+
+---
+
+With the old data model, we were initializing sessions from claude code hooks. Now that we're only using the entire files as the source of truth, we need to reconstruct the sessions. Entire.io sessions are stored in shadow branches before they're committed into the official entire/checkpoints/v1 branch. Let's start indexing the shadow branches
+
+---
+
+Update the sessions table UI to show shadowSessions as well as normal sessions. Reconstruct normal sessions from the entire/checkpoints/v1 history. Sessions table should have the "intent" column of the latest checkpoint as the summary.
+
+---
+
+It looks like there is a UI regression: the session details page doesn't show the github profile pic or username anymore, just "you". It should find the git author and show it.
+
+---
+
+There is a similar ui regression with the breadcrumbs at the top bar. it now only shows the git username, but not the repo name
+
+---
+
+When a new checkpoint gets created, it should show up in the session details even if that session is being indexed from a shadow branch
+
+---
+
+I still don't see a new checkpoint for session fe35d57b-b594-401b-9d47-2c6fb3bf4b76
+
+---
+
+Great, so now new checkpoints will always show up?
