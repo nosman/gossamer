@@ -12,13 +12,24 @@ export interface UserInfo {
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 function data(event: Event): Record<string, unknown> { return (event.data ?? {}) as Record<string, unknown>; }
 
+function applyHighlight(text: string, terms: string[] | undefined): React.ReactNode {
+  if (!terms?.length) return text;
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "gi"));
+  return parts.map((p, i) =>
+    i % 2 === 1
+      ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+      : p
+  );
+}
+
 function BlockedBadge() {
   return <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>;
 }
 
 // ── User message ──────────────────────────────────────────────────────────────
 
-function UserPromptCard({ event, user }: { event: Event; user?: UserInfo }) {
+function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
   const prompt = str(data(event).prompt);
   const displayName = user?.name ?? "You";
   const initials = displayName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
@@ -36,7 +47,7 @@ function UserPromptCard({ event, user }: { event: Event; user?: UserInfo }) {
           padding: "10px 14px",
         }}>
           <Text size="sm" c="white" style={{ whiteSpace: "pre-wrap", lineHeight: "20px" }}>
-            {prompt || "(no prompt)"}
+            {prompt ? applyHighlight(prompt, matchTerms) : "(no prompt)"}
           </Text>
         </Box>
       </Box>
@@ -181,8 +192,8 @@ function CompactRow({ event }: { event: Event }) {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
-export function EventItem({ event, user }: { event: Event; user?: UserInfo }) {
-  if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} />;
+export function EventItem({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
+  if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} matchTerms={matchTerms} />;
   if (event.event === "Stop") return <AssistantCard event={event} />;
   if (event.event === "Notification") return <NotificationRow event={event} />;
   if (event.event === "SessionStart" || event.event === "SessionEnd") return <SessionEventRow event={event} />;

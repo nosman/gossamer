@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
@@ -8,6 +8,7 @@ import {
   fetchSessionCheckpoints,
   spawnSession,
   updateOpenItemStatus,
+  subscribeToUpdates,
   type Session,
   type Event,
   type SessionCheckpoint,
@@ -63,12 +64,47 @@ function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
 
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 
-function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; stop: Event | null }) {
+function highlightText(text: string, terms: string[]): React.ReactNode {
+  if (!terms.length) return text;
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1
+          ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+          : p
+      )}
+    </>
+  );
+}
+
+function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
+  toolGroups: ToolUseData[][];
+  stop: Event | null;
+  isTarget?: boolean;
+  matchTerms?: string[];
+  expandTools?: boolean;
+  expandThinking?: boolean;
+  targetLogEventId?: number | null;
+}) {
   const d = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg = str(d.last_assistant_message);
+  const thinking = str(d.thinking);
   const reason = str(d.reason);
+  const thinkingLogEventId = typeof d.thinkingLogEventId === "number" ? d.thinkingLogEventId : null;
+  const toolsLogEventId = typeof d.toolsLogEventId === "number" ? d.toolsLogEventId : null;
   const [toolsExpanded, setToolsExpanded] = useState(false);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
+
+  useEffect(() => {
+    if (expandThinking && thinking) setThinkingExpanded(true);
+  }, [expandThinking, thinking]);
+
+  useEffect(() => {
+    if (expandTools && totalTools > 0) setToolsExpanded(true);
+  }, [expandTools, totalTools]);
 
   return (
     <Box style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
@@ -79,6 +115,34 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
           {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
           {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
+        {thinking && (
+          <Box mb={6} id={thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined}>
+            <Group
+              gap={6}
+              mb={4}
+              style={{ cursor: "pointer" }}
+              onClick={() => setThinkingExpanded((v) => !v)}
+            >
+              <Text size="xs" c="dimmed" fs="italic">thinking {thinkingExpanded ? "▲" : "▼"}</Text>
+            </Group>
+            <Collapse in={thinkingExpanded}>
+              <Box style={{
+                backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+                border: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))",
+                borderRadius: 8,
+                padding: "10px 14px",
+                fontFamily: "monospace",
+                fontSize: 12,
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+                color: "light-dark(var(--mantine-color-gray-7), var(--mantine-color-gray-4))",
+              }}>
+                {highlightText(thinking, matchTerms ?? [])}
+              </Box>
+            </Collapse>
+          </Box>
+        )}
         {stop && msg && (
           <Box style={{
             backgroundColor: "light-dark(var(--mantine-color-white), var(--mantine-color-dark-6))",
@@ -87,11 +151,11 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
             padding: "12px 16px",
             marginBottom: toolGroups.length > 0 ? 8 : 0,
           }}>
-            <MarkdownView text={msg} />
+            <MarkdownView text={msg} highlightTerms={matchTerms} />
           </Box>
         )}
         {toolGroups.length > 0 && (
-          <Box>
+          <Box id={toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined}>
             <Group
               gap={6}
               mb={4}
@@ -106,7 +170,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
             <Collapse in={toolsExpanded}>
               <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {toolGroups.map((tools, i) => (
-                  <ToolGroupItem key={i} tools={tools} />
+                  <ToolGroupItem key={i} tools={tools} autoExpand={expandTools} matchTerms={matchTerms} targetLogEventId={expandTools ? targetLogEventId : null} />
                 ))}
               </Box>
             </Collapse>
@@ -117,6 +181,8 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
   );
 }
 
+// TODO: we're dropping the UUIDs from LogEventItems, or at least mixing them up into currentTurnLogEventIds.
+// We need to attach these UUIDs to the components that these generate. That way the scrolling will work.
 /**
  * Convert LogEventItems (from full.jsonl tables) into pseudo-Event objects that
  * match the shape the existing UI components expect.  This lets all downstream
@@ -126,7 +192,14 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   const result: Event[] = [];
   let id = -1;
   let lastAssistantText: string | null = null;
+  let lastAssistantThinking: string | null = null;
+  let lastAssistantLogEventId: number | null = null;
+  let lastThinkingLogEventId: number | null = null;
+  let lastToolsLogEventId: number | null = null;
+  // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
+  const currentTurnLogEventIds: number[] = [];
 
+  // TODO: look at which event types are useful.
   const filtered = logEvents.filter(
     (e) => !e.isSidechain && e.type !== "file-history-snapshot" && e.type !== "progress",
   );
@@ -134,7 +207,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   // Virtual SessionStart divider
   const first = filtered[0];
   if (first) {
-    result.push({ id: id--, timestamp: first.timestamp ?? "", event: "SessionStart", sessionId: first.sessionId ?? "", blocked: false, data: { cwd: first.cwd ?? "" }, summary: null, keywords: [] });
+    result.push({ id: id--, timestamp: first.timestamp ?? "", event: "SessionStart", sessionId: first.sessionId ?? "", blocked: false, data: { cwd: first.cwd ?? "" }, summary: null, keywords: [], _sourceLogEventId: first.id });
   }
 
   for (const le of filtered) {
@@ -143,6 +216,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
 
     if (le.type === "user") {
       const toolResults = le.contents.filter((c) => c.contentType === "tool_result");
+      // TODO: show images and other content types
       const textBlocks  = le.contents.filter((c) => c.contentType === "text");
 
       if (toolResults.length > 0) {
@@ -159,23 +233,35 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
               tool_response: !failed ? (tr.toolResultContent ?? "") : undefined,
               error:          failed ? (tr.toolResultContent ?? "") : undefined,
             },
-            summary: null, keywords: [],
+            summary: null, keywords: [], _sourceLogEventId: le.id,
           });
         }
       } else if (textBlocks.length > 0) {
         const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [] });
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id });
       }
 
     } else if (le.type === "assistant") {
-      const toolUses   = le.contents.filter((c) => c.contentType === "tool_use");
-      const textBlocks = le.contents.filter((c) => c.contentType === "text");
+      const toolUses      = le.contents.filter((c) => c.contentType === "tool_use");
+      const textBlocks    = le.contents.filter((c) => c.contentType === "text");
+      const thinkingBlocks = le.contents.filter((c) => c.contentType === "thinking");
+
+      // Track all LogEvent IDs in this turn so thinking-only events are reachable
+      if (!currentTurnLogEventIds.includes(le.id)) currentTurnLogEventIds.push(le.id);
 
       if (textBlocks.length > 0) {
         lastAssistantText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+        lastAssistantLogEventId = le.id;
+      }
+      if (thinkingBlocks.length > 0) {
+        const thinking = thinkingBlocks.map((b) => b.thinking ?? "").filter(Boolean).join("\n\n");
+        lastAssistantThinking = lastAssistantThinking ? lastAssistantThinking + "\n\n" + thinking : thinking;
+        lastThinkingLogEventId = le.id;
+        if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
       }
 
       for (const tu of toolUses) {
+        lastToolsLogEventId = le.id;
         result.push({
           id: id--,
           timestamp: ts,
@@ -183,35 +269,54 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           sessionId: sid,
           blocked: false,
           data: { tool_name: tu.toolName ?? "?", tool_use_id: tu.toolUseId, tool_input: tu.toolInput },
-          summary: null, keywords: [],
+          summary: null, keywords: [], _sourceLogEventId: le.id,
         });
       }
 
     } else if (le.type === "system" && le.systemData?.subtype === "stop_hook_summary") {
+      const primaryId = lastAssistantLogEventId ?? le.id;
+      const extraIds = currentTurnLogEventIds.filter((x) => x !== primaryId);
       result.push({
         id: id--,
         timestamp: ts,
         event: "Stop",
         sessionId: sid,
         blocked: le.systemData.preventedContinuation ?? false,
-        data: { last_assistant_message: lastAssistantText ?? "", reason: le.systemData.stopReason ?? "" },
+        data: {
+          last_assistant_message: lastAssistantText ?? "",
+          thinking: lastAssistantThinking ?? "",
+          reason: le.systemData.stopReason ?? "",
+          thinkingLogEventId: lastThinkingLogEventId ?? undefined,
+          toolsLogEventId: lastToolsLogEventId ?? undefined,
+        },
         summary: null, keywords: [],
+        _sourceLogEventId: primaryId,
+        _extraSourceLogEventIds: extraIds.length > 0 ? extraIds : undefined,
       });
       lastAssistantText = null;
+      lastAssistantThinking = null;
+      lastAssistantLogEventId = null;
+      lastThinkingLogEventId = null;
+      lastToolsLogEventId = null;
+      currentTurnLogEventIds.length = 0;
     }
   }
 
   // Flush any trailing assistant text that had no stop event
   if (lastAssistantText !== null && filtered.length > 0) {
     const last = filtered[filtered.length - 1];
+    const primaryId = lastAssistantLogEventId ?? last.id;
+    const extraIds = currentTurnLogEventIds.filter((x) => x !== primaryId);
     result.push({
       id: id--,
       timestamp: last.timestamp ?? "",
       event: "Stop",
       sessionId: last.sessionId ?? "",
       blocked: false,
-      data: { last_assistant_message: lastAssistantText, reason: "" },
+      data: { last_assistant_message: lastAssistantText, thinking: lastAssistantThinking ?? "", reason: "" },
       summary: null, keywords: [],
+      _sourceLogEventId: primaryId,
+      _extraSourceLogEventIds: extraIds.length > 0 ? extraIds : undefined,
     });
   }
 
@@ -361,9 +466,52 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
   );
 }
 
+// ── Search snippet helpers ─────────────────────────────────────────────────────
+
+function extractMatchTerms(snippet: string): string[] {
+  const terms: string[] = [];
+  const re = /«([^»]+)»/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(snippet)) !== null) terms.push(m[1]);
+  return [...new Set(terms)];
+}
+
+// ── Source log event ID extractor ─────────────────────────────────────────────
+
+function getItemSourceIds(item: RenderItem): number[] {
+  if (item.kind === "event") {
+    const ids = item.event._sourceLogEventId != null ? [item.event._sourceLogEventId] : [];
+    if (item.event._extraSourceLogEventIds) ids.push(...item.event._extraSourceLogEventIds);
+    return ids;
+  }
+  if (item.kind === "claudeTurn") {
+    const ids: number[] = [];
+    for (const group of item.toolGroups) {
+      for (const tool of group) {
+        if (tool.pre._sourceLogEventId != null) ids.push(tool.pre._sourceLogEventId);
+        if (tool.pre._extraSourceLogEventIds) ids.push(...tool.pre._extraSourceLogEventIds);
+        if (tool.post?._sourceLogEventId != null) ids.push(tool.post._sourceLogEventId);
+        if (tool.post?._extraSourceLogEventIds) ids.push(...tool.post._extraSourceLogEventIds);
+      }
+    }
+    if (item.stop?._sourceLogEventId != null) ids.push(item.stop._sourceLogEventId);
+    if (item.stop?._extraSourceLogEventIds) ids.push(...item.stop._extraSourceLogEventIds);
+    return ids;
+  }
+  return [];
+}
+
 export function SessionDetail() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const targetLogEventId = searchParams.get("logEventId") ? parseInt(searchParams.get("logEventId")!) : null;
+  const searchSnippet = (location.state as { snippet?: string; contentType?: string } | null)?.snippet ?? null;
+  const searchContentType = (location.state as { snippet?: string; contentType?: string } | null)?.contentType ?? null;
+  const [highlightActive, setHighlightActive] = useState(false);
+  const scrolledRef = useRef(false);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
@@ -377,6 +525,27 @@ export function SessionDetail() {
   const id = sessionId!;
   const { setCrumbs } = useBreadcrumb();
 
+  function applyCheckpoints(logEvs: LogEventItem[], checkpoints: SessionCheckpoint[]) {
+    const grouped = groupEvents(logEventsToEvents(logEvs));
+    const merged: DisplayItem[] = [];
+    let cpIdx = 0;
+    const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+    const latest = sortedCps[sortedCps.length - 1] ?? null;
+    setLatestCheckpoint(latest);
+    setOpenItems(latest?.summary?.openItems ?? []);
+
+    for (const item of grouped) {
+      const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
+      while (cpIdx < sortedCps.length && (sortedCps[cpIdx].createdAt ?? "") <= itemTime) {
+        merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
+      }
+      merged.push(item);
+    }
+    while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
+    setItems(groupClaudeTurns(merged));
+  }
+
+  // Initial load
   useEffect(() => {
     Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
       .then(([s, logEvs, checkpoints]) => {
@@ -395,35 +564,60 @@ export function SessionDetail() {
           ...(repo ? [{ label: repo, path: "/" }] : []),
           { label: shortId },
         ]);
-        const grouped = groupEvents(logEventsToEvents(logEvs));
-        const merged: DisplayItem[] = [];
-        let cpIdx = 0;
-        const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
-        const latest = sortedCps[sortedCps.length - 1] ?? null;
-        setLatestCheckpoint(latest);
-        setOpenItems(latest?.summary?.openItems ?? []);
-
-        for (const item of grouped) {
-          const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
-          while (cpIdx < sortedCps.length && (sortedCps[cpIdx].createdAt ?? "") <= itemTime) {
-            merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-          }
-          merged.push(item);
-        }
-        while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-
-        setItems(groupClaudeTurns(merged));
+        applyCheckpoints(logEvs, checkpoints);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [id]);
 
+  // Live updates: re-fetch checkpoints and log events when the server broadcasts a change
+  useEffect(() => {
+    return subscribeToUpdates(() => {
+      Promise.all([fetchLogEvents(id), fetchSessionCheckpoints(id)])
+        .then(([logEvs, checkpoints]) => applyCheckpoints(logEvs, checkpoints))
+        .catch(() => undefined);
+    });
+  }, [id]);
+
+  // Step 1: activate highlight once items are loaded (triggers Collapse expand + mark rendering)
+  useEffect(() => {
+    if (targetLogEventId === null || items.length === 0 || scrolledRef.current) return;
+    const t = setTimeout(() => {
+      setHighlightActive(true);
+      scrolledRef.current = true;
+      setTimeout(() => setHighlightActive(false), 2500);
+    }, 150);
+    return () => clearTimeout(t);
+  }, [items, targetLogEventId]);
+
+  // Step 2: once highlightActive is true (marks rendered, Collapses expanding), scroll to first <mark>
+  useEffect(() => {
+    if (!highlightActive || targetLogEventId === null) return;
+    // Wait for Collapse animations (~200ms) to reach their final layout before measuring
+    const t = setTimeout(() => {
+      requestAnimationFrame(() => {
+        // Prefer an inner element with the precise id (thinking/tools section), fall back to the card div
+        const el = (document.getElementById(`log-event-${targetLogEventId}`)
+          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)) as HTMLElement | null;
+        const viewport = viewportRef.current;
+        if (!el || !viewport) return;
+        const mark = el.querySelector("mark") as HTMLElement | null;
+        const target = mark ?? el;
+        const targetRect = target.getBoundingClientRect();
+        const vpRect = viewport.getBoundingClientRect();
+        const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2 + 16;
+        viewport.scrollTo({ top: Math.max(0, scrollTop), behavior: "smooth" });
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [highlightActive, targetLogEventId]);
+
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
   return (
-    <ScrollArea style={{ flex: 1 }}>
+    <ScrollArea style={{ flex: 1 }} viewportRef={viewportRef}>
       <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
       {session?.parentSessionId && (
         <UnstyledButton
@@ -551,23 +745,51 @@ export function SessionDetail() {
 
       {items.length === 0 ? (
         <Center p="xl"><Text c="dimmed" size="sm">No events for this session.</Text></Center>
-      ) : (
-        items.map((item, idx) =>
-          item.kind === "claudeTurn" ? (
-            <ClaudeTurnCard key={`turn-${idx}`} toolGroups={item.toolGroups} stop={item.stop} />
-          ) : item.kind === "checkpoint" ? (
-            <CheckpointRow
-              key={`cp-${item.checkpoint.checkpointId}`}
-              checkpoint={item.checkpoint}
-              onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
-                state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId },
-              })}
-            />
-          ) : (
-            <EventItem key={`evt-${item.event.id}`} event={item.event} user={userInfo} />
-          )
-        )
-      )}
+      ) : (<>
+        <style>{`
+          @keyframes search-highlight-fade {
+            0%   { background-color: rgba(255, 210, 0, 0.25); box-shadow: 0 0 0 2px rgba(255, 210, 0, 0.6); border-radius: 8px; }
+            100% { background-color: rgba(255, 210, 0, 0);    box-shadow: 0 0 0 2px rgba(255, 210, 0, 0);   border-radius: 8px; }
+          }
+          .search-target-highlight { animation: search-highlight-fade 2.5s ease-out forwards; border-radius: 8px; }
+        `}</style>
+        {items.map((item, idx) => {
+          const sourceIds = getItemSourceIds(item);
+          const isTarget = targetLogEventId !== null && sourceIds.includes(targetLogEventId);
+          const matchTerms = isTarget && highlightActive && searchSnippet ? extractMatchTerms(searchSnippet) : undefined;
+          const key = item.kind === "claudeTurn" ? `turn-${idx}`
+            : item.kind === "checkpoint" ? `cp-${item.checkpoint.checkpointId}`
+            : `evt-${item.event.id}`;
+          return (
+            <div
+              key={key}
+              data-log-event-id={isTarget ? targetLogEventId! : (sourceIds[0] ?? undefined)}
+              className={isTarget && highlightActive ? "search-target-highlight" : undefined}
+            >
+              {item.kind === "claudeTurn" ? (
+                <ClaudeTurnCard
+                  toolGroups={item.toolGroups}
+                  stop={item.stop}
+                  isTarget={isTarget}
+                  matchTerms={matchTerms}
+                  expandTools={isTarget && (searchContentType === "tool_use" || searchContentType === "tool_result")}
+                  expandThinking={isTarget && searchContentType === "thinking"}
+                  targetLogEventId={targetLogEventId}
+                />
+              ) : item.kind === "checkpoint" ? (
+                <CheckpointRow
+                  checkpoint={item.checkpoint}
+                  onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
+                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId },
+                  })}
+                />
+              ) : (
+                <EventItem event={item.event} user={userInfo} matchTerms={matchTerms} />
+              )}
+            </div>
+          );
+        })}
+      </>)}
       </Box>
     </ScrollArea>
   );

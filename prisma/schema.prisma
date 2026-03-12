@@ -7,47 +7,6 @@ datasource db {
   provider = "sqlite"
 }
 
-model Event {
-  id        Int      @id @default(autoincrement())
-  timestamp DateTime @default(now())
-  event     String
-  sessionId String
-  blocked   Boolean  @default(false)
-  data      String   // full HookInput as JSON text
-  summary   String?
-  keywords  String?  // JSON array as text: '["a","b"]'
-
-  @@index([sessionId])
-  @@index([timestamp])
-}
-
-model Session {
-  sessionId       String   @id
-  startedAt       DateTime
-  updatedAt       DateTime
-  cwd             String
-  repoRoot        String?
-  repoName        String?
-  parentSessionId String?
-  gitUserName     String?
-  gitUserEmail    String?
-  prompt          String?
-  summary         String?
-  keywords        String?  // JSON array as text
-}
-
-model AgentParent {
-  agentId         String @id
-  parentSessionId String
-}
-
-model PendingToolUse {
-  toolUseId String  @id
-  toolName  String
-  toolInput String? // JSON text
-  startedAt String  // pre-formatted display string from fmt()
-}
-
 model InteractionOverview {
   id        Int      @id @default(autoincrement())
   sessionId String   @unique
@@ -66,6 +25,8 @@ model CheckpointMetadata {
   strategy         String?
   branch           String?
   checkpointsCount Int                          @default(0)
+  gitUserName      String?
+  gitUserEmail     String?
   tokenUsageId     Int?                         @unique
   tokenUsage       TokenUsage?                  @relation("CheckpointMetadataTokenUsage", fields: [tokenUsageId], references: [id])
   sessions         SessionLink[]
@@ -230,6 +191,22 @@ model CheckpointIdGitOidJoin {
 // One row per line in full.jsonl, with normalized sub-tables for content blocks,
 // token usage, progress events, and system events.
 
+// Tracks an in-progress session from a shadow branch (entire/<commit>-<hash>).
+// Shadow sessions are indexed directly from git without a worktree.
+// Once a session is committed to entire/checkpoints/v1 it also appears as a
+// CheckpointSessionMetadata; the LogEvent uuid-dedup prevents double-indexing.
+model ShadowSession {
+  id            Int        @id @default(autoincrement())
+  sessionId     String     @unique
+  branch        String              // most recently active shadow branch
+  seenBlobShas  String     @default("[]")  // JSON array of git blob SHAs already indexed
+  prompt        String?
+  cwd           String?
+  gitBranch     String?             // the working branch inside the session
+  createdAt     DateTime?
+  logEvents     LogEvent[]
+}
+
 model LogEvent {
   id              Int             @id @default(autoincrement())
   uuid            String?         @unique  // present on most event types
@@ -250,6 +227,8 @@ model LogEvent {
   data            String          // full raw JSON of the event line
   sessionLinkId   Int?
   sessionLink     SessionLink?    @relation(fields: [sessionLinkId], references: [id])
+  shadowSessionId Int?
+  shadowSession   ShadowSession?  @relation(fields: [shadowSessionId], references: [id])
   contents        LogContent[]
   usage           LogUsage?
   hookProgress    LogHookProgress?
@@ -258,6 +237,7 @@ model LogEvent {
   @@index([sessionId])
   @@index([type])
   @@index([sessionLinkId])
+  @@index([shadowSessionId])
 }
 
 // One row per content block within a user or assistant message.
@@ -315,84 +295,4 @@ model LogSystemEvent {
   preventedContinuation Boolean?
   level                 String?
   durationMs            Int?     // present on turn_duration subtype
-}
-
-// ------------------------------------------- OLD
-
-model Checkpoint {
-  id           Int                @id @default(autoincrement())
-  checkpointId String             @unique
-  cliVersion   String?
-  branch       String?
-  strategy     String?
-  filesTouched String?            // JSON array: '["file.ts","other.ts"]'
-  tokenUsage   String?            // JSON object: '{"input_tokens":0,...}'
-  indexedAt    DateTime           @default(now())
-  sessions     CheckpointSession[]
-}
-
-model CheckpointSession {
-  id                 Int                @id @default(autoincrement())
-  checkpointId       String
-  sessionIndex       Int                // 0-based position within the checkpoint
-  sessionId          String             @unique
-  turnId             String?
-  agent              String?
-  createdAt          DateTime?
-  filesTouched       String?            // JSON array
-  tokenUsage         String?            // JSON object
-  initialAttribution        String?           // JSON object: agent_lines, human_added, agent_percentage, ...
-  checkpointTranscriptStart Int?              // line index where this checkpoint's events begin in the transcript
-  transcriptLinesAtStart    Int?              // total transcript lines at checkpoint start
-  checkpoint                Checkpoint        @relation(fields: [checkpointId], references: [checkpointId])
-  messages                  CheckpointMessage[]
-  summary                   CheckpointSummary?
-
-  @@index([checkpointId])
-}
-
-// Tracks every checkpoint a session appears in (many-to-many).
-// CheckpointSession.sessionId stays @unique (canonical latest-state record);
-// this table captures the full history.
-model CheckpointSessionLink {
-  id           Int    @id @default(autoincrement())
-  checkpointId String
-  sessionId    String
-
-  @@unique([checkpointId, sessionId])
-  @@index([sessionId])
-}
-
-model CheckpointSummary {
-  id                Int               @id @default(autoincrement())
-  sessionId         String            @unique
-  intent            String
-  outcome           String
-  learningsRepo     String?           // JSON array of strings
-  learningsCode     String?           // JSON array of {path, finding} objects
-  learningsWorkflow String?           // JSON array of strings
-  friction          String?           // JSON array of strings
-  openItems         String?           // JSON array of strings
-  session           CheckpointSession @relation(fields: [sessionId], references: [sessionId])
-}
-
-model CheckpointMessage {
-  id              Int               @id @default(autoincrement())
-  uuid            String            @unique  // event uuid from full.jsonl
-  sessionId       String
-  parentUuid      String?
-  type            String            // "user", "assistant", "progress", "file-history-snapshot", ...
-  timestamp       DateTime?
-  cwd             String?
-  gitBranch       String?
-  slug            String?
-  version         String?
-  planContent     String?           // present on user messages that include a plan
-  toolUseId       String?
-  parentToolUseId String?
-  data            String            // raw JSON of the full event line
-  session         CheckpointSession @relation(fields: [sessionId], references: [sessionId])
-
-  @@index([sessionId])
-  @@index([type])
 }

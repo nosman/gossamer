@@ -17,6 +17,8 @@ export interface Session {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  /** true when this session is currently indexed in a shadow branch */
+  isLive: boolean;
 }
 
 export interface Event {
@@ -28,6 +30,10 @@ export interface Event {
   data: unknown;
   summary: string | null;
   keywords: string[];
+  /** Real LogEvent.id this synthetic event was derived from — set by logEventsToEvents. */
+  _sourceLogEventId?: number;
+  /** Additional LogEvent IDs for the same turn (e.g. separate thinking events). */
+  _extraSourceLogEventIds?: number[];
 }
 
 export interface InteractionOverview {

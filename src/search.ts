@@ -74,8 +74,6 @@ export interface LogContentSearchResult {
   toolName: string | null;
   /** "user" | "assistant" — which side of the conversation this content came from. */
   logEventType: string;
-  gitUserName: string | null;
-  gitUserEmail: string | null;
   /** FTS5 snippet with «match» markers around matched terms. */
   snippet: string;
   /** BM25 rank (more negative = better match). */
@@ -106,8 +104,6 @@ export async function searchLogContent(
     contentType: string;
     toolName: string | null;
     logEventType: string;
-    gitUserName: string | null;
-    gitUserEmail: string | null;
     snippet: string;
     rank: number;
   };
@@ -123,9 +119,7 @@ export async function searchLogContent(
       fts.toolName,
       fts.snippet,
       fts.rank,
-      le.type   AS logEventType,
-      s.gitUserName,
-      s.gitUserEmail
+      le.type   AS logEventType
     FROM (
       SELECT
         rowid                                              AS logContentId,
@@ -143,7 +137,6 @@ export async function searchLogContent(
       LIMIT ?
     ) fts
     JOIN LogEvent le ON le.id = fts.logEventId
-    LEFT JOIN Session s ON s.sessionId = fts.sessionId
   `, query, limit);
 
   return rows.map((r) => ({
@@ -154,8 +147,6 @@ export async function searchLogContent(
     contentType:   r.contentType,
     toolName:      r.toolName || null,
     logEventType:  r.logEventType,
-    gitUserName:   r.gitUserName || null,
-    gitUserEmail:  r.gitUserEmail || null,
     snippet:       r.snippet,
     rank:          r.rank,
   }));

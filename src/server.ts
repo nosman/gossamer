@@ -3,10 +3,30 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { basename, join } from "path";
 import { getDb } from "./db.js";
-import { indexAllCheckpointsV2 } from "./indexer.js";
+import { indexAllCheckpointsV2, indexAllShadowBranches } from "./indexer.js";
 import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
+
+// ─── Git user ─────────────────────────────────────────────────────────────────
+
+function gitConfigGet(key: string, cwd?: string): string | null {
+  try {
+    return execSync(`git config ${key}`, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch { return null; }
+}
+
+function getGitUser(cwd?: string): { name: string | null; email: string | null } {
+  // Try local config first (cwd), then fall back to global
+  const name  = (cwd ? gitConfigGet("user.name", cwd)  : null) ?? gitConfigGet("--global user.name");
+  const email = (cwd ? gitConfigGet("user.email", cwd) : null) ?? gitConfigGet("--global user.email");
+  return { name, email };
+}
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -26,17 +46,8 @@ interface SessionResponse {
   keywords: string[];
   branch: string | null;
   intent: string | null;
-}
-
-interface EventResponse {
-  id: number;
-  timestamp: string;
-  event: string;
-  sessionId: string;
-  blocked: boolean;
-  data: unknown;
-  summary: string | null;
-  keywords: string[];
+  /** true when this session is currently indexed in a shadow branch */
+  isLive: boolean;
 }
 
 interface OverviewResponse {
@@ -48,93 +59,6 @@ interface OverviewResponse {
 }
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
-
-function mapSummary(s: {
-  intent: string;
-  outcome: string;
-  learningsRepo: string | null;
-  learningsCode: string | null;
-  learningsWorkflow: string | null;
-  friction: string | null;
-  openItems: string | null;
-}) {
-  return {
-    intent: s.intent,
-    outcome: s.outcome,
-    repoLearnings:     s.learningsRepo     ? (JSON.parse(s.learningsRepo)     as string[]) : [],
-    codeLearnings:     s.learningsCode     ? (JSON.parse(s.learningsCode)     as Array<{ path: string; finding: string }>) : [],
-    workflowLearnings: s.learningsWorkflow ? (JSON.parse(s.learningsWorkflow) as string[]) : [],
-    friction:          s.friction          ? (JSON.parse(s.friction)          as string[]) : [],
-    openItems:         s.openItems         ? (JSON.parse(s.openItems)         as string[]) : [],
-  };
-}
-
-
-function mapSession(
-  s: {
-    sessionId: string;
-    startedAt: Date;
-    updatedAt: Date;
-    cwd: string;
-    repoRoot: string | null;
-    repoName: string | null;
-    parentSessionId: string | null;
-    gitUserName: string | null;
-    gitUserEmail: string | null;
-    prompt: string | null;
-    summary: string | null;
-    keywords: string | null;
-  },
-  childSessionIds: string[] = [],
-  branch: string | null = null,
-  intent: string | null = null,
-): SessionResponse {
-  return {
-    sessionId: s.sessionId,
-    startedAt: s.startedAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-    cwd: s.cwd,
-    repoRoot: s.repoRoot,
-    repoName: s.repoName,
-    parentSessionId: s.parentSessionId,
-    childSessionIds,
-    gitUserName: s.gitUserName,
-    gitUserEmail: s.gitUserEmail,
-    prompt: s.prompt,
-    summary: s.summary,
-    keywords: s.keywords ? (JSON.parse(s.keywords) as string[]) : [],
-    branch,
-    intent,
-  };
-}
-
-function mapEvent(e: {
-  id: number;
-  timestamp: Date;
-  event: string;
-  sessionId: string;
-  blocked: boolean;
-  data: string;
-  summary: string | null;
-  keywords: string | null;
-}): EventResponse {
-  let parsedData: unknown;
-  try {
-    parsedData = JSON.parse(e.data);
-  } catch {
-    parsedData = e.data;
-  }
-  return {
-    id: e.id,
-    timestamp: e.timestamp.toISOString(),
-    event: e.event,
-    sessionId: e.sessionId,
-    blocked: e.blocked,
-    data: parsedData,
-    summary: e.summary,
-    keywords: e.keywords ? (JSON.parse(e.keywords) as string[]) : [],
-  };
-}
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -152,37 +76,96 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.use(cors());
   app.use(express.json());
 
-  // GET /api/sessions
+  // Resolve git user and repo name from repo config once at startup
+  const gitUser  = getGitUser(repoDir);
+  const repoName = repoDir ? basename(repoDir) : null;
+
+  // GET /api/sessions — reconstructed from CheckpointSessionMetadata + ShadowSession
   app.get("/api/sessions", async (_req, res) => {
     try {
-      const sessions = await db.session.findMany({
-        orderBy: { updatedAt: "desc" },
+      // Latest checkpoint meta per sessionId (asc order so map always ends on latest)
+      const allMetas = await db.checkpointSessionMetadata.findMany({
+        select: {
+          sessionId: true,
+          checkpointId: true,
+          branch: true,
+          summary: { select: { intent: true } },
+        },
+        orderBy: { createdAt: "asc" },
       });
-      const sessionIds = sessions.map((s) => s.sessionId);
-
-      // Fetch latest branch and intent per session from CheckpointSessionMetadata
-      const sessionMetas = await db.checkpointSessionMetadata.findMany({
-        where: { sessionId: { in: sessionIds } },
-        select: { sessionId: true, branch: true, createdAt: true, summary: { select: { intent: true } } },
-        orderBy: { createdAt: "desc" },
-      });
-      const branchMap = new Map<string, string | null>();
-      const intentMap = new Map<string, string | null>();
-      for (const m of sessionMetas) {
-        if (!branchMap.has(m.sessionId)) branchMap.set(m.sessionId, m.branch);
-        if (!intentMap.has(m.sessionId)) intentMap.set(m.sessionId, m.summary?.intent ?? null);
+      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string }>();
+      for (const m of allMetas) {
+        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId });
       }
 
-      // Build parent → children map in memory
-      const childMap = new Map<string, string[]>();
-      for (const s of sessions) {
-        if (s.parentSessionId) {
-          const arr = childMap.get(s.parentSessionId) ?? [];
-          arr.push(s.sessionId);
-          childMap.set(s.parentSessionId, arr);
-        }
+      // Git user per checkpoint (from commit author stored at index time)
+      const allCheckpointIds = [...new Set(allMetas.map((m) => m.checkpointId))];
+      const cpUserRows = allCheckpointIds.length > 0
+        ? await db.checkpointMetadata.findMany({
+            where: { checkpointId: { in: allCheckpointIds } },
+            select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+          })
+        : [];
+      const cpUserMap = new Map(cpUserRows.map((r) => [r.checkpointId, r]));
+
+      const shadows = await db.shadowSession.findMany();
+      const shadowMap = new Map(shadows.map((s) => [s.sessionId, s]));
+
+      const allIds = [...new Set([...cpMap.keys(), ...shadows.map((s) => s.sessionId)])];
+      if (allIds.length === 0) {
+        res.json([]);
+        return;
       }
-      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [], branchMap.get(s.sessionId) ?? null, intentMap.get(s.sessionId) ?? null)));
+
+      // Min/max LogEvent timestamps per session
+      const times = await db.logEvent.groupBy({
+        by: ["sessionId"],
+        where: { sessionId: { in: allIds }, timestamp: { not: null } },
+        _min: { timestamp: true },
+        _max: { timestamp: true },
+      });
+      const timeMap = new Map(
+        times.map((r) => [r.sessionId!, { startedAt: r._min.timestamp, updatedAt: r._max.timestamp }])
+      );
+
+      // First cwd per session
+      const cwdRows = await db.logEvent.findMany({
+        where: { sessionId: { in: allIds }, cwd: { not: null } },
+        distinct: ["sessionId"],
+        orderBy: { id: "asc" },
+        select: { sessionId: true, cwd: true },
+      });
+      const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
+
+      const result: SessionResponse[] = allIds.map((sessionId) => {
+        const cp     = cpMap.get(sessionId) ?? null;
+        const shadow = shadowMap.get(sessionId) ?? null;
+        const t      = timeMap.get(sessionId);
+        const startedAt = t?.startedAt ?? shadow?.createdAt ?? null;
+        const updatedAt = t?.updatedAt ?? shadow?.createdAt ?? null;
+        const cpUser = cp ? cpUserMap.get(cp.checkpointId) ?? null : null;
+        return {
+          sessionId,
+          startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
+          updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
+          cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
+          repoRoot:        repoDir ?? null,
+          repoName:        repoName,
+          parentSessionId: null,
+          childSessionIds: [],
+          gitUserName:     cpUser?.gitUserName ?? gitUser.name,
+          gitUserEmail:    cpUser?.gitUserEmail ?? gitUser.email,
+          prompt:          shadow?.prompt ?? null,
+          summary:         null,
+          keywords:        [],
+          branch:          cp?.branch ?? shadow?.gitBranch ?? null,
+          intent:          cp?.intent ?? null,
+          isLive:          shadow !== null,
+        };
+      });
+
+      result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -191,23 +174,55 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // GET /api/sessions/:id
   app.get("/api/sessions/:id", async (req, res) => {
     try {
-      const [session, children, latestMeta] = await Promise.all([
-        db.session.findUnique({ where: { sessionId: req.params.id } }),
-        db.session.findMany({
-          where: { parentSessionId: req.params.id },
-          select: { sessionId: true },
-        }),
+      const id = req.params.id;
+      const [latestMeta, shadow, firstEvent, lastEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
-          where: { sessionId: req.params.id },
-          select: { branch: true, summary: { select: { intent: true } } },
+          where: { sessionId: id },
+          select: { branch: true, checkpointId: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
+        db.shadowSession.findUnique({ where: { sessionId: id } }),
+        db.logEvent.findFirst({
+          where: { sessionId: id },
+          orderBy: { id: "asc" },
+          select: { cwd: true, timestamp: true },
+        }),
+        db.logEvent.findFirst({
+          where: { sessionId: id, timestamp: { not: null } },
+          orderBy: { id: "desc" },
+          select: { timestamp: true },
+        }),
       ]);
-      if (!session) {
+      if (!latestMeta && !shadow) {
         res.status(404).json({ error: "Session not found" });
         return;
       }
-      res.json(mapSession(session, children.map((c) => c.sessionId), latestMeta?.branch ?? null, latestMeta?.summary?.intent ?? null));
+      const cpMeta = latestMeta
+        ? await db.checkpointMetadata.findUnique({
+            where: { checkpointId: latestMeta.checkpointId },
+            select: { gitUserName: true, gitUserEmail: true },
+          })
+        : null;
+      const startedAt = firstEvent?.timestamp ?? shadow?.createdAt ?? null;
+      const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
+      res.json({
+        sessionId:       id,
+        startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
+        updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
+        cwd:             firstEvent?.cwd ?? shadow?.cwd ?? "",
+        repoRoot:        repoDir ?? null,
+        repoName:        repoName,
+        parentSessionId: null,
+        childSessionIds: [],
+        gitUserName:     cpMeta?.gitUserName ?? gitUser.name,
+        gitUserEmail:    cpMeta?.gitUserEmail ?? gitUser.email,
+        prompt:          shadow?.prompt ?? null,
+        summary:         null,
+        keywords:        [],
+        branch:          latestMeta?.branch ?? shadow?.gitBranch ?? null,
+        intent:          latestMeta?.summary?.intent ?? null,
+        isLive:          shadow !== null,
+      } satisfies SessionResponse);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -231,19 +246,6 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         endedAt: overview.endedAt.toISOString(),
       };
       res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // GET /api/sessions/:id/events
-  app.get("/api/sessions/:id/events", async (req, res) => {
-    try {
-      const events = await db.event.findMany({
-        where: { sessionId: req.params.id },
-        orderBy: { timestamp: "asc" },
-      });
-      res.json(events.map(mapEvent));
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -308,145 +310,6 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           level:                 e.systemData.level,
           durationMs:            e.systemData.durationMs,
         } : null,
-      })));
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // GET /api/checkpoints
-  app.get("/api/checkpoints", async (_req, res) => {
-    try {
-      const checkpoints = await db.checkpoint.findMany({
-        include: {
-          sessions: {
-            select: { sessionId: true, summary: true },
-            orderBy: { sessionIndex: "asc" },
-          },
-        },
-        orderBy: { indexedAt: "desc" },
-      });
-      res.json(checkpoints.map((c) => {
-        const firstSummary = c.sessions.find((s) => s.summary)?.summary ?? null;
-        return {
-          checkpointId: c.checkpointId,
-          branch: c.branch,
-          cliVersion: c.cliVersion,
-          strategy: c.strategy,
-          filesTouched: c.filesTouched ? (JSON.parse(c.filesTouched) as string[]) : [],
-          tokenUsage: c.tokenUsage ? (JSON.parse(c.tokenUsage) as Record<string, unknown>) : null,
-          indexedAt: c.indexedAt.toISOString(),
-          sessionCount: c.sessions.length,
-          summary: firstSummary ? mapSummary(firstSummary) : null,
-        };
-      }));
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // GET /api/checkpoints/:id
-  app.get("/api/checkpoints/:id", async (req, res) => {
-    try {
-      const checkpoint = await db.checkpoint.findUnique({
-        where: { checkpointId: req.params.id },
-        include: {
-          sessions: {
-            include: { summary: true },
-            orderBy: { sessionIndex: "asc" },
-          },
-        },
-      });
-      if (!checkpoint) { res.status(404).json({ error: "Not found" }); return; }
-      res.json({
-        checkpointId: checkpoint.checkpointId,
-        branch: checkpoint.branch,
-        cliVersion: checkpoint.cliVersion,
-        strategy: checkpoint.strategy,
-        filesTouched: checkpoint.filesTouched ? (JSON.parse(checkpoint.filesTouched) as string[]) : [],
-        tokenUsage: checkpoint.tokenUsage ? (JSON.parse(checkpoint.tokenUsage) as Record<string, unknown>) : null,
-        indexedAt: checkpoint.indexedAt.toISOString(),
-        sessionCount: checkpoint.sessions.length,
-        summary: checkpoint.sessions.find((s) => s.summary)?.summary
-          ? mapSummary(checkpoint.sessions.find((s) => s.summary)!.summary!)
-          : null,
-        sessions: checkpoint.sessions.map((s) => ({
-          sessionId: s.sessionId,
-          sessionIndex: s.sessionIndex,
-          agent: s.agent,
-          createdAt: s.createdAt?.toISOString() ?? null,
-          filesTouched: s.filesTouched ? (JSON.parse(s.filesTouched) as string[]) : [],
-          tokenUsage: s.tokenUsage ? (JSON.parse(s.tokenUsage) as Record<string, unknown>) : null,
-          summary: s.summary ? mapSummary(s.summary) : null,
-        })),
-      });
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // GET /api/sessions/:sessionId/checkpoints
-  app.get("/api/sessions/:sessionId/checkpoints", async (req, res) => {
-    try {
-      const links = await db.checkpointSessionLink.findMany({
-        where: { sessionId: req.params.sessionId },
-        select: { checkpointId: true },
-      });
-      if (links.length === 0) { res.json([]); return; }
-      const checkpointIds = links.map((l) => l.checkpointId);
-      const checkpoints = await db.checkpoint.findMany({
-        where: { checkpointId: { in: checkpointIds } },
-        include: {
-          sessions: {
-            where: { sessionId: req.params.sessionId },
-            include: { summary: true },
-          },
-        },
-        orderBy: { indexedAt: "asc" },
-      });
-      res.json(checkpoints.map((c) => {
-        const session = c.sessions[0] ?? null;
-        return {
-          checkpointId: c.checkpointId,
-          branch: c.branch,
-          cliVersion: c.cliVersion,
-          filesTouched: c.filesTouched ? (JSON.parse(c.filesTouched) as string[]) : [],
-          tokenUsage: c.tokenUsage ? (() => { const t = JSON.parse(c.tokenUsage) as Record<string, unknown>; return { inputTokens: t.input_tokens, cacheCreationTokens: t.cache_creation_tokens, cacheReadTokens: t.cache_read_tokens, outputTokens: t.output_tokens, apiCallCount: t.api_call_count }; })() : null,
-          createdAt: session?.createdAt?.toISOString() ?? null,
-          summary: session?.summary ? mapSummary(session.summary) : null,
-        };
-      }));
-    } catch (err) {
-      res.status(500).json({ error: String(err) });
-    }
-  });
-
-  // GET /api/checkpoints/:id/messages
-  app.get("/api/checkpoints/:id/messages", async (req, res) => {
-    try {
-      const sessions = await db.checkpointSession.findMany({
-        where: { checkpointId: req.params.id },
-        select: { sessionId: true },
-      });
-      const sessionIds = sessions.map((s) => s.sessionId);
-      if (sessionIds.length === 0) { res.json([]); return; }
-      const messages = await db.checkpointMessage.findMany({
-        where: { sessionId: { in: sessionIds } },
-        orderBy: { timestamp: "asc" },
-      });
-      res.json(messages.map((m) => ({
-        id: m.id,
-        uuid: m.uuid,
-        sessionId: m.sessionId,
-        parentUuid: m.parentUuid,
-        type: m.type,
-        timestamp: m.timestamp?.toISOString() ?? null,
-        gitBranch: m.gitBranch,
-        slug: m.slug,
-        planContent: m.planContent,
-        toolUseId: m.toolUseId,
-        parentToolUseId: m.parentToolUseId,
-        data: JSON.parse(m.data) as unknown,
       })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -694,7 +557,31 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {
       const results = await searchLogContent(db, q, Math.min(limit, 200));
-      res.json(results);
+      const sessionIds = [...new Set(results.map((r) => r.sessionId))];
+      const sessionMetas = sessionIds.length > 0
+        ? await db.checkpointSessionMetadata.findMany({
+            where: { sessionId: { in: sessionIds } },
+            select: { sessionId: true, checkpointId: true },
+            distinct: ["sessionId"],
+            orderBy: { createdAt: "desc" },
+          })
+        : [];
+      const cpIds = [...new Set(sessionMetas.map((m) => m.checkpointId))];
+      const cpUsers = cpIds.length > 0
+        ? await db.checkpointMetadata.findMany({
+            where: { checkpointId: { in: cpIds } },
+            select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+          })
+        : [];
+      const cpUserMap = new Map(cpUsers.map((r) => [r.checkpointId, r]));
+      const sessionUserMap = new Map(sessionMetas.map((m) => {
+        const u = cpUserMap.get(m.checkpointId);
+        return [m.sessionId, { gitUserName: u?.gitUserName ?? null, gitUserEmail: u?.gitUserEmail ?? null }];
+      }));
+      res.json(results.map((r) => {
+        const u = sessionUserMap.get(r.sessionId);
+        return { ...r, gitUserName: u?.gitUserName ?? gitUser.name, gitUserEmail: u?.gitUserEmail ?? gitUser.email };
+      }));
     } catch (err) {
       // FTS5 MATCH errors (bad syntax) come back as exceptions
       res.status(400).json({ error: String(err) });
@@ -705,9 +592,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
 
-  // WebSocket change detection — poll every 2s, broadcast on new events or checkpoints
-  let lastMaxEventId: number | null = null;
+  // WebSocket change detection — poll every 2s, broadcast on new log events, checkpoints, or shadow sessions
+  let lastMaxLogEventId: number | null = null;
   let lastMaxCheckpointId: number | null = null;
+  let lastMaxShadowSessionId: number | null = null;
   const broadcast = () => {
     const message = JSON.stringify({ type: "sessions_updated" });
     for (const client of wss.clients) {
@@ -718,15 +606,18 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   };
   const poller = setInterval(async () => {
     try {
-      const [latestEvent, latestCheckpoint] = await Promise.all([
-        db.event.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+      const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
+        db.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
         db.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        db.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
       ]);
-      const currentEventId = latestEvent?.id ?? null;
-      const currentCheckpointId = latestCheckpoint?.id ?? null;
-      if (currentEventId !== lastMaxEventId || currentCheckpointId !== lastMaxCheckpointId) {
-        lastMaxEventId = currentEventId;
-        lastMaxCheckpointId = currentCheckpointId;
+      const curLogEvent   = latestLogEvent?.id   ?? null;
+      const curCheckpoint = latestCheckpoint?.id ?? null;
+      const curShadow     = latestShadow?.id     ?? null;
+      if (curLogEvent !== lastMaxLogEventId || curCheckpoint !== lastMaxCheckpointId || curShadow !== lastMaxShadowSessionId) {
+        lastMaxLogEventId   = curLogEvent;
+        lastMaxCheckpointId = curCheckpoint;
+        lastMaxShadowSessionId = curShadow;
         broadcast();
       }
     } catch {
@@ -736,11 +627,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // ── Checkpoint auto-indexer ───────────────────────────────────────────────
 
-  const WORKTREE_PATH = "/tmp/gossamer-checkpoints";
   const CHECKPOINT_BRANCH = "entire/checkpoints/v1";
   let checkpointPoller: ReturnType<typeof setInterval> | null = null;
 
   if (repoDir) {
+    const WORKTREE_PATH = join(repoDir, ".gossamer", "checkpoints");
+    mkdirSync(join(repoDir, ".gossamer"), { recursive: true });
+
     // Ensure worktree exists (reuse across restarts)
     if (!existsSync(WORKTREE_PATH)) {
       try {
@@ -759,15 +652,27 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
       try {
-        // Fetch latest commits and advance the worktree to the branch tip
-        execSync(
-          `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
-          { stdio: "pipe" },
-        );
-        execSync(
-          `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard FETCH_HEAD`,
-          { stdio: "pipe" },
-        );
+        // Fetch from remote, then reset to the remote tracking ref so new commits
+        // pushed by teammates are actually applied to the worktree.
+        // Falls back to the local branch tip if the remote is unavailable.
+        try {
+          execSync(
+            `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
+            { stdio: "pipe" },
+          );
+          execSync(
+            `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard origin/${CHECKPOINT_BRANCH}`,
+            { stdio: "pipe" },
+          );
+        } catch {
+          // Remote unavailable — fall back to local branch tip
+          try {
+            execSync(
+              `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`,
+              { stdio: "pipe" },
+            );
+          } catch { /* non-fatal */ }
+        }
       } catch { /* non-fatal */ }
       try {
         const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
@@ -783,10 +688,28 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     process.stderr.write(`checkpoint indexer: polling every 30s (worktree: ${WORKTREE_PATH})\n`);
   }
 
+  // ── Shadow branch indexer ──────────────────────────────────────────────────
+
+  let shadowPoller: ReturnType<typeof setInterval> | null = null;
+
+  if (repoDir) {
+    const runShadowIndex = async () => {
+      try {
+        const { sessions } = await indexAllShadowBranches(db, repoDir);
+        if (sessions > 0) broadcast();
+      } catch { /* non-fatal */ }
+    };
+
+    void runShadowIndex();
+    shadowPoller = setInterval(runShadowIndex, 5_000);
+    process.stderr.write(`shadow indexer: polling every 5s (repo: ${repoDir})\n`);
+  }
+
   // Graceful shutdown
   const shutdown = () => {
     clearInterval(poller);
     if (checkpointPoller) clearInterval(checkpointPoller);
+    if (shadowPoller) clearInterval(shadowPoller);
     httpServer.close();
     process.exit(0);
   };
