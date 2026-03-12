@@ -230,6 +230,22 @@ model CheckpointIdGitOidJoin {
 // One row per line in full.jsonl, with normalized sub-tables for content blocks,
 // token usage, progress events, and system events.
 
+// Tracks an in-progress session from a shadow branch (entire/<commit>-<hash>).
+// Shadow sessions are indexed directly from git without a worktree.
+// Once a session is committed to entire/checkpoints/v1 it also appears as a
+// CheckpointSessionMetadata; the LogEvent uuid-dedup prevents double-indexing.
+model ShadowSession {
+  id            Int        @id @default(autoincrement())
+  sessionId     String     @unique
+  branch        String              // most recently active shadow branch
+  seenBlobShas  String     @default("[]")  // JSON array of git blob SHAs already indexed
+  prompt        String?
+  cwd           String?
+  gitBranch     String?             // the working branch inside the session
+  createdAt     DateTime?
+  logEvents     LogEvent[]
+}
+
 model LogEvent {
   id              Int             @id @default(autoincrement())
   uuid            String?         @unique  // present on most event types
@@ -250,6 +266,8 @@ model LogEvent {
   data            String          // full raw JSON of the event line
   sessionLinkId   Int?
   sessionLink     SessionLink?    @relation(fields: [sessionLinkId], references: [id])
+  shadowSessionId Int?
+  shadowSession   ShadowSession?  @relation(fields: [shadowSessionId], references: [id])
   contents        LogContent[]
   usage           LogUsage?
   hookProgress    LogHookProgress?
@@ -258,6 +276,7 @@ model LogEvent {
   @@index([sessionId])
   @@index([type])
   @@index([sessionLinkId])
+  @@index([shadowSessionId])
 }
 
 // One row per content block within a user or assistant message.

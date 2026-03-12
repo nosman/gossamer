@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Table, Text, Anchor, ActionIcon, Tooltip } from "@mantine/core";
+import { Table, Text, Anchor, ActionIcon, Tooltip, Badge } from "@mantine/core";
 import type { Session } from "../api";
 import { relativeTime, absoluteTime } from "./TimeAgo";
 
@@ -9,7 +9,7 @@ interface Props {
 }
 
 export const COL_WIDTHS = {
-  sessionId:       140,
+  sessionId:       180,
   user:            160,
   branch:          120,
   intent:          340,
@@ -92,9 +92,16 @@ export function SessionRow({ session, onPress }: Props) {
             </Tooltip>
           }
         >
-          <Text ff="monospace" size="sm" c="indigo">
-            {shortId}
-          </Text>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
+            <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
+              {shortId}
+            </Text>
+            {session.isLive && (
+              <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
+                live
+              </Badge>
+            )}
+          </div>
         </CopyCell>
 
         <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>

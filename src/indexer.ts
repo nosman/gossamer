@@ -16,6 +16,7 @@
 
 import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
+import { execSync } from "child_process";
 import type { PrismaClient } from "../prisma/generated/client/index.js";
 import { findCommitForCheckpoint } from "./gitUtils.js";
 import { setupLogContentFts, syncLogContentFts } from "./search.js";
@@ -505,8 +506,18 @@ export async function indexFullJsonl(
   db: PrismaClient,
   transcriptPath: string,
   sessionLinkId?: number,
+  shadowSessionId?: number,
 ): Promise<{ events: number }> {
   const content = readFileSync(transcriptPath, "utf8");
+  return indexFullJsonlContent(db, content, sessionLinkId, shadowSessionId);
+}
+
+export async function indexFullJsonlContent(
+  db: PrismaClient,
+  content: string,
+  sessionLinkId?: number,
+  shadowSessionId?: number,
+): Promise<{ events: number }> {
   const events = parseFullJsonl(content);
 
   // Pre-load known uuids / messageIds to skip duplicates without per-row queries.
@@ -545,6 +556,7 @@ export async function indexFullJsonl(
         requestId:       (event.requestId as string | undefined) ?? null,
         data:            JSON.stringify(event),
         sessionLinkId:   sessionLinkId         ?? null,
+        shadowSessionId: shadowSessionId       ?? null,
       },
       select: { id: true },
     });
@@ -718,4 +730,110 @@ export async function indexAllCheckpoints(
 ): Promise<{ checkpoints: number }> {
   const result = await indexAllCheckpointsV2(db, rootDir, onProgress, repoPath);
   return { checkpoints: result.checkpoints };
+}
+
+// ─── Shadow branch indexer ────────────────────────────────────────────────────
+//
+// Shadow branches (entire/<commit>-<hash>) hold in-progress sessions that
+// haven't been committed to entire/checkpoints/v1 yet. Each branch contains:
+//
+//   .entire/metadata/<session-id>/full.jsonl   — live transcript
+//   .entire/metadata/<session-id>/prompt.txt   — initial user prompt
+//
+// We read these directly from git (git ls-tree + git cat-file blob) so we
+// don't need a worktree checkout. Change detection is via the git blob SHA.
+
+function gitExec(args: string, cwd: string): string {
+  return execSync(`git ${args}`, {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 64 * 1024 * 1024,
+  });
+}
+
+function getShadowBranches(repoPath: string): string[] {
+  try {
+    return gitExec("branch", repoPath)
+      .split("\n")
+      .map((l) => l.trim().replace(/^\* /, ""))
+      .filter((b) => b.startsWith("entire/") && !b.startsWith("entire/checkpoints"));
+  } catch { return []; }
+}
+
+function getShadowSessions(repoPath: string, branch: string): { sessionId: string; blobSha: string }[] {
+  try {
+    const output = gitExec(`ls-tree -r ${branch} -- .entire/metadata/`, repoPath);
+    const sessions = new Map<string, string>();
+    for (const line of output.split("\n")) {
+      const m = line.match(/^100644 blob ([0-9a-f]+)\s+\.entire\/metadata\/([^/]+)\/full\.jsonl$/);
+      if (m) sessions.set(m[2], m[1]);
+    }
+    return [...sessions.entries()].map(([sessionId, blobSha]) => ({ sessionId, blobSha }));
+  } catch { return []; }
+}
+
+function readBlobContent(repoPath: string, blobSha: string): string {
+  return gitExec(`cat-file blob ${blobSha}`, repoPath);
+}
+
+function readPromptFromBranch(repoPath: string, branch: string, sessionId: string): string | null {
+  try {
+    return gitExec(`show ${branch}:.entire/metadata/${sessionId}/prompt.txt`, repoPath).trim();
+  } catch { return null; }
+}
+
+/**
+ * Index all sessions from all local shadow branches (entire/<x>-<y>).
+ * Reads transcripts directly from git — no worktree required.
+ * Returns the number of sessions that had new or updated content.
+ */
+export async function indexAllShadowBranches(
+  db: PrismaClient,
+  repoPath: string,
+): Promise<{ sessions: number }> {
+  const branches = getShadowBranches(repoPath);
+  let totalSessions = 0;
+
+  for (const branch of branches) {
+    const sessions = getShadowSessions(repoPath, branch);
+
+    for (const { sessionId, blobSha } of sessions) {
+      // Skip if this exact blob SHA has already been indexed for this session.
+      // (Same session appears in multiple shadow branches as its transcript grows;
+      //  each branch may have a different SHA even for the same underlying content.)
+      const existing = await db.shadowSession.findUnique({ where: { sessionId } });
+      const seenShas: string[] = existing ? (JSON.parse(existing.seenBlobShas) as string[]) : [];
+      if (seenShas.includes(blobSha)) continue;
+
+      const fullJsonlContent = readBlobContent(repoPath, blobSha);
+      const events = parseFullJsonl(fullJsonlContent);
+
+      // Extract session metadata from the first event that carries it.
+      const firstMeta = events.find((e) => e.sessionId || e.cwd || e.gitBranch);
+      const cwd       = firstMeta?.cwd       ?? null;
+      const gitBranch = firstMeta?.gitBranch ?? null;
+      const createdAt = firstMeta?.timestamp ? new Date(firstMeta.timestamp) : null;
+      const prompt    = readPromptFromBranch(repoPath, branch, sessionId);
+      const newSeenShas = JSON.stringify([...seenShas, blobSha]);
+
+      const shadowSession = await db.shadowSession.upsert({
+        where:  { sessionId },
+        create: { sessionId, branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
+        update: { branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
+      });
+
+      const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id);
+
+      process.stderr.write(`shadow indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from ${branch}\n`);
+      totalSessions++;
+    }
+  }
+
+  if (totalSessions > 0) {
+    await setupLogContentFts(db);
+    await syncLogContentFts(db);
+  }
+
+  return { sessions: totalSessions };
 }

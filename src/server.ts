@@ -3,9 +3,10 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { execSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { join } from "path";
 import { getDb } from "./db.js";
-import { indexAllCheckpointsV2 } from "./indexer.js";
+import { indexAllCheckpointsV2, indexAllShadowBranches } from "./indexer.js";
 import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
 
 // ─── Response types ───────────────────────────────────────────────────────────
@@ -26,6 +27,8 @@ interface SessionResponse {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  /** true when this session is currently indexed in a shadow branch */
+  isLive: boolean;
 }
 
 interface EventResponse {
@@ -66,45 +69,6 @@ function mapSummary(s: {
     workflowLearnings: s.learningsWorkflow ? (JSON.parse(s.learningsWorkflow) as string[]) : [],
     friction:          s.friction          ? (JSON.parse(s.friction)          as string[]) : [],
     openItems:         s.openItems         ? (JSON.parse(s.openItems)         as string[]) : [],
-  };
-}
-
-
-function mapSession(
-  s: {
-    sessionId: string;
-    startedAt: Date;
-    updatedAt: Date;
-    cwd: string;
-    repoRoot: string | null;
-    repoName: string | null;
-    parentSessionId: string | null;
-    gitUserName: string | null;
-    gitUserEmail: string | null;
-    prompt: string | null;
-    summary: string | null;
-    keywords: string | null;
-  },
-  childSessionIds: string[] = [],
-  branch: string | null = null,
-  intent: string | null = null,
-): SessionResponse {
-  return {
-    sessionId: s.sessionId,
-    startedAt: s.startedAt.toISOString(),
-    updatedAt: s.updatedAt.toISOString(),
-    cwd: s.cwd,
-    repoRoot: s.repoRoot,
-    repoName: s.repoName,
-    parentSessionId: s.parentSessionId,
-    childSessionIds,
-    gitUserName: s.gitUserName,
-    gitUserEmail: s.gitUserEmail,
-    prompt: s.prompt,
-    summary: s.summary,
-    keywords: s.keywords ? (JSON.parse(s.keywords) as string[]) : [],
-    branch,
-    intent,
   };
 }
 
@@ -152,37 +116,80 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.use(cors());
   app.use(express.json());
 
-  // GET /api/sessions
+  // GET /api/sessions — reconstructed from CheckpointSessionMetadata + ShadowSession
   app.get("/api/sessions", async (_req, res) => {
     try {
-      const sessions = await db.session.findMany({
-        orderBy: { updatedAt: "desc" },
+      // Latest checkpoint meta per sessionId (asc order so map always ends on latest)
+      const allMetas = await db.checkpointSessionMetadata.findMany({
+        select: {
+          sessionId: true,
+          branch: true,
+          summary: { select: { intent: true } },
+        },
+        orderBy: { createdAt: "asc" },
       });
-      const sessionIds = sessions.map((s) => s.sessionId);
-
-      // Fetch latest branch and intent per session from CheckpointSessionMetadata
-      const sessionMetas = await db.checkpointSessionMetadata.findMany({
-        where: { sessionId: { in: sessionIds } },
-        select: { sessionId: true, branch: true, createdAt: true, summary: { select: { intent: true } } },
-        orderBy: { createdAt: "desc" },
-      });
-      const branchMap = new Map<string, string | null>();
-      const intentMap = new Map<string, string | null>();
-      for (const m of sessionMetas) {
-        if (!branchMap.has(m.sessionId)) branchMap.set(m.sessionId, m.branch);
-        if (!intentMap.has(m.sessionId)) intentMap.set(m.sessionId, m.summary?.intent ?? null);
+      const cpMap = new Map<string, { branch: string | null; intent: string | null }>();
+      for (const m of allMetas) {
+        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null });
       }
 
-      // Build parent → children map in memory
-      const childMap = new Map<string, string[]>();
-      for (const s of sessions) {
-        if (s.parentSessionId) {
-          const arr = childMap.get(s.parentSessionId) ?? [];
-          arr.push(s.sessionId);
-          childMap.set(s.parentSessionId, arr);
-        }
+      const shadows = await db.shadowSession.findMany();
+      const shadowMap = new Map(shadows.map((s) => [s.sessionId, s]));
+
+      const allIds = [...new Set([...cpMap.keys(), ...shadows.map((s) => s.sessionId)])];
+      if (allIds.length === 0) {
+        res.json([]);
+        return;
       }
-      res.json(sessions.map((s) => mapSession(s, childMap.get(s.sessionId) ?? [], branchMap.get(s.sessionId) ?? null, intentMap.get(s.sessionId) ?? null)));
+
+      // Min/max LogEvent timestamps per session
+      const times = await db.logEvent.groupBy({
+        by: ["sessionId"],
+        where: { sessionId: { in: allIds }, timestamp: { not: null } },
+        _min: { timestamp: true },
+        _max: { timestamp: true },
+      });
+      const timeMap = new Map(
+        times.map((r) => [r.sessionId!, { startedAt: r._min.timestamp, updatedAt: r._max.timestamp }])
+      );
+
+      // First cwd per session
+      const cwdRows = await db.logEvent.findMany({
+        where: { sessionId: { in: allIds }, cwd: { not: null } },
+        distinct: ["sessionId"],
+        orderBy: { id: "asc" },
+        select: { sessionId: true, cwd: true },
+      });
+      const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
+
+      const result: SessionResponse[] = allIds.map((sessionId) => {
+        const cp     = cpMap.get(sessionId) ?? null;
+        const shadow = shadowMap.get(sessionId) ?? null;
+        const t      = timeMap.get(sessionId);
+        const startedAt = t?.startedAt ?? shadow?.createdAt ?? null;
+        const updatedAt = t?.updatedAt ?? shadow?.createdAt ?? null;
+        return {
+          sessionId,
+          startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
+          updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
+          cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
+          repoRoot:        null,
+          repoName:        null,
+          parentSessionId: null,
+          childSessionIds: [],
+          gitUserName:     null,
+          gitUserEmail:    null,
+          prompt:          shadow?.prompt ?? null,
+          summary:         null,
+          keywords:        [],
+          branch:          cp?.branch ?? shadow?.gitBranch ?? null,
+          intent:          cp?.intent ?? null,
+          isLive:          shadow !== null,
+        };
+      });
+
+      result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      res.json(result);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -191,23 +198,49 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // GET /api/sessions/:id
   app.get("/api/sessions/:id", async (req, res) => {
     try {
-      const [session, children, latestMeta] = await Promise.all([
-        db.session.findUnique({ where: { sessionId: req.params.id } }),
-        db.session.findMany({
-          where: { parentSessionId: req.params.id },
-          select: { sessionId: true },
-        }),
+      const id = req.params.id;
+      const [latestMeta, shadow, firstEvent, lastEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
-          where: { sessionId: req.params.id },
+          where: { sessionId: id },
           select: { branch: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
+        db.shadowSession.findUnique({ where: { sessionId: id } }),
+        db.logEvent.findFirst({
+          where: { sessionId: id },
+          orderBy: { id: "asc" },
+          select: { cwd: true, timestamp: true },
+        }),
+        db.logEvent.findFirst({
+          where: { sessionId: id, timestamp: { not: null } },
+          orderBy: { id: "desc" },
+          select: { timestamp: true },
+        }),
       ]);
-      if (!session) {
+      if (!latestMeta && !shadow) {
         res.status(404).json({ error: "Session not found" });
         return;
       }
-      res.json(mapSession(session, children.map((c) => c.sessionId), latestMeta?.branch ?? null, latestMeta?.summary?.intent ?? null));
+      const startedAt = firstEvent?.timestamp ?? shadow?.createdAt ?? null;
+      const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
+      res.json({
+        sessionId:       id,
+        startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
+        updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
+        cwd:             firstEvent?.cwd ?? shadow?.cwd ?? "",
+        repoRoot:        null,
+        repoName:        null,
+        parentSessionId: null,
+        childSessionIds: [],
+        gitUserName:     null,
+        gitUserEmail:    null,
+        prompt:          shadow?.prompt ?? null,
+        summary:         null,
+        keywords:        [],
+        branch:          latestMeta?.branch ?? shadow?.gitBranch ?? null,
+        intent:          latestMeta?.summary?.intent ?? null,
+        isLive:          shadow !== null,
+      } satisfies SessionResponse);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -705,9 +738,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
 
-  // WebSocket change detection — poll every 2s, broadcast on new events or checkpoints
-  let lastMaxEventId: number | null = null;
+  // WebSocket change detection — poll every 2s, broadcast on new log events, checkpoints, or shadow sessions
+  let lastMaxLogEventId: number | null = null;
   let lastMaxCheckpointId: number | null = null;
+  let lastMaxShadowSessionId: number | null = null;
   const broadcast = () => {
     const message = JSON.stringify({ type: "sessions_updated" });
     for (const client of wss.clients) {
@@ -718,15 +752,18 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   };
   const poller = setInterval(async () => {
     try {
-      const [latestEvent, latestCheckpoint] = await Promise.all([
-        db.event.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+      const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
+        db.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
         db.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        db.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
       ]);
-      const currentEventId = latestEvent?.id ?? null;
-      const currentCheckpointId = latestCheckpoint?.id ?? null;
-      if (currentEventId !== lastMaxEventId || currentCheckpointId !== lastMaxCheckpointId) {
-        lastMaxEventId = currentEventId;
-        lastMaxCheckpointId = currentCheckpointId;
+      const curLogEvent   = latestLogEvent?.id   ?? null;
+      const curCheckpoint = latestCheckpoint?.id ?? null;
+      const curShadow     = latestShadow?.id     ?? null;
+      if (curLogEvent !== lastMaxLogEventId || curCheckpoint !== lastMaxCheckpointId || curShadow !== lastMaxShadowSessionId) {
+        lastMaxLogEventId   = curLogEvent;
+        lastMaxCheckpointId = curCheckpoint;
+        lastMaxShadowSessionId = curShadow;
         broadcast();
       }
     } catch {
@@ -736,11 +773,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // ── Checkpoint auto-indexer ───────────────────────────────────────────────
 
-  const WORKTREE_PATH = "/tmp/gossamer-checkpoints";
   const CHECKPOINT_BRANCH = "entire/checkpoints/v1";
   let checkpointPoller: ReturnType<typeof setInterval> | null = null;
 
   if (repoDir) {
+    const WORKTREE_PATH = join(repoDir, ".gossamer", "checkpoints");
+    mkdirSync(join(repoDir, ".gossamer"), { recursive: true });
+
     // Ensure worktree exists (reuse across restarts)
     if (!existsSync(WORKTREE_PATH)) {
       try {
@@ -783,10 +822,28 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     process.stderr.write(`checkpoint indexer: polling every 30s (worktree: ${WORKTREE_PATH})\n`);
   }
 
+  // ── Shadow branch indexer ──────────────────────────────────────────────────
+
+  let shadowPoller: ReturnType<typeof setInterval> | null = null;
+
+  if (repoDir) {
+    const runShadowIndex = async () => {
+      try {
+        const { sessions } = await indexAllShadowBranches(db, repoDir);
+        if (sessions > 0) broadcast();
+      } catch { /* non-fatal */ }
+    };
+
+    void runShadowIndex();
+    shadowPoller = setInterval(runShadowIndex, 5_000);
+    process.stderr.write(`shadow indexer: polling every 5s (repo: ${repoDir})\n`);
+  }
+
   // Graceful shutdown
   const shutdown = () => {
     clearInterval(poller);
     if (checkpointPoller) clearInterval(checkpointPoller);
+    if (shadowPoller) clearInterval(shadowPoller);
     httpServer.close();
     process.exit(0);
   };

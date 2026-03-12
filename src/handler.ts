@@ -1141,8 +1141,9 @@ async function readStdin(): Promise<string> {
 async function main(): Promise<void> {
   const config = loadConfig();
 
-  const defaultDbPath = config.repository
-    ? join(expandHome(config.repository), "hook-handler.db")
+  const repoInfo = detectRepo(process.cwd());
+  const defaultDbPath = repoInfo
+    ? join(repoInfo.repoRoot, ".gossamer", "hook-handler.db")
     : expandHome("~/.claude/hook-handler.db");
   const defaultSessionsPath = config.repository
     ? join(expandHome(config.repository), "sessions.md")

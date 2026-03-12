@@ -17,6 +17,8 @@ export interface Session {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  /** true when this session is currently indexed in a shadow branch */
+  isLive: boolean;
 }
 
 export interface Event {
