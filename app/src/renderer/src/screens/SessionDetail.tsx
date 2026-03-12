@@ -92,6 +92,8 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
   const msg = str(d.last_assistant_message);
   const thinking = str(d.thinking);
   const reason = str(d.reason);
+  const thinkingLogEventId = typeof d.thinkingLogEventId === "number" ? d.thinkingLogEventId : null;
+  const toolsLogEventId = typeof d.toolsLogEventId === "number" ? d.toolsLogEventId : null;
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
@@ -114,7 +116,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
         {thinking && (
-          <Box mb={6}>
+          <Box mb={6} id={thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined}>
             <Group
               gap={6}
               mb={4}
@@ -153,7 +155,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           </Box>
         )}
         {toolGroups.length > 0 && (
-          <Box>
+          <Box id={toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined}>
             <Group
               gap={6}
               mb={4}
@@ -192,6 +194,8 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   let lastAssistantText: string | null = null;
   let lastAssistantThinking: string | null = null;
   let lastAssistantLogEventId: number | null = null;
+  let lastThinkingLogEventId: number | null = null;
+  let lastToolsLogEventId: number | null = null;
   // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
   const currentTurnLogEventIds: number[] = [];
 
@@ -252,10 +256,12 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       if (thinkingBlocks.length > 0) {
         const thinking = thinkingBlocks.map((b) => b.thinking ?? "").filter(Boolean).join("\n\n");
         lastAssistantThinking = lastAssistantThinking ? lastAssistantThinking + "\n\n" + thinking : thinking;
+        lastThinkingLogEventId = le.id;
         if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
       }
 
       for (const tu of toolUses) {
+        lastToolsLogEventId = le.id;
         result.push({
           id: id--,
           timestamp: ts,
@@ -276,7 +282,13 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
         event: "Stop",
         sessionId: sid,
         blocked: le.systemData.preventedContinuation ?? false,
-        data: { last_assistant_message: lastAssistantText ?? "", thinking: lastAssistantThinking ?? "", reason: le.systemData.stopReason ?? "" },
+        data: {
+          last_assistant_message: lastAssistantText ?? "",
+          thinking: lastAssistantThinking ?? "",
+          reason: le.systemData.stopReason ?? "",
+          thinkingLogEventId: lastThinkingLogEventId ?? undefined,
+          toolsLogEventId: lastToolsLogEventId ?? undefined,
+        },
         summary: null, keywords: [],
         _sourceLogEventId: primaryId,
         _extraSourceLogEventIds: extraIds.length > 0 ? extraIds : undefined,
@@ -284,6 +296,8 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       lastAssistantText = null;
       lastAssistantThinking = null;
       lastAssistantLogEventId = null;
+      lastThinkingLogEventId = null;
+      lastToolsLogEventId = null;
       currentTurnLogEventIds.length = 0;
     }
   }
@@ -583,14 +597,16 @@ export function SessionDetail() {
     // Wait for Collapse animations (~200ms) to reach their final layout before measuring
     const t = setTimeout(() => {
       requestAnimationFrame(() => {
-        const el = document.querySelector(`[data-log-event-id="${targetLogEventId}"]`) as HTMLElement | null;
+        // Prefer an inner element with the precise id (thinking/tools section), fall back to the card div
+        const el = (document.getElementById(`log-event-${targetLogEventId}`)
+          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)) as HTMLElement | null;
         const viewport = viewportRef.current;
         if (!el || !viewport) return;
         const mark = el.querySelector("mark") as HTMLElement | null;
         const target = mark ?? el;
         const targetRect = target.getBoundingClientRect();
         const vpRect = viewport.getBoundingClientRect();
-        const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2;
+        const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2 + 16;
         viewport.scrollTo({ top: Math.max(0, scrollTop), behavior: "smooth" });
       });
     }, 250);
