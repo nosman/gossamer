@@ -539,7 +539,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {
       const results = await searchLogContent(db, q, Math.min(limit, 200));
-      res.json(results);
+      res.json(results.map((r) => ({ ...r, gitUserName: gitUser.name, gitUserEmail: gitUser.email })));
     } catch (err) {
       // FTS5 MATCH errors (bad syntax) come back as exceptions
       res.status(400).json({ error: String(err) });
