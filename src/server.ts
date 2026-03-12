@@ -657,10 +657,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       // Always reset to the local branch tip so local-only commits are included.
       try {
         await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`, { timeout: 10_000 });
-        await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} merge --ff-only origin/${CHECKPOINT_BRANCH}`).catch(() => { /* local is ahead or diverged — keep local */ });
       } catch { /* remote unavailable — index local state */ }
       try {
-        await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`);
+        // Use refs/heads/ explicitly to always resolve to the local branch, never the remote tracking ref
+        await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard refs/heads/${CHECKPOINT_BRANCH}`);
       } catch { /* non-fatal */ }
       try {
         const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
