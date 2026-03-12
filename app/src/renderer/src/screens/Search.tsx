@@ -174,7 +174,10 @@ export function Search() {
               <ResultCard
                 key={r.logContentId}
                 r={r}
-                onClick={() => navigate(`/sessions/${r.sessionId}`)}
+                onClick={() => {
+                  console.log("[search] clicking result — sessionId:", r.sessionId, "logEventId:", r.logEventId, "logContentId:", r.logContentId, "snippet:", r.snippet);
+                  navigate(`/sessions/${r.sessionId}?logEventId=${r.logEventId}`, { state: { snippet: r.snippet } });
+                }}
               />
             ))}
           </Box>
