@@ -3,25 +3,18 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton, Avatar, Chip } from "@mantine/core";
 import { fetchSearch, type SearchResult } from "../api";
 import { TimeAgo } from "../components/TimeAgo";
+import { MarkdownView } from "../components/MarkdownView";
 import claudeLogo from "../assets/claude-logo.png";
 
 // ── Snippet renderer ──────────────────────────────────────────────────────────
 
 function Snippet({ raw }: { raw: string }) {
-  const parts = raw.split(/(«[^»]*»)/g);
-  return (
-    <Text size="xs" ff="monospace" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.6 }}>
-      {parts.map((part, i) =>
-        part.startsWith("«") && part.endsWith("»") ? (
-          <Text key={i} component="span" size="xs" fw={700} c="yellow.5" ff="monospace">
-            {part.slice(1, -1)}
-          </Text>
-        ) : (
-          part
-        )
-      )}
-    </Text>
-  );
+  const terms: string[] = [];
+  const re = /«([^»]+)»/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) terms.push(m[1]);
+  const clean = raw.replace(/«([^»]*)»/g, "$1");
+  return <MarkdownView text={clean} highlightTerms={[...new Set(terms)]} />;
 }
 
 // ── Content-type label ────────────────────────────────────────────────────────

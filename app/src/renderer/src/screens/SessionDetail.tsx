@@ -179,6 +179,8 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
   );
 }
 
+// TODO: we're dropping the UUIDs from LogEventItems, or at least mixing them up into currentTurnLogEventIds.
+// We need to attach these UUIDs to the components that these generate. That way the scrolling will work.
 /**
  * Convert LogEventItems (from full.jsonl tables) into pseudo-Event objects that
  * match the shape the existing UI components expect.  This lets all downstream
@@ -193,6 +195,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
   const currentTurnLogEventIds: number[] = [];
 
+  // TODO: look at which event types are useful.
   const filtered = logEvents.filter(
     (e) => !e.isSidechain && e.type !== "file-history-snapshot" && e.type !== "progress",
   );
@@ -209,6 +212,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
 
     if (le.type === "user") {
       const toolResults = le.contents.filter((c) => c.contentType === "tool_result");
+      // TODO: show images and other content types
       const textBlocks  = le.contents.filter((c) => c.contentType === "text");
 
       if (toolResults.length > 0) {
