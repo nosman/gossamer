@@ -1,0 +1,135 @@
+Please work on the following open items:
+- The legacy `Session` table is no longer consulted for session listing but may still exist in the DB — no migration or cleanup was done to remove stale rows.
+
+---
+
+Why are we still using the sessions table at all? The tables we should care about are CheckpointSessionMetadata and ShadowSession
+
+---
+
+We don't care about the hook handler at all anymore. We only want to index from the entire cli logs and the poll loop.
+
+---
+
+Search results don't show the git username properly anymore, that's a regression
+
+---
+
+Restart the server
+
+---
+
+The username still does not show up on the search results
+
+---
+
+start the server
+
+---
+
+Do the github usernames get stored on the tool uses or messages in the database or are they always gotten from the git config?
+
+---
+
+Different checkpoints will be made by different people tho. We shouldn't be getting the user from the local machine's settings, we should be getting the user from the git commit that's linked to the given checkpoint.
+
+---
+
+We have a method to link a checkpoint to a commit, we can use that
+
+---
+
+does the indexer polling loop also fetch new changes from the entire/checkpoints/v1 branch? i seem to be missing a session
+
+---
+
+now, when we click on a search result, it links to the associated session details. What we want to do is link to the session details and scroll down to the actual search result. We can do this by adding the eventId as a query param to the session details page url. Then, get the element by its eventId, and call scrollIntoView() on it. Also ideally highlight the matching text if you can.
+
+---
+
+restart the server
+
+---
+
+The scroll doesn't work- is there anything else we need to do?
+
+---
+
+Still doesn't work. Are we passing the right eventIds and are they being set right on the html?
+
+---
+
+Still not scrolling. Can you add diagnostic console logs the print out the event id from the search result, the event id for the events in the session detail, and the id in the query param?
+
+---
+
+Ok the message, tool_call, and tool_result scrolls work, it's just the thinking scroll that is broken still
+
+---
+
+Are the thinking events not displayed directly on the session details page?
+
+---
+
+yes
+
+---
+
+Yes, auto-expand both thinking and tool uses when they are the scroll target. Ideally, the actual word will be highlighted, not shown above the match
+
+---
+
+When i click, the yellow snippethighlight should fade
+
+---
+
+The tool calls don't highlight yet. The dropdowns should expand when they're scrolled to and the matched search term should be highlighted
+
+---
+
+it's throwing some errors now: Uncaught TypeError: text.split is not a function
+    at applyHighlight (ToolUseItem.tsx:19:22)
+    at HighlightCode (ToolUseItem.tsx:30:8)
+    at renderWithHooks (chunk-XPR23Y44.js?v=427d13d1:11546:26)
+    at updateFunctionComponent (chunk-XPR23Y44.js?v=427d13d1:14580:28)
+    at beginWork (chunk-XPR23Y44.js?v=427d13d1:15922:22)
+    at HTMLUnknownElement.callCallback2 (chunk-XPR23Y44.js?v=427d13d1:3672:22
+
+---
+
+Only open the tool call dropdown if the clicked match is a tool call. similarly, only open the thinking dropdown if the clicked match is a thinking event.
+
+---
+
+The toolgroupitem has 2 levels of nesting- one level shows all the tool calls, the next level will expand individual tool calls. Currently you're expanding both levels completely. if there is a search match, expand the top-level menu and ONLY the matching individual tool call.
+
+---
+
+That results in an error: SessionDetail.tsx:170 Uncaught ReferenceError: targetLogEventId is not defined
+    at SessionDetail.tsx:170:137
+    at Array.map (<anonymous>)
+    at ClaudeTurnCard (SessionDetail.tsx:169:29)
+    at renderWithHooks (chunk-XPR23Y44.js?v=427d13d1:11546:26)
+    at mountIndeterminateComponent (chunk-XPR23Y44.js?v=427d13d1:14924:21)
+    at beginWork (chunk-XPR23Y44.js?v=427d13d1:15912:22)
+    at HTMLUnknownElement.callCallback2 (chunk-XPR23Y44.js?v=427d13d1:3672:22
+
+---
+
+What other types of events are being indexed in the fts5 table that are not being shown in the UI?
+
+---
+
+yes
+
+---
+
+Great. Next, can you make sure the scroll centers the highlighted match in the viewport? Currently it scrolls just to the top of the matching event
+
+---
+
+This works properly for user messages but doesn't work for claudeturns. it jumps to the right session but scrolls to the wrong message/text match
+
+---
+
+The search result bodies just show raw text. render them as markdown, but before you do, highlight the matched text.
