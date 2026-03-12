@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "f2030775598f",
+  "session_id": "a36395cc-12c3-4df3-9e89-63a1835410ad",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T02:25:57.376687Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "b6eabd565f7c",
+  "token_usage": {
+    "input_tokens": 125,
+    "cache_creation_tokens": 119124,
+    "cache_read_tokens": 9134929,
+    "output_tokens": 49167,
+    "api_call_count": 103
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Clean up the legacy Session table and hook handler infrastructure, then fix git username attribution on search results to use commit authors instead of local git config.",
+    "outcome": "Removed the hook handler (handler.ts, index.ts) and all legacy DB models (Session, AgentParent, PendingToolUse, Event, old Checkpoint tables); added authorName/authorEmail from git commits to CheckpointMetadata; fixed the polling loop to reset to origin/entire/checkpoints/v1 instead of the stale local branch.",
+    "learnings": {
+      "repo": [
+        "The project has two distinct eras: a hook-handler-based architecture (Session, Event, AgentParent, PendingToolUse tables) and the current indexer/poll-loop architecture (CheckpointSessionMetadata, ShadowSession). The hook handler era is now fully removed.",
+        "The Session table was originally used as a cross-invocation scratchpad for ephemeral per-session data (cwd, repoRoot, gitUser, summary, keywords) since the hook handler process was spawned fresh per event.",
+        "gitUtils.ts has a findCommitForCheckpoint function that walks git log to link checkpoints to commits — it was extended to also return authorName/authorEmail.",
+        "The FTS5 virtual tables in SQLite cannot be dropped by Prisma db push; they must be manually dropped via SQLite CLI before schema migration.",
+        "The server reads gitUser once at startup via getGitUser(repoDir) running git config — this is insufficient for multi-user repos where different checkpoints belong to different authors.",
+        "The polling loop fetches origin/entire/checkpoints/v1 but was erroneously resetting to the local branch ref, causing remote commits to be fetched but never applied."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "finding": "Polling loop bug: git fetch updated origin/entire/checkpoints/v1 but reset used local branch ref entire/checkpoints/v1, so remote commits were never applied to the worktree. Fixed to reset to origin/entire/checkpoints/v1."
+        },
+        {
+          "path": "src/handler.ts",
+          "line": 720,
+          "finding": "applyEvent already did delete state.sessions[session_id] on SessionEnd, but writeStateToDb never deleted rows — causing stale Session rows to accumulate indefinitely."
+        },
+        {
+          "path": "src/handler.ts",
+          "line": 1395,
+          "finding": "db.session.findUnique was used to look up cwd for auto-linking recently-ended sessions; replaced with JSON.parse(recentEnd.data).cwd since the full event JSON is already in the Event table."
+        },
+        {
+          "path": "src/search.ts",
+          "line": 146,
+          "finding": "LEFT JOIN Session was used solely to enrich results with gitUserName/gitUserEmail — removed when Session table was dropped."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "saveGitOidMapping links checkpoints to git commits; extended to also write authorName/authorEmail from the commit onto CheckpointMetadata."
+        },
+        {
+          "path": "src/gitUtils.ts",
+          "finding": "gitlog fields extended to include authorName and authorEmail, returned by findCommitForCheckpoint."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "CheckpointMetadata extended with optional gitUserName and gitUserEmail fields to store per-checkpoint commit author."
+        }
+      ],
+      "workflow": [
+        "When killing background Node processes, pkill alone may not catch all instances — verify with lsof/ps and kill by PID if needed.",
+        "Prisma db push cannot drop SQLite FTS5 virtual tables; drop them manually first, then push.",
+        "The old server process lingering caused confusion multiple times — a pattern of kill-verify-start is more reliable than assuming pkill succeeded."
+      ]
+    },
+    "friction": [
+      "The old server process survived pkill multiple times, causing repeated confusion about whether changes were live — required manual PID lookup and kill.",
+      "Prisma db push failed on FTS5 virtual tables, requiring a manual SQLite drop step before the schema migration could proceed — this happened twice across the session.",
+      "git config user data returned null from execSync in the server context even though git config was correctly set, because the old handler.js process was still the one responding on port 3000."
+    ],
+    "open_items": [
+      "Shadow sessions that haven't been committed yet fall back to local git config for gitUserName/gitUserEmail — these will show the wrong author in multi-user setups until a commit is made.",
+      "The indexer will only populate gitUserName/gitUserEmail on CheckpointMetadata for future indexing runs; existing rows in the DB have null author fields until re-indexed.",
+      "The live DB still had old tables (Session, Event, AgentParent, PendingToolUse, old Checkpoint tables) sitting in it at the end of the session — prisma db push with --accept-data-loss dropped them, but this was done interactively rather than as part of a migration.",
+      "No migration file was created for the schema changes — only prisma db push was used, which is not suitable for production deployments shared across machines."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T02:25:26.862743Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 16,
+    "agent_percentage": 0
+  }
+}
