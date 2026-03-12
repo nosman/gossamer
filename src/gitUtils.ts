@@ -9,7 +9,7 @@ export async function findCommitForCheckpoint(
   repoPath: string,
   branch: string,
   checkpointId: string,
-): Promise<{ hash: string; subject: string; branch: string } | null> {
+): Promise<{ hash: string; subject: string; branch: string; authorName: string; authorEmail: string } | null> {
   const branches = [branch, "main", "master"].filter(
     (b, i, arr) => arr.indexOf(b) === i,
   );
@@ -20,7 +20,7 @@ export async function findCommitForCheckpoint(
       commits = await gitlog({
         repo: repoPath,
         branch: b,
-        fields: ["hash", "subject", "body"] as const,
+        fields: ["hash", "subject", "body", "authorName", "authorEmail"] as const,
         number: 10_000,
       });
     } catch {
@@ -30,7 +30,13 @@ export async function findCommitForCheckpoint(
     for (const commit of commits) {
       const id = getCheckpointIdFromCommitMessage(commit.body ?? "");
       if (id === checkpointId) {
-        return { hash: commit.hash, subject: commit.subject, branch: b };
+        return {
+          hash: commit.hash,
+          subject: commit.subject,
+          branch: b,
+          authorName: commit.authorName,
+          authorEmail: commit.authorEmail,
+        };
       }
     }
   }

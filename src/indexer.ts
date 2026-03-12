@@ -136,6 +136,10 @@ async function saveGitOidMapping(
       create: { gitOid: commit.hash, checkpointId },
       update: { checkpointId },
     });
+    await db.checkpointMetadata.updateMany({
+      where: { checkpointId },
+      data: { gitUserName: commit.authorName || null, gitUserEmail: commit.authorEmail || null },
+    });
     existingMappings?.set(checkpointId, commit.hash);
   } catch {
     // non-fatal — git may not be available or branch may not exist

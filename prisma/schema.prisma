@@ -25,6 +25,8 @@ model CheckpointMetadata {
   strategy         String?
   branch           String?
   checkpointsCount Int                          @default(0)
+  gitUserName      String?
+  gitUserEmail     String?
   tokenUsageId     Int?                         @unique
   tokenUsage       TokenUsage?                  @relation("CheckpointMetadataTokenUsage", fields: [tokenUsageId], references: [id])
   sessions         SessionLink[]

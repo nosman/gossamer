@@ -87,15 +87,26 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const allMetas = await db.checkpointSessionMetadata.findMany({
         select: {
           sessionId: true,
+          checkpointId: true,
           branch: true,
           summary: { select: { intent: true } },
         },
         orderBy: { createdAt: "asc" },
       });
-      const cpMap = new Map<string, { branch: string | null; intent: string | null }>();
+      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string }>();
       for (const m of allMetas) {
-        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null });
+        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId });
       }
+
+      // Git user per checkpoint (from commit author stored at index time)
+      const allCheckpointIds = [...new Set(allMetas.map((m) => m.checkpointId))];
+      const cpUserRows = allCheckpointIds.length > 0
+        ? await db.checkpointMetadata.findMany({
+            where: { checkpointId: { in: allCheckpointIds } },
+            select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+          })
+        : [];
+      const cpUserMap = new Map(cpUserRows.map((r) => [r.checkpointId, r]));
 
       const shadows = await db.shadowSession.findMany();
       const shadowMap = new Map(shadows.map((s) => [s.sessionId, s]));
@@ -132,6 +143,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         const t      = timeMap.get(sessionId);
         const startedAt = t?.startedAt ?? shadow?.createdAt ?? null;
         const updatedAt = t?.updatedAt ?? shadow?.createdAt ?? null;
+        const cpUser = cp ? cpUserMap.get(cp.checkpointId) ?? null : null;
         return {
           sessionId,
           startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
@@ -141,8 +153,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           repoName:        repoName,
           parentSessionId: null,
           childSessionIds: [],
-          gitUserName:     gitUser.name,
-          gitUserEmail:    gitUser.email,
+          gitUserName:     cpUser?.gitUserName ?? gitUser.name,
+          gitUserEmail:    cpUser?.gitUserEmail ?? gitUser.email,
           prompt:          shadow?.prompt ?? null,
           summary:         null,
           keywords:        [],
@@ -166,7 +178,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const [latestMeta, shadow, firstEvent, lastEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
-          select: { branch: true, summary: { select: { intent: true } } },
+          select: { branch: true, checkpointId: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
         db.shadowSession.findUnique({ where: { sessionId: id } }),
@@ -185,6 +197,12 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         res.status(404).json({ error: "Session not found" });
         return;
       }
+      const cpMeta = latestMeta
+        ? await db.checkpointMetadata.findUnique({
+            where: { checkpointId: latestMeta.checkpointId },
+            select: { gitUserName: true, gitUserEmail: true },
+          })
+        : null;
       const startedAt = firstEvent?.timestamp ?? shadow?.createdAt ?? null;
       const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
       res.json({
@@ -196,8 +214,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         repoName:        repoName,
         parentSessionId: null,
         childSessionIds: [],
-        gitUserName:     gitUser.name,
-        gitUserEmail:    gitUser.email,
+        gitUserName:     cpMeta?.gitUserName ?? gitUser.name,
+        gitUserEmail:    cpMeta?.gitUserEmail ?? gitUser.email,
         prompt:          shadow?.prompt ?? null,
         summary:         null,
         keywords:        [],
@@ -539,7 +557,31 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {
       const results = await searchLogContent(db, q, Math.min(limit, 200));
-      res.json(results.map((r) => ({ ...r, gitUserName: gitUser.name, gitUserEmail: gitUser.email })));
+      const sessionIds = [...new Set(results.map((r) => r.sessionId))];
+      const sessionMetas = sessionIds.length > 0
+        ? await db.checkpointSessionMetadata.findMany({
+            where: { sessionId: { in: sessionIds } },
+            select: { sessionId: true, checkpointId: true },
+            distinct: ["sessionId"],
+            orderBy: { createdAt: "desc" },
+          })
+        : [];
+      const cpIds = [...new Set(sessionMetas.map((m) => m.checkpointId))];
+      const cpUsers = cpIds.length > 0
+        ? await db.checkpointMetadata.findMany({
+            where: { checkpointId: { in: cpIds } },
+            select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+          })
+        : [];
+      const cpUserMap = new Map(cpUsers.map((r) => [r.checkpointId, r]));
+      const sessionUserMap = new Map(sessionMetas.map((m) => {
+        const u = cpUserMap.get(m.checkpointId);
+        return [m.sessionId, { gitUserName: u?.gitUserName ?? null, gitUserEmail: u?.gitUserEmail ?? null }];
+      }));
+      res.json(results.map((r) => {
+        const u = sessionUserMap.get(r.sessionId);
+        return { ...r, gitUserName: u?.gitUserName ?? gitUser.name, gitUserEmail: u?.gitUserEmail ?? gitUser.email };
+      }));
     } catch (err) {
       // FTS5 MATCH errors (bad syntax) come back as exceptions
       res.status(400).json({ error: String(err) });
