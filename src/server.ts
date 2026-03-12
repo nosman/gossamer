@@ -821,13 +821,16 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
       try {
-        // Fetch latest commits and advance the worktree to the branch tip
+        // Try to fetch from remote first (may fail if SSH unavailable — non-fatal).
+        // Always reset to the local branch tip, which entire updates locally on commit.
+        try {
+          execSync(
+            `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
+            { stdio: "pipe" },
+          );
+        } catch { /* remote unavailable — local commits still present */ }
         execSync(
-          `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
-          { stdio: "pipe" },
-        );
-        execSync(
-          `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard FETCH_HEAD`,
+          `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`,
           { stdio: "pipe" },
         );
       } catch { /* non-fatal */ }

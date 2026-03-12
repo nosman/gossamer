@@ -8,6 +8,7 @@ import {
   fetchSessionCheckpoints,
   spawnSession,
   updateOpenItemStatus,
+  subscribeToUpdates,
   type Session,
   type Event,
   type SessionCheckpoint,
@@ -377,6 +378,27 @@ export function SessionDetail() {
   const id = sessionId!;
   const { setCrumbs } = useBreadcrumb();
 
+  function applyCheckpoints(logEvs: LogEventItem[], checkpoints: SessionCheckpoint[]) {
+    const grouped = groupEvents(logEventsToEvents(logEvs));
+    const merged: DisplayItem[] = [];
+    let cpIdx = 0;
+    const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+    const latest = sortedCps[sortedCps.length - 1] ?? null;
+    setLatestCheckpoint(latest);
+    setOpenItems(latest?.summary?.openItems ?? []);
+
+    for (const item of grouped) {
+      const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
+      while (cpIdx < sortedCps.length && (sortedCps[cpIdx].createdAt ?? "") <= itemTime) {
+        merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
+      }
+      merged.push(item);
+    }
+    while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
+    setItems(groupClaudeTurns(merged));
+  }
+
+  // Initial load
   useEffect(() => {
     Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
       .then(([s, logEvs, checkpoints]) => {
@@ -395,28 +417,20 @@ export function SessionDetail() {
           ...(repo ? [{ label: repo, path: "/" }] : []),
           { label: shortId },
         ]);
-        const grouped = groupEvents(logEventsToEvents(logEvs));
-        const merged: DisplayItem[] = [];
-        let cpIdx = 0;
-        const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
-        const latest = sortedCps[sortedCps.length - 1] ?? null;
-        setLatestCheckpoint(latest);
-        setOpenItems(latest?.summary?.openItems ?? []);
-
-        for (const item of grouped) {
-          const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
-          while (cpIdx < sortedCps.length && (sortedCps[cpIdx].createdAt ?? "") <= itemTime) {
-            merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-          }
-          merged.push(item);
-        }
-        while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-
-        setItems(groupClaudeTurns(merged));
+        applyCheckpoints(logEvs, checkpoints);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
       .finally(() => setLoading(false));
+  }, [id]);
+
+  // Live updates: re-fetch checkpoints and log events when the server broadcasts a change
+  useEffect(() => {
+    return subscribeToUpdates(() => {
+      Promise.all([fetchLogEvents(id), fetchSessionCheckpoints(id)])
+        .then(([logEvs, checkpoints]) => applyCheckpoints(logEvs, checkpoints))
+        .catch(() => undefined);
+    });
   }, [id]);
 
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
