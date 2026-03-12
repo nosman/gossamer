@@ -1,0 +1,13 @@
+let's make the indexer/poll loop more robust. Instead of checking out the entire/checkpoints/v1 branch into /private/tmp, check it out into a directory underneath the git root directory. Let's also put the default sqlite db in a hidden .gossamer directory in the root git directory. let the user specify alternative paths but use these as the default
+
+---
+
+restart the server and index all entire checkpoints from an empty state
+
+---
+
+With the old data model, we were initializing sessions from claude code hooks. Now that we're only using the entire files as the source of truth, we need to reconstruct the sessions. Entire.io sessions are stored in shadow branches before they're committed into the official entire/checkpoints/v1 branch. Let's start indexing the shadow branches
+
+---
+
+Update the sessions table UI to show shadowSessions as well as normal sessions. Reconstruct normal sessions from the entire/checkpoints/v1 history. Sessions table should have the "intent" column of the latest checkpoint as the summary.
