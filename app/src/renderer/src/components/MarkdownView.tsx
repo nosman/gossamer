@@ -1,4 +1,24 @@
-import React, { useMemo } from "react";
+import React, { createContext, useContext, useMemo } from "react";
+
+// ─── Highlight context ────────────────────────────────────────────────────────
+
+const HighlightTermsCtx = createContext<string[]>([]);
+
+function HighlightText({ s }: { s: string }) {
+  const terms = useContext(HighlightTermsCtx);
+  if (!terms.length) return <>{s}</>;
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts = s.split(new RegExp(`(${pattern})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1
+          ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+          : p
+      )}
+    </>
+  );
+}
 
 // ─── Inline parsing ───────────────────────────────────────────────────────────
 
@@ -96,7 +116,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): React.ReactElement {
         if (n.t === "bold") return <strong key={i}><Inline nodes={parseInline(n.s)} /></strong>;
         if (n.t === "italic") return <em key={i}><Inline nodes={parseInline(n.s)} /></em>;
         if (n.t === "code") return <code key={i} style={{ fontFamily: "monospace", fontSize: 12, backgroundColor: "light-dark(#f1f5f9, var(--mantine-color-dark-5))", color: "light-dark(#0f172a, var(--mantine-color-dark-0))", padding: "0 3px", borderRadius: 3 }}>{n.s}</code>;
-        return <React.Fragment key={i}>{n.s}</React.Fragment>;
+        return <React.Fragment key={i}><HighlightText s={n.s} /></React.Fragment>;
       })}
     </>
   );
@@ -109,10 +129,11 @@ export function InlineMarkdown({ text, style }: { text: string; style?: React.CS
   return <span style={style}><Inline nodes={nodes} /></span>;
 }
 
-export function MarkdownView({ text }: { text: string }) {
+export function MarkdownView({ text, highlightTerms }: { text: string; highlightTerms?: string[] }) {
   const blocks = useMemo(() => parseBlocks(text), [text]);
 
   return (
+    <HighlightTermsCtx.Provider value={highlightTerms ?? []}>
     <div style={{ fontSize: 13, color: "light-dark(#374151, var(--mantine-color-dark-0))", lineHeight: "20px" }}>
       {blocks.map((block, idx) => {
         if (block.kind === "code") {
@@ -170,5 +191,6 @@ export function MarkdownView({ text }: { text: string }) {
         );
       })}
     </div>
+    </HighlightTermsCtx.Provider>
   );
 }

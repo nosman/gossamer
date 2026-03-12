@@ -64,7 +64,30 @@ function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
 
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
 
-function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; stop: Event | null }) {
+function highlightText(text: string, terms: string[]): React.ReactNode {
+  if (!terms.length) return text;
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        i % 2 === 1
+          ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+          : p
+      )}
+    </>
+  );
+}
+
+function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
+  toolGroups: ToolUseData[][];
+  stop: Event | null;
+  isTarget?: boolean;
+  matchTerms?: string[];
+  expandTools?: boolean;
+  expandThinking?: boolean;
+  targetLogEventId?: number | null;
+}) {
   const d = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg = str(d.last_assistant_message);
   const thinking = str(d.thinking);
@@ -72,6 +95,14 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
+
+  useEffect(() => {
+    if (expandThinking && thinking) setThinkingExpanded(true);
+  }, [expandThinking, thinking]);
+
+  useEffect(() => {
+    if (expandTools && totalTools > 0) setToolsExpanded(true);
+  }, [expandTools, totalTools]);
 
   return (
     <Box style={{ display: "flex", padding: "12px 20px 4px", gap: 10 }}>
@@ -105,7 +136,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
                 wordBreak: "break-word",
                 color: "light-dark(var(--mantine-color-gray-7), var(--mantine-color-gray-4))",
               }}>
-                {thinking}
+                {highlightText(thinking, matchTerms ?? [])}
               </Box>
             </Collapse>
           </Box>
@@ -118,7 +149,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
             padding: "12px 16px",
             marginBottom: toolGroups.length > 0 ? 8 : 0,
           }}>
-            <MarkdownView text={msg} />
+            <MarkdownView text={msg} highlightTerms={matchTerms} />
           </Box>
         )}
         {toolGroups.length > 0 && (
@@ -137,7 +168,7 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
             <Collapse in={toolsExpanded}>
               <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                 {toolGroups.map((tools, i) => (
-                  <ToolGroupItem key={i} tools={tools} />
+                  <ToolGroupItem key={i} tools={tools} autoExpand={expandTools} matchTerms={matchTerms} targetLogEventId={expandTools ? targetLogEventId : null} />
                 ))}
               </Box>
             </Collapse>
@@ -417,21 +448,14 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
   );
 }
 
-// ── Snippet renderer (for search match annotation) ────────────────────────────
+// ── Search snippet helpers ─────────────────────────────────────────────────────
 
-function SnippetHighlight({ raw }: { raw: string }) {
-  const parts = raw.split(/(«[^»]*»)/g);
-  return (
-    <Text size="xs" ff="monospace" style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", lineHeight: 1.5 }}>
-      {parts.map((part, i) =>
-        part.startsWith("«") && part.endsWith("»") ? (
-          <Text key={i} component="span" size="xs" fw={700} style={{ backgroundColor: "rgba(255,200,0,0.35)", borderRadius: 2, padding: "0 2px" }} ff="monospace">
-            {part.slice(1, -1)}
-          </Text>
-        ) : part
-      )}
-    </Text>
-  );
+function extractMatchTerms(snippet: string): string[] {
+  const terms: string[] = [];
+  const re = /«([^»]+)»/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(snippet)) !== null) terms.push(m[1]);
+  return [...new Set(terms)];
 }
 
 // ── Source log event ID extractor ─────────────────────────────────────────────
@@ -465,7 +489,8 @@ export function SessionDetail() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const targetLogEventId = searchParams.get("logEventId") ? parseInt(searchParams.get("logEventId")!) : null;
-  const searchSnippet = (location.state as { snippet?: string } | null)?.snippet ?? null;
+  const searchSnippet = (location.state as { snippet?: string; contentType?: string } | null)?.snippet ?? null;
+  const searchContentType = (location.state as { snippet?: string; contentType?: string } | null)?.contentType ?? null;
   const [highlightActive, setHighlightActive] = useState(false);
   const scrolledRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -537,29 +562,36 @@ export function SessionDetail() {
     });
   }, [id]);
 
-  // Scroll to and highlight the target log event from a search result
+  // Step 1: activate highlight once items are loaded (triggers Collapse expand + mark rendering)
   useEffect(() => {
     if (targetLogEventId === null || items.length === 0 || scrolledRef.current) return;
-    console.log("[scroll] targetLogEventId from query param:", targetLogEventId);
-    console.log("[scroll] all data-log-event-id values in DOM:", Array.from(document.querySelectorAll("[data-log-event-id]")).map((el) => ({ id: el.getAttribute("data-log-event-id"), el })));
-    console.log("[scroll] sourceIds per render item:", items.map((item, idx) => ({ idx, kind: item.kind, sourceIds: getItemSourceIds(item) })));
-    const timer = setTimeout(() => {
-      const el = document.querySelector(`[data-log-event-id="${targetLogEventId}"]`) as HTMLElement | null;
-      console.log("[scroll] querySelector result:", el);
-      const viewport = viewportRef.current;
-      console.log("[scroll] viewport ref:", viewport);
-      if (el && viewport) {
-        const elRect = el.getBoundingClientRect();
-        const vpRect = viewport.getBoundingClientRect();
-        const scrollTop = viewport.scrollTop + elRect.top - vpRect.top - viewport.clientHeight / 2 + elRect.height / 2;
-        viewport.scrollTo({ top: scrollTop, behavior: "smooth" });
-        setHighlightActive(true);
-        scrolledRef.current = true;
-        setTimeout(() => setHighlightActive(false), 2500);
-      }
+    const t = setTimeout(() => {
+      setHighlightActive(true);
+      scrolledRef.current = true;
+      setTimeout(() => setHighlightActive(false), 2500);
     }, 150);
-    return () => clearTimeout(timer);
+    return () => clearTimeout(t);
   }, [items, targetLogEventId]);
+
+  // Step 2: once highlightActive is true (marks rendered, Collapses expanding), scroll to first <mark>
+  useEffect(() => {
+    if (!highlightActive || targetLogEventId === null) return;
+    // Wait for Collapse animations (~200ms) to reach their final layout before measuring
+    const t = setTimeout(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-log-event-id="${targetLogEventId}"]`) as HTMLElement | null;
+        const viewport = viewportRef.current;
+        if (!el || !viewport) return;
+        const mark = el.querySelector("mark") as HTMLElement | null;
+        const target = mark ?? el;
+        const targetRect = target.getBoundingClientRect();
+        const vpRect = viewport.getBoundingClientRect();
+        const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2;
+        viewport.scrollTo({ top: Math.max(0, scrollTop), behavior: "smooth" });
+      });
+    }, 250);
+    return () => clearTimeout(t);
+  }, [highlightActive, targetLogEventId]);
 
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
@@ -704,6 +736,7 @@ export function SessionDetail() {
         {items.map((item, idx) => {
           const sourceIds = getItemSourceIds(item);
           const isTarget = targetLogEventId !== null && sourceIds.includes(targetLogEventId);
+          const matchTerms = isTarget && highlightActive && searchSnippet ? extractMatchTerms(searchSnippet) : undefined;
           const key = item.kind === "claudeTurn" ? `turn-${idx}`
             : item.kind === "checkpoint" ? `cp-${item.checkpoint.checkpointId}`
             : `evt-${item.event.id}`;
@@ -713,13 +746,16 @@ export function SessionDetail() {
               data-log-event-id={isTarget ? targetLogEventId! : (sourceIds[0] ?? undefined)}
               className={isTarget && highlightActive ? "search-target-highlight" : undefined}
             >
-              {isTarget && highlightActive && searchSnippet && (
-                <Box px={20} pt={8} pb={2}>
-                  <SnippetHighlight raw={searchSnippet} />
-                </Box>
-              )}
               {item.kind === "claudeTurn" ? (
-                <ClaudeTurnCard toolGroups={item.toolGroups} stop={item.stop} />
+                <ClaudeTurnCard
+                  toolGroups={item.toolGroups}
+                  stop={item.stop}
+                  isTarget={isTarget}
+                  matchTerms={matchTerms}
+                  expandTools={isTarget && (searchContentType === "tool_use" || searchContentType === "tool_result")}
+                  expandThinking={isTarget && searchContentType === "thinking"}
+                  targetLogEventId={targetLogEventId}
+                />
               ) : item.kind === "checkpoint" ? (
                 <CheckpointRow
                   checkpoint={item.checkpoint}
@@ -728,7 +764,7 @@ export function SessionDetail() {
                   })}
                 />
               ) : (
-                <EventItem event={item.event} user={userInfo} />
+                <EventItem event={item.event} user={userInfo} matchTerms={matchTerms} />
               )}
             </div>
           );

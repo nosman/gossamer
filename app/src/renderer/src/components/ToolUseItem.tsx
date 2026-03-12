@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Badge, Group, Text, Collapse, Code } from "@mantine/core";
 import type { Event } from "../api";
 import { relativeTime } from "./TimeAgo";
@@ -7,9 +7,30 @@ interface Props {
   pre: Event;
   post?: Event;
   failed: boolean;
+  autoExpand?: boolean;
+  matchTerms?: string[];
 }
 
 function str(v: unknown): string { return typeof v === "string" ? v : ""; }
+
+function applyHighlight(text: string, terms: string[] | undefined): React.ReactNode {
+  if (!terms?.length) return text;
+  const pattern = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  const parts = text.split(new RegExp(`(${pattern})`, "gi"));
+  return parts.map((p, i) =>
+    i % 2 === 1
+      ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark>
+      : p
+  );
+}
+
+function HighlightCode({ children, terms, style }: { children: string; terms?: string[] | undefined; style?: React.CSSProperties }) {
+  return (
+    <Code block style={style}>
+      {applyHighlight(children, terms)}
+    </Code>
+  );
+}
 
 function toolHint(toolName: string, data: unknown): string {
   if (!data || typeof data !== "object") return "";
@@ -34,20 +55,20 @@ function truncated(val: unknown, max = 1200): string | undefined {
   return s.length > max ? s.slice(0, max) + "\n…" : s;
 }
 
-function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
+function DiffView({ oldStr, newStr, terms }: { oldStr: string; newStr: string; terms?: string[] }) {
   return (
     <Box style={{ display: "flex", flexDirection: "column", gap: 4 }}>
       {oldStr && (
         <Box style={{ backgroundColor: "light-dark(var(--mantine-color-red-0), var(--mantine-color-dark-6))", borderLeft: "3px solid var(--mantine-color-red-3)", padding: "4px 6px", borderRadius: 2 }}>
           <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
-            {oldStr.split("\n").map((l) => "− " + l).join("\n")}
+            {applyHighlight(oldStr.split("\n").map((l) => "− " + l).join("\n"), terms)}
           </Code>
         </Box>
       )}
       {newStr && (
         <Box style={{ backgroundColor: "light-dark(var(--mantine-color-green-0), var(--mantine-color-dark-6))", borderLeft: "3px solid var(--mantine-color-green-3)", padding: "4px 6px", borderRadius: 2 }}>
           <Code block style={{ fontSize: 11, lineHeight: "16px", background: "transparent", padding: 0 }}>
-            {newStr.split("\n").map((l) => "+ " + l).join("\n")}
+            {applyHighlight(newStr.split("\n").map((l) => "+ " + l).join("\n"), terms)}
           </Code>
         </Box>
       )}
@@ -55,40 +76,46 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   );
 }
 
-function renderInput(toolName: string, inp: Record<string, unknown>): React.ReactNode {
+function renderInput(toolName: string, inp: Record<string, unknown>, terms?: string[]): React.ReactNode {
   switch (toolName) {
     case "Edit": {
       const fp = str(inp.file_path), old = str(inp.old_string), newS = str(inp.new_string);
-      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{fp}</Text> : null}<DiffView oldStr={old} newStr={newS} /></div>;
+      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{applyHighlight(fp, terms)}</Text> : null}<DiffView oldStr={old} newStr={newS} terms={terms} /></div>;
     }
     case "Write": {
       const fp = str(inp.file_path), content = str(inp.content);
-      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{fp}</Text> : null}<Code block style={{ fontSize: 11 }}>{content.length > 1200 ? content.slice(0, 1200) + "\n…" : content}</Code></div>;
+      const truncContent = content.length > 1200 ? content.slice(0, 1200) + "\n…" : content;
+      return <div>{fp ? <Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{applyHighlight(fp, terms)}</Text> : null}<HighlightCode terms={terms} style={{ fontSize: 11 }}>{truncContent}</HighlightCode></div>;
     }
     case "Read": {
       const fp = str(inp.file_path);
       const extra = (inp.offset != null ? `  offset: ${inp.offset}` : "") + (inp.limit != null ? `  limit: ${inp.limit}` : "");
-      return <Text size="xs" ff="monospace" c="violet" fw={600}>{fp}{extra}</Text>;
+      return <Text size="xs" ff="monospace" c="violet" fw={600}>{applyHighlight(fp + extra, terms)}</Text>;
     }
-    case "Bash": return <Code block style={{ fontSize: 11 }}>{str(inp.command)}</Code>;
+    case "Bash": return <HighlightCode terms={terms} style={{ fontSize: 11 }}>{str(inp.command)}</HighlightCode>;
     case "Glob": case "Grep": {
       const pattern = str(inp.pattern), extra = str(inp.path || inp.glob || inp.type || "");
-      return <Code block style={{ fontSize: 11 }}>{pattern}{extra ? "\n" + extra : ""}</Code>;
+      return <HighlightCode terms={terms} style={{ fontSize: 11 }}>{pattern + (extra ? "\n" + extra : "")}</HighlightCode>;
     }
     case "WebFetch": {
       const url = str(inp.url), prompt = str(inp.prompt);
-      return <div><Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{url}</Text>{prompt ? <Code block style={{ fontSize: 11 }}>{prompt}</Code> : null}</div>;
+      return <div><Text size="xs" ff="monospace" c="violet" fw={600} mb={4}>{applyHighlight(url, terms)}</Text>{prompt ? <HighlightCode terms={terms} style={{ fontSize: 11 }}>{prompt}</HighlightCode> : null}</div>;
     }
-    case "WebSearch": return <Code block style={{ fontSize: 11 }}>{str(inp.query)}</Code>;
+    case "WebSearch": return <HighlightCode terms={terms} style={{ fontSize: 11 }}>{str(inp.query)}</HighlightCode>;
     default: {
       const raw = JSON.stringify(inp, null, 2);
-      return <Code block style={{ fontSize: 11 }}>{raw.length > 1200 ? raw.slice(0, 1200) + "\n…" : raw}</Code>;
+      return <HighlightCode terms={terms} style={{ fontSize: 11 }}>{raw.length > 1200 ? raw.slice(0, 1200) + "\n…" : raw}</HighlightCode>;
     }
   }
 }
 
-export function ToolUseItem({ pre, post, failed }: Props) {
+export function ToolUseItem({ pre, post, failed, autoExpand, matchTerms }: Props) {
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (autoExpand) setExpanded(true);
+  }, [autoExpand]);
+
   const preData = pre.data as Record<string, unknown>;
   const toolName = typeof preData.tool_name === "string" ? preData.tool_name : "?";
   const hint = toolHint(toolName, pre.data);
@@ -119,7 +146,7 @@ export function ToolUseItem({ pre, post, failed }: Props) {
           {toolInput !== undefined && (
             <>
               <Text size="xs" c="dimmed" fw={700} tt="uppercase" style={{ letterSpacing: 0.5, marginTop: 6, marginBottom: 2 }}>input</Text>
-              {renderInput(toolName, toolInput)}
+              {renderInput(toolName, toolInput, matchTerms)}
             </>
           )}
           {outputStr !== undefined && (
@@ -127,7 +154,7 @@ export function ToolUseItem({ pre, post, failed }: Props) {
               <Text size="xs" fw={700} tt="uppercase" style={{ letterSpacing: 0.5, marginTop: 6, marginBottom: 2 }} c={failed ? "red" : "dimmed"}>
                 {failed ? "error" : "output"}
               </Text>
-              <Code block style={{ fontSize: 11 }}>{outputStr}</Code>
+              <HighlightCode terms={matchTerms} style={{ fontSize: 11 }}>{outputStr}</HighlightCode>
             </>
           )}
         </Box>

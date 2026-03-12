@@ -176,7 +176,7 @@ export function Search() {
                 r={r}
                 onClick={() => {
                   console.log("[search] clicking result — sessionId:", r.sessionId, "logEventId:", r.logEventId, "logContentId:", r.logContentId, "snippet:", r.snippet);
-                  navigate(`/sessions/${r.sessionId}?logEventId=${r.logEventId}`, { state: { snippet: r.snippet } });
+                  navigate(`/sessions/${r.sessionId}?logEventId=${r.logEventId}`, { state: { snippet: r.snippet, contentType: r.contentType } });
                 }}
               />
             ))}

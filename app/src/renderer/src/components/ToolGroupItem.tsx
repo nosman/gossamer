@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Badge, Group, Text, Collapse } from "@mantine/core";
 import type { Event } from "../api";
 import { ToolUseItem } from "./ToolUseItem";
@@ -15,8 +15,17 @@ function toolName(pre: Event): string {
   return typeof d.tool_name === "string" ? d.tool_name : "?";
 }
 
-export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
+export function ToolGroupItem({ tools, autoExpand, matchTerms, targetLogEventId }: {
+  tools: ToolUseData[];
+  autoExpand?: boolean;
+  matchTerms?: string[];
+  targetLogEventId?: number | null;
+}) {
   const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (autoExpand) setExpanded(true);
+  }, [autoExpand]);
 
   const names = tools.map((t) => toolName(t.pre));
   const counts = new Map<string, number>();
@@ -59,9 +68,13 @@ export function ToolGroupItem({ tools }: { tools: ToolUseData[] }) {
         </Group>
         <Collapse in={expanded}>
           <Box style={{ borderTop: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))" }}>
-            {tools.map((t, i) => (
-              <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} />
-            ))}
+            {tools.map((t, i) => {
+              const isMatch = targetLogEventId != null && (
+                t.pre._sourceLogEventId === targetLogEventId ||
+                t.post?._sourceLogEventId === targetLogEventId
+              );
+              return <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} autoExpand={isMatch} matchTerms={isMatch ? matchTerms : undefined} />;
+            })}
           </Box>
         </Collapse>
     </Box>
