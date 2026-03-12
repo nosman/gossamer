@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "12f12678caa2",
+  "session_id": "a36395cc-12c3-4df3-9e89-63a1835410ad",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T01:54:03.187244Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a39ecc5ef425",
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 97050,
+    "cache_read_tokens": 5670532,
+    "output_tokens": 36317,
+    "api_call_count": 74
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Remove the legacy Session table and all hook handler infrastructure, leaving only the indexer/poll-loop pipeline and the serve endpoint as the active data path.",
+    "outcome": "Deleted handler.ts and index.ts entirely; dropped Session, Event, AgentParent, PendingToolUse, and all v1 Checkpoint tables from the schema; fixed a regression where gitUserName disappeared from search results by reading it from git config at server startup instead of a DB join; pushed the new schema to the live DB after manually dropping FTS5 virtual tables that blocked prisma db push.",
+    "learnings": {
+      "repo": [
+        "The Session table was purely a cross-invocation scratchpad for the hook handler — all its data (cwd, prompt, summary, keywords) was already redundantly stored in the Event table's data JSON column.",
+        "gitUser (name/email) is read from git config at server startup and is available as a module-level variable in server.ts — no DB join needed to enrich search results.",
+        "The gossamer DB contains FTS5 virtual tables that prisma db push cannot drop; they must be manually dropped with SQLite DROP TABLE before prisma can proceed.",
+        "The old handler.js process was not killed by pkill on the first attempt, causing the new server to appear unresponsive — the stale process was still serving on port 3000."
+      ],
+      "code": [
+        {
+          "path": "src/handler.ts",
+          "line": 1395,
+          "end_line": 1395,
+          "finding": "db.session.findUnique was used to look up cwd for the 30s auto-link check; replaced by JSON.parse(recentEnd.data).cwd since the full HookInput is already in the Event table."
+        },
+        {
+          "path": "src/handler.ts",
+          "line": 720,
+          "end_line": 720,
+          "finding": "applyEvent deletes state.sessions[session_id] on SessionEnd, meaning ended sessions were already removed from in-memory state but writeStateToDb never pruned corresponding DB rows."
+        },
+        {
+          "path": "src/handler.ts",
+          "line": 824,
+          "end_line": 829,
+          "finding": "summary and keywords were written as columns on the UserPromptSubmit Event row inside writeEventLog, making the Session table copies fully redundant."
+        },
+        {
+          "path": "src/search.ts",
+          "line": 146,
+          "end_line": 146,
+          "finding": "LEFT JOIN Session was used solely to enrich results with gitUserName/gitUserEmail; removed and replaced by server-side injection from git config."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "gitUser is read from git config at server startup; spreading gitUser.name and gitUser.email onto each search result in the /api/search handler restores the gitUserName field without any DB dependency."
+        }
+      ],
+      "workflow": [
+        "When prisma db push is blocked by virtual tables (FTS5), manually drop them via sqlite3 CLI before re-running the push.",
+        "After killing a server process, verify the port is actually free before starting a replacement — stale processes can survive pkill.",
+        "Running npm run build after each edit is an effective fast feedback loop for catching type errors before touching the running server."
+      ]
+    },
+    "friction": [
+      "prisma db push failed because it cannot drop SQLite FTS5 virtual tables — required a manual sqlite3 DROP TABLE workaround.",
+      "pkill did not terminate the old handler.js process on the first attempt, leaving a stale server on port 3000 that masked the new server's behavior.",
+      "gitUserName regression was introduced by removing the Session LEFT JOIN without immediately providing a replacement source, requiring a separate fix pass."
+    ],
+    "open_items": [
+      "The live DB still had the old tables at session end — db push with --accept-data-loss was needed; any environments not yet pushed will need the same migration.",
+      "FTS tables were dropped and will be rebuilt by the server on startup — verify rebuild completes correctly and search quality is unchanged.",
+      "search.ts no longer returns gitUserName/gitUserEmail from a per-session source; if per-session git identity ever differs from the server-level git config, results will be wrong.",
+      "The schema no longer has the old v1 Checkpoint/CheckpointSession/CheckpointMessage tables — confirm no other consumers (e.g., external scripts, reporting tools) depend on them before treating the drop as final."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T01:53:37.70464Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}
