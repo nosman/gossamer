@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "d35c2624b2b0",
+  "session_id": "fe35d57b-b594-401b-9d47-2c6fb3bf4b76",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T00:50:36.365249Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "7bd25ab9a869",
+  "token_usage": {
+    "input_tokens": 149,
+    "cache_creation_tokens": 134199,
+    "cache_read_tokens": 10843759,
+    "output_tokens": 54731,
+    "api_call_count": 137
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Make the gossamer indexer/poll loop more robust by relocating worktree and DB paths to inside the git repo, then extend the indexer to cover in-progress sessions from entire.io shadow branches, and fix UI regressions in the sessions table and detail views.",
+    "outcome": "Worktree moved to `.gossamer/checkpoints`, DB to `.gossamer/hook-handler.db`, shadow branch indexing added with 5s polling, sessions API rebuilt from `CheckpointSessionMetadata`+`ShadowSession` (dropping legacy `Session` table), and UI restored with live badges, git username, and repo name in breadcrumbs.",
+    "learnings": {
+      "repo": [
+        "Shadow branches follow the pattern `entire/\u003ccommit-short-hash\u003e-\u003csomething\u003e` and contain both `.gossamer/checkpoints/` (same as `entire/checkpoints/v1`) and `.entire/metadata/\u003csession-id\u003e/` for in-progress sessions.",
+        "A session transcript grows across multiple shadow branches as work progresses — the same sessionId can appear in 3+ branches with incrementally larger `full.jsonl` blobs, each with a different SHA.",
+        "The `getDb()` function in `db.ts` already calls `mkdirSync(dirname(abs), { recursive: true })` at line 51, so callers don't need to pre-create directories.",
+        "The legacy `Session` table stored `gitUserName`, `gitUserEmail`, and `repoName` populated by hook handlers; removing that table caused three UI regressions that had to be patched by reading git config at server startup.",
+        "FTS (full-text search) tables are virtual tables managed in application code, not the Prisma schema — `prisma db push` warns about them as data loss but they're safe to accept.",
+        "Git user info is reliably available via `git config user.name/email` run from the repo directory."
+      ],
+      "code": [
+        {
+          "path": "src/indexer.ts",
+          "finding": "`indexFullJsonl` was refactored into two functions: one taking a file path and one taking string content (`indexFullJsonlContent`), both accepting an optional `shadowSessionId` to link events to shadow sessions."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "`indexAllShadowBranches` reads shadow branch content via `git ls-tree` + `git cat-file blob` — no worktree needed. Deduplication is done via a `seenBlobShas` JSON array on the `ShadowSession` record."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "WS change detector must watch `logEvent` max id and `shadowSession` max id instead of the legacy `event` table to catch live session updates."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "New `ShadowSession` table added with `seenBlobShas String` (JSON array) to prevent re-indexing the same content across branches. `LogEvent` gains optional `shadowSessionId` FK."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "Two session endpoints (`GET /api/sessions` and `GET /api/sessions/:id`) had different indentation levels, causing `replace_all` edits to miss the second endpoint — required two separate edit calls."
+        }
+      ],
+      "workflow": [
+        "When removing a git worktree registered at an old path, both `git worktree remove` and `git worktree prune` are needed to fully clean up the registration.",
+        "Deleting the SQLite DB and running `prisma db push` fresh is the cleanest recovery path when schema changes conflict with virtual FTS tables.",
+        "Reading from git refs directly (`git cat-file blob`) is a clean alternative to checking out a worktree when you only need file content from branches."
+      ]
+    },
+    "friction": [
+      "Old worktree registered at `/private/tmp/gossamer-checkpoints` conflicted with the new path — required manual cleanup before the server could start.",
+      "Partial DB creation during a failed server start left a corrupt state that had to be deleted before `prisma db push` would succeed.",
+      "The same session appearing in multiple shadow branches with different blob SHAs caused duplicate indexing on first pass — required a second schema iteration to track `seenBlobShas` as a JSON array.",
+      "`replace_all` edits silently missed the second occurrence of `gitUserName: null` and `repoName: null` in `server.ts` due to different indentation in the two endpoints, requiring a follow-up fix each time.",
+      "Removing the legacy `Session` table caused three separate UI regressions (live badge, git username, repo name) that had to be discovered and fixed one by one."
+    ],
+    "open_items": [
+      "The legacy `Session` table still exists in the schema but is no longer written to — it could be dropped in a future cleanup.",
+      "Shadow sessions currently show the most-recent branch name only; a full branch history per session is not exposed in the UI.",
+      "No mechanism to detect when a shadow session is 'closed' (merged into `entire/checkpoints/v1`) and transition it from `isLive: true` to a committed checkpoint in the sessions list.",
+      "Git user info is resolved once at server startup — if the git config changes (e.g. different author per repo), the server needs a restart to pick it up."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T00:50:03.976506Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 32,
+    "agent_percentage": 0
+  }
+}
