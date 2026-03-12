@@ -125,6 +125,24 @@ export interface CheckpointMessage {
   data: unknown;
 }
 
+export interface FileDiffStat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+export async function fetchCheckpointDiff(checkpointId: string): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff`);
+  if (!res.ok) return null;
+  return res.text();
+}
+
+export async function fetchCheckpointDiffStats(checkpointId: string): Promise<FileDiffStat[]> {
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff-stats`);
+  if (!res.ok) return [];
+  return res.json() as Promise<FileDiffStat[]>;
+}
+
 export async function fetchCheckpoint(id: string): Promise<Checkpoint> {
   const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

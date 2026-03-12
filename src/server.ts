@@ -460,6 +460,47 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // GET /api/v2/checkpoints/:id/diff — raw unified diff for use with diff2html
+  app.get("/api/v2/checkpoints/:id/diff", async (req, res) => {
+    try {
+      if (!repoDir) { res.status(404).end(); return; }
+      const join = await db.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId: req.params.id },
+        select: { gitOid: true },
+      });
+      if (!join) { res.status(404).end(); return; }
+      const { stdout } = await exec(
+        `git -C ${JSON.stringify(repoDir)} diff-tree -p --no-commit-id -r ${join.gitOid}`,
+      );
+      res.set("Content-Type", "text/plain; charset=utf-8");
+      res.send(stdout);
+    } catch {
+      res.status(500).end();
+    }
+  });
+
+  // GET /api/v2/checkpoints/:id/diff-stats
+  app.get("/api/v2/checkpoints/:id/diff-stats", async (req, res) => {
+    try {
+      if (!repoDir) { res.json([]); return; }
+      const join = await db.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId: req.params.id },
+        select: { gitOid: true },
+      });
+      if (!join) { res.json([]); return; }
+      const { stdout } = await exec(
+        `git -C ${JSON.stringify(repoDir)} diff-tree --numstat -r ${join.gitOid}`,
+      );
+      const stats = stdout.trim().split("\n").filter(Boolean).map((line) => {
+        const [add, del, path] = line.split("\t");
+        return { path, additions: parseInt(add, 10) || 0, deletions: parseInt(del, 10) || 0 };
+      });
+      res.json(stats);
+    } catch {
+      res.json([]);
+    }
+  });
+
   // GET /api/v2/sessions/:id/checkpoints
   app.get("/api/v2/sessions/:id/checkpoints", async (req, res) => {
     try {

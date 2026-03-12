@@ -6,6 +6,7 @@ import {
   fetchSession,
   fetchLogEvents,
   fetchSessionCheckpoints,
+  fetchCheckpointDiff,
   spawnSession,
   updateOpenItemStatus,
   subscribeToUpdates,
@@ -17,7 +18,10 @@ import {
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
-import { MarkdownView } from "../components/MarkdownView";
+import { MarkdownView, InlineMarkdown } from "../components/MarkdownView";
+import { html as diff2htmlHtml } from "diff2html";
+import "diff2html/bundles/css/diff2html.min.css";
+import "../diff2html-theme.css";
 import { TimeAgo } from "../components/TimeAgo";
 import claudeLogo from "../assets/claude-logo.png";
 
@@ -385,11 +389,43 @@ function groupEvents(events: Event[]): DisplayItem[] {
   return result;
 }
 
+function SectionBlock({ title, color = "dimmed", children }: { title: string; color?: string; children: React.ReactNode }) {
+  return (
+    <Box style={{ borderLeft: "2px solid light-dark(var(--mantine-color-teal-3), var(--mantine-color-teal-8))", paddingLeft: 10 }}>
+      <Text size="xs" fw={600} c={color} mb={5} tt="uppercase" style={{ letterSpacing: 0.4 }}>{title}</Text>
+      {children}
+    </Box>
+  );
+}
+
+function BulletList({ items, color }: { items: string[]; color?: string }) {
+  return (
+    <Box style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {items.map((it, i) => (
+        <Group key={i} gap={6} wrap="nowrap" align="flex-start">
+          <Text size="xs" c={color ?? "teal"} style={{ flexShrink: 0, lineHeight: 1.6 }}>·</Text>
+          <InlineMarkdown text={it} style={{ fontSize: 12, lineHeight: 1.6 }} />
+        </Group>
+      ))}
+    </Box>
+  );
+}
+
 function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
+  const [diffPatch, setDiffPatch] = useState<string | null>(null);
   const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
   const fileCount = checkpoint.filesTouched.length;
   const sum = checkpoint.summary;
+
+  useEffect(() => {
+    if (expanded && diffPatch === null) {
+      fetchCheckpointDiff(checkpoint.checkpointId)
+        .then((d) => setDiffPatch(d ?? ""))
+        .catch(() => setDiffPatch(""));
+    }
+  }, [expanded, checkpoint.checkpointId, diffPatch]);
 
   return (
     <Box style={{ padding: "4px 20px 4px 58px" }}>
@@ -415,57 +451,94 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
       </UnstyledButton>
 
       <Collapse in={expanded}>
-        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "16px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+
           {sum?.outcome && (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>✓ Outcome</Text>
-              <Text size="xs">{sum.outcome}</Text>
-            </Box>
+            <SectionBlock title="Outcome">
+              <InlineMarkdown text={sum.outcome} style={{ fontSize: 12, lineHeight: 1.6 }} />
+            </SectionBlock>
           )}
+
           {sum?.repoLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◎ Repo learnings</Text>
-              {sum.repoLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Repo learnings">
+              <BulletList items={sum.repoLearnings} />
+            </SectionBlock>
           ) : null}
+
           {sum?.codeLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>{"</>"} Code learnings</Text>
-              {sum.codeLearnings.map((it, i) => (
-                <Box key={i} pl={4} mb={2}>
-                  <Text size="xs" ff="monospace" c="violet" fw={600}>{it.path}</Text>
-                  <Text size="xs">· {it.finding}</Text>
-                </Box>
-              ))}
-            </Box>
+            <SectionBlock title="Code learnings">
+              <Box style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {sum.codeLearnings.map((it, i) => (
+                  <Box key={i}>
+                    <Text size="xs" ff="monospace" c="violet" fw={600} mb={2}>{it.path}</Text>
+                    <Box pl={8}><InlineMarkdown text={`→ ${it.finding}`} style={{ fontSize: 12, lineHeight: 1.6 }} /></Box>
+                  </Box>
+                ))}
+              </Box>
+            </SectionBlock>
           ) : null}
+
           {sum?.workflowLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>↺ Workflow learnings</Text>
-              {sum.workflowLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Workflow learnings">
+              <BulletList items={sum.workflowLearnings} />
+            </SectionBlock>
           ) : null}
+
           {sum?.friction?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>△ Friction</Text>
-              {sum.friction.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Friction" color="orange">
+              <BulletList items={sum.friction} color="orange" />
+            </SectionBlock>
           ) : null}
+
           {sum?.openItems?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◇ Open items</Text>
-              {sum.openItems.map((it, i) => <Text key={i} size="xs">· {it.text}</Text>)}
-            </Box>
+            <SectionBlock title="Open items">
+              <Box style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {sum.openItems.map((it) => {
+                  const statusColor = it.status === "complete" ? "teal" : it.status === "in_progress" ? "orange" : it.status === "na" ? "gray" : "blue";
+                  const statusLabel = it.status === "in_progress" ? "in progress" : it.status === "na" ? "n/a" : it.status;
+                  return (
+                    <Group key={it.id} gap={8} wrap="nowrap" align="flex-start">
+                      <Badge color={statusColor} size="xs" variant="light" style={{ flexShrink: 0, marginTop: 2, textTransform: "none" }}>{statusLabel}</Badge>
+                      <InlineMarkdown text={it.text} style={{ fontSize: 12, lineHeight: 1.6 }} />
+                    </Group>
+                  );
+                })}
+              </Box>
+            </SectionBlock>
           ) : null}
-          {fileCount > 0 && (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Files touched</Text>
-              {checkpoint.filesTouched.map((f, i) => <Text key={i} size="xs" ff="monospace" c="dimmed" pl={4}>{f}</Text>)}
-            </Box>
-          )}
+
+          <SectionBlock title="Files changed">
+            {diffPatch === null ? (
+              <Text size="xs" c="dimmed">Loading…</Text>
+            ) : diffPatch === "" ? (
+              fileCount > 0 ? (
+                <Box style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {checkpoint.filesTouched.map((path) => (
+                    <Text key={path} size="xs" ff="monospace" c="dimmed">{path}</Text>
+                  ))}
+                </Box>
+              ) : (
+                <Text size="xs" c="dimmed">No diff available</Text>
+              )
+            ) : (
+              <Box
+                className="d2h-wrapper"
+                style={{ fontSize: 12, overflowX: "auto" }}
+                dangerouslySetInnerHTML={{
+                  __html: diff2htmlHtml(diffPatch, {
+                    drawFileList: true,
+                    matching: "lines",
+                    outputFormat: "line-by-line",
+                    colorScheme: "light",
+                  }),
+                }}
+              />
+            )}
+          </SectionBlock>
+
           <UnstyledButton
             onClick={onPress}
-            style={{ alignSelf: "flex-start", marginTop: 4, padding: "5px 10px", borderRadius: 4, border: "1px solid var(--mantine-color-teal-3)" }}
+            style={{ alignSelf: "flex-start", padding: "5px 10px", borderRadius: 4, border: "1px solid var(--mantine-color-teal-3)" }}
           >
             <Text size="xs" c="teal" ff="monospace">Open checkpoint →</Text>
           </UnstyledButton>

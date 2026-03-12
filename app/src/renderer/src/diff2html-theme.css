@@ -1,0 +1,158 @@
+/* ── diff2html theme overrides ──────────────────────────────────────────────
+   Uses light-dark() with Mantine CSS variables, matching the rest of the app.
+   colorScheme:"light" is passed to diff2html so it always outputs light HTML;
+   light-dark() then adapts all colors to whichever scheme Mantine is using.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Structural fixes ────────────────────────────────────────────────────── */
+
+.d2h-file-list-wrapper {
+  display: none;
+}
+
+.d2h-tag {
+  display: none;
+}
+
+.d2h-icon {
+  display: none !important;
+}
+
+.d2h-lines-added,
+.d2h-lines-deleted {
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 0 2px !important;
+  font-size: 11px !important;
+  font-family: monospace !important;
+}
+
+
+.d2h-file-header {
+  height: auto !important;
+  min-height: unset !important;
+  padding: 5px 10px !important;
+  font-family: monospace !important;
+}
+
+.d2h-file-name-wrapper {
+  font-size: 12px !important;
+  font-family: monospace !important;
+}
+
+.d2h-file-name {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+}
+
+.d2h-code-line-ctn,
+.d2h-code-line,
+.d2h-code-linenumber,
+.d2h-code-side-linenumber,
+.d2h-file-list {
+  font-family: monospace !important;
+  font-size: 12px !important;
+}
+
+.d2h-file-stats {
+  font-size: 11px !important;
+}
+
+/* ── Colors (light-dark adapts to Mantine color scheme) ─────────────────── */
+
+.d2h-file-wrapper {
+  background-color: light-dark(#fff, var(--mantine-color-dark-7)) !important;
+  border-color: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4)) !important;
+}
+
+.d2h-file-header {
+  background-color: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6)) !important;
+  border-bottom-color: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4)) !important;
+}
+
+.d2h-file-name {
+  color: light-dark(var(--mantine-color-violet-7), var(--mantine-color-violet-4)) !important;
+}
+
+.d2h-file-list-line a {
+  color: light-dark(var(--mantine-color-violet-7), var(--mantine-color-violet-4)) !important;
+}
+
+
+.d2h-lines-added {
+  color: light-dark(var(--mantine-color-green-7), var(--mantine-color-green-5)) !important;
+}
+
+.d2h-lines-deleted {
+  color: light-dark(var(--mantine-color-red-7), var(--mantine-color-red-5)) !important;
+}
+
+/* Hunk @@ header */
+.d2h-info {
+  background-color: light-dark(rgba(59,130,246,0.05), rgba(59,130,246,0.07)) !important;
+  border-color: light-dark(rgba(59,130,246,0.15), rgba(59,130,246,0.15)) !important;
+}
+.d2h-info td {
+  color: light-dark(var(--mantine-color-gray-6), var(--mantine-color-gray-5)) !important;
+}
+
+/* Line numbers */
+.d2h-code-linenumber,
+.d2h-code-side-linenumber {
+  background-color: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6)) !important;
+  border-color: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-5)) !important;
+  color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-gray-6)) !important;
+}
+
+/* Context lines */
+.d2h-code-line-ctn {
+  color: light-dark(var(--mantine-color-dark-8), var(--mantine-color-gray-2)) !important;
+}
+
+/* Added lines */
+tr.d2h-ins,
+td.d2h-ins {
+  background-color: light-dark(rgba(0,160,70,0.08), rgba(0,180,80,0.12)) !important;
+}
+.d2h-ins .d2h-code-linenumber,
+.d2h-ins .d2h-code-side-linenumber {
+  background-color: light-dark(rgba(0,160,70,0.12), rgba(0,180,80,0.18)) !important;
+  border-color: light-dark(rgba(0,160,70,0.2), rgba(0,180,80,0.22)) !important;
+  color: light-dark(var(--mantine-color-green-7), var(--mantine-color-green-5)) !important;
+}
+.d2h-ins .d2h-code-line-ctn {
+  color: light-dark(var(--mantine-color-green-9), var(--mantine-color-green-2)) !important;
+}
+.d2h-ins ins {
+  background-color: light-dark(rgba(0,160,70,0.20), rgba(0,200,80,0.28)) !important;
+  text-decoration: none !important;
+}
+
+/* Deleted lines */
+tr.d2h-del,
+td.d2h-del {
+  background-color: light-dark(rgba(220,50,50,0.07), rgba(220,50,50,0.14)) !important;
+}
+.d2h-del .d2h-code-linenumber,
+.d2h-del .d2h-code-side-linenumber {
+  background-color: light-dark(rgba(220,50,50,0.10), rgba(220,50,50,0.20)) !important;
+  border-color: light-dark(rgba(220,50,50,0.18), rgba(220,50,50,0.25)) !important;
+  color: light-dark(var(--mantine-color-red-7), var(--mantine-color-red-4)) !important;
+}
+.d2h-del .d2h-code-line-ctn {
+  color: light-dark(var(--mantine-color-red-9), var(--mantine-color-red-2)) !important;
+}
+.d2h-del del {
+  background-color: light-dark(rgba(220,50,50,0.18), rgba(220,60,60,0.34)) !important;
+  text-decoration: none !important;
+}
+
+/* Changed lines (del+ins pair) — override the yellow #fdf2d0 light theme */
+tr.d2h-change.d2h-del,
+td.d2h-change.d2h-del {
+  background-color: light-dark(rgba(220,50,50,0.07), rgba(220,50,50,0.14)) !important;
+}
+tr.d2h-change.d2h-ins,
+td.d2h-change.d2h-ins {
+  background-color: light-dark(rgba(0,160,70,0.08), rgba(0,180,80,0.12)) !important;
+}
