@@ -4,10 +4,29 @@ import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { execSync } from "child_process";
 import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { basename, join } from "path";
 import { getDb } from "./db.js";
 import { indexAllCheckpointsV2, indexAllShadowBranches } from "./indexer.js";
 import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
+
+// ─── Git user ─────────────────────────────────────────────────────────────────
+
+function gitConfigGet(key: string, cwd?: string): string | null {
+  try {
+    return execSync(`git config ${key}`, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || null;
+  } catch { return null; }
+}
+
+function getGitUser(cwd?: string): { name: string | null; email: string | null } {
+  // Try local config first (cwd), then fall back to global
+  const name  = (cwd ? gitConfigGet("user.name", cwd)  : null) ?? gitConfigGet("--global user.name");
+  const email = (cwd ? gitConfigGet("user.email", cwd) : null) ?? gitConfigGet("--global user.email");
+  return { name, email };
+}
 
 // ─── Response types ───────────────────────────────────────────────────────────
 
@@ -116,6 +135,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.use(cors());
   app.use(express.json());
 
+  // Resolve git user and repo name from repo config once at startup
+  const gitUser  = getGitUser(repoDir);
+  const repoName = repoDir ? basename(repoDir) : null;
+
   // GET /api/sessions — reconstructed from CheckpointSessionMetadata + ShadowSession
   app.get("/api/sessions", async (_req, res) => {
     try {
@@ -173,12 +196,12 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
           updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
           cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
-          repoRoot:        null,
-          repoName:        null,
+          repoRoot:        repoDir ?? null,
+          repoName:        repoName,
           parentSessionId: null,
           childSessionIds: [],
-          gitUserName:     null,
-          gitUserEmail:    null,
+          gitUserName:     gitUser.name,
+          gitUserEmail:    gitUser.email,
           prompt:          shadow?.prompt ?? null,
           summary:         null,
           keywords:        [],
@@ -228,12 +251,12 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
         updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
         cwd:             firstEvent?.cwd ?? shadow?.cwd ?? "",
-        repoRoot:        null,
-        repoName:        null,
+        repoRoot:        repoDir ?? null,
+        repoName:        repoName,
         parentSessionId: null,
         childSessionIds: [],
-        gitUserName:     null,
-        gitUserEmail:    null,
+        gitUserName:     gitUser.name,
+        gitUserEmail:    gitUser.email,
         prompt:          shadow?.prompt ?? null,
         summary:         null,
         keywords:        [],
