@@ -2,7 +2,10 @@ import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
-import { execSync } from "child_process";
+import { execSync, exec as execCb } from "child_process";
+import { promisify } from "util";
+
+const exec = promisify(execCb);
 import { existsSync, mkdirSync } from "fs";
 import { basename, join } from "path";
 import { getDb } from "./db.js";
@@ -637,7 +640,6 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     // Ensure worktree exists (reuse across restarts)
     if (!existsSync(WORKTREE_PATH)) {
       try {
-        // Prune stale worktree registration first, then re-add
         execSync(`git -C ${JSON.stringify(repoDir)} worktree prune`, { stdio: "pipe" });
         execSync(
           `git -C ${JSON.stringify(repoDir)} worktree add ${JSON.stringify(WORKTREE_PATH)} ${CHECKPOINT_BRANCH}`,
@@ -652,25 +654,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const runIndex = async () => {
       if (!existsSync(WORKTREE_PATH)) return;
       try {
-        // Fetch from remote, then reset to the remote tracking ref so new commits
-        // pushed by teammates are actually applied to the worktree.
-        // Falls back to the local branch tip if the remote is unavailable.
+        // Fetch latest from remote, fall back to local branch tip if unavailable
         try {
-          execSync(
-            `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
-            { stdio: "pipe" },
-          );
-          execSync(
-            `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard origin/${CHECKPOINT_BRANCH}`,
-            { stdio: "pipe" },
-          );
+          await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`, { timeout: 10_000 });
+          await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard origin/${CHECKPOINT_BRANCH}`);
         } catch {
-          // Remote unavailable — fall back to local branch tip
           try {
-            execSync(
-              `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`,
-              { stdio: "pipe" },
-            );
+            await exec(`git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`);
           } catch { /* non-fatal */ }
         }
       } catch { /* non-fatal */ }

@@ -618,9 +618,7 @@ export function SessionDetail() {
         ) as HTMLElement | null;
         const viewport = viewportRef.current;
         if (!el || !viewport) return;
-        const mark = el.querySelector("mark") as HTMLElement | null;
-        const target = mark ?? el;
-        const targetRect = target.getBoundingClientRect();
+        const targetRect = el.getBoundingClientRect();
         const vpRect = viewport.getBoundingClientRect();
         const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2 + 16;
         viewport.scrollTo({ top: Math.max(0, scrollTop), behavior: "smooth" });
