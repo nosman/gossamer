@@ -34,6 +34,8 @@ export interface Event {
   _sourceLogEventId?: number;
   /** Additional LogEvent IDs for the same turn (e.g. separate thinking events). */
   _extraSourceLogEventIds?: number[];
+  /** Original UUID from the JSONL log event this synthetic event was derived from. */
+  _sourceUuid?: string;
 }
 
 export interface InteractionOverview {

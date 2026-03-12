@@ -31,10 +31,11 @@ function BlockedBadge() {
 
 function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
   const prompt = str(data(event).prompt);
+  const uuid = event._sourceUuid;
   const displayName = user?.name ?? "You";
   const initials = displayName.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
   return (
-    <Box style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", gap: 10, padding: "12px 20px 4px" }}>
+    <Box id={uuid} style={{ display: "flex", justifyContent: "flex-end", alignItems: "flex-start", gap: 10, padding: "12px 20px 4px" }}>
       <Box style={{ maxWidth: "72%", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
         <Group gap={8} align="center">
           {event.blocked && <BlockedBadge />}

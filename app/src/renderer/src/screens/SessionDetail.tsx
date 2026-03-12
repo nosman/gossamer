@@ -93,7 +93,9 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
   const thinking = str(d.thinking);
   const reason = str(d.reason);
   const thinkingLogEventId = typeof d.thinkingLogEventId === "number" ? d.thinkingLogEventId : null;
+  const thinkingUuid = typeof d.thinkingUuid === "string" ? d.thinkingUuid : null;
   const toolsLogEventId = typeof d.toolsLogEventId === "number" ? d.toolsLogEventId : null;
+  const toolsUuid = typeof d.toolsUuid === "string" ? d.toolsUuid : null;
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
@@ -116,7 +118,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
         {thinking && (
-          <Box mb={6} id={thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined}>
+          <Box mb={6} id={thinkingUuid ?? (thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined)}>
             <Group
               gap={6}
               mb={4}
@@ -155,7 +157,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           </Box>
         )}
         {toolGroups.length > 0 && (
-          <Box id={toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined}>
+          <Box id={toolsUuid ?? (toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined)}>
             <Group
               gap={6}
               mb={4}
@@ -195,7 +197,9 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   let lastAssistantThinking: string | null = null;
   let lastAssistantLogEventId: number | null = null;
   let lastThinkingLogEventId: number | null = null;
+  let lastThinkingUuid: string | null = null;
   let lastToolsLogEventId: number | null = null;
+  let lastToolsUuid: string | null = null;
   // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
   const currentTurnLogEventIds: number[] = [];
 
@@ -233,12 +237,12 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
               tool_response: !failed ? (tr.toolResultContent ?? "") : undefined,
               error:          failed ? (tr.toolResultContent ?? "") : undefined,
             },
-            summary: null, keywords: [], _sourceLogEventId: le.id,
+            summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined,
           });
         }
       } else if (textBlocks.length > 0) {
         const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id });
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
       }
 
     } else if (le.type === "assistant") {
@@ -257,11 +261,13 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
         const thinking = thinkingBlocks.map((b) => b.thinking ?? "").filter(Boolean).join("\n\n");
         lastAssistantThinking = lastAssistantThinking ? lastAssistantThinking + "\n\n" + thinking : thinking;
         lastThinkingLogEventId = le.id;
+        lastThinkingUuid = le.uuid ?? null;
         if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
       }
 
       for (const tu of toolUses) {
         lastToolsLogEventId = le.id;
+        lastToolsUuid = le.uuid ?? null;
         result.push({
           id: id--,
           timestamp: ts,
@@ -269,7 +275,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           sessionId: sid,
           blocked: false,
           data: { tool_name: tu.toolName ?? "?", tool_use_id: tu.toolUseId, tool_input: tu.toolInput },
-          summary: null, keywords: [], _sourceLogEventId: le.id,
+          summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined,
         });
       }
 
@@ -287,7 +293,9 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           thinking: lastAssistantThinking ?? "",
           reason: le.systemData.stopReason ?? "",
           thinkingLogEventId: lastThinkingLogEventId ?? undefined,
+          thinkingUuid: lastThinkingUuid ?? undefined,
           toolsLogEventId: lastToolsLogEventId ?? undefined,
+          toolsUuid: lastToolsUuid ?? undefined,
         },
         summary: null, keywords: [],
         _sourceLogEventId: primaryId,
@@ -297,7 +305,9 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       lastAssistantThinking = null;
       lastAssistantLogEventId = null;
       lastThinkingLogEventId = null;
+      lastThinkingUuid = null;
       lastToolsLogEventId = null;
+      lastToolsUuid = null;
       currentTurnLogEventIds.length = 0;
     }
   }
@@ -512,6 +522,7 @@ export function SessionDetail() {
   const [highlightActive, setHighlightActive] = useState(false);
   const scrolledRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const logEventsRef = useRef<LogEventItem[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
@@ -549,6 +560,7 @@ export function SessionDetail() {
   useEffect(() => {
     Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
       .then(([s, logEvs, checkpoints]) => {
+        logEventsRef.current = logEvs;
         setSession(s);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
@@ -586,7 +598,7 @@ export function SessionDetail() {
     const t = setTimeout(() => {
       setHighlightActive(true);
       scrolledRef.current = true;
-      setTimeout(() => setHighlightActive(false), 2500);
+      setTimeout(() => setHighlightActive(false), 10000);
     }, 150);
     return () => clearTimeout(t);
   }, [items, targetLogEventId]);
@@ -597,9 +609,13 @@ export function SessionDetail() {
     // Wait for Collapse animations (~200ms) to reach their final layout before measuring
     const t = setTimeout(() => {
       requestAnimationFrame(() => {
-        // Prefer an inner element with the precise id (thinking/tools section), fall back to the card div
-        const el = (document.getElementById(`log-event-${targetLogEventId}`)
-          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)) as HTMLElement | null;
+        // Resolve UUID for the target logEventId, then find the most precise element
+        const uuid = logEventsRef.current.find((le) => le.id === targetLogEventId)?.uuid ?? null;
+        const el = (
+          (uuid ? document.getElementById(uuid) : null)
+          ?? document.getElementById(`log-event-${targetLogEventId}`)
+          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)
+        ) as HTMLElement | null;
         const viewport = viewportRef.current;
         if (!el || !viewport) return;
         const mark = el.querySelector("mark") as HTMLElement | null;
@@ -751,7 +767,7 @@ export function SessionDetail() {
             0%   { background-color: rgba(255, 210, 0, 0.25); box-shadow: 0 0 0 2px rgba(255, 210, 0, 0.6); border-radius: 8px; }
             100% { background-color: rgba(255, 210, 0, 0);    box-shadow: 0 0 0 2px rgba(255, 210, 0, 0);   border-radius: 8px; }
           }
-          .search-target-highlight { animation: search-highlight-fade 2.5s ease-out forwards; border-radius: 8px; }
+          .search-target-highlight { animation: search-highlight-fade 10s ease-out forwards; border-radius: 8px; }
         `}</style>
         {items.map((item, idx) => {
           const sourceIds = getItemSourceIds(item);
