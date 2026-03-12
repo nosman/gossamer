@@ -1,0 +1,129 @@
+what recently changed about the package.json file?
+
+---
+
+what command do i use to start the uI?
+
+---
+
+expo is for react native, no?
+
+---
+
+why is this not in the package.json commands?
+
+---
+
+It used to be there
+
+---
+
+There was a start script in the package.json
+
+---
+
+yes. also when i start the app, i just get a loading screen with a spinner on it. It doesn't load active sessions
+
+---
+
+yes
+
+---
+
+what about the loading screen?
+
+---
+
+Could it be because when indexing, it tries to pull from the git remote and hangs indefinitely on the ssh key asking for a password?
+
+---
+
+Can it be made asynchonous? indexing should be done in the background
+
+---
+
+The issue still remains. Only Index the local branch, don't pull from remote. Make sure that you are reading from the latest local branch between polls
+
+---
+
+It still asks me for my ssh key. Are these commands maybe looking at the origin branch?
+
+---
+
+it still asks me for my ssh key on startup. and repeatedly
+
+---
+
+Nope that still didn't work. Is the openssh process asking for the credentials anyway?
+
+---
+
+Let's actually undo all this- keep tracking the remote. if the user has ssh-agent set up properly, this won't be a problem
+
+---
+
+same problem as before is happening now, we're not picking up new local commits in the entire/checkpoints/v1 branch
+
+---
+
+i'm still not seeing checkpoints for session 7d0ed455-8cec-48bb-954a-032a40e36c99
+
+---
+
+Yes it is- i've made a few git commits to it already
+
+---
+
+Yes, there is a git commit hook that is supposed to fire and condense the shadow branch back into the entire/commits/v1 branch
+
+---
+
+Looks like i don't see any new commits in that branch after all. Try triggering it
+
+---
+
+How come it's there all of a sudden? what was going wrong that previous commits weren't there
+
+---
+
+also, the local poll loop is not picking up any new commits
+
+---
+
+yes the ssh agent is up
+
+---
+
+yes
+
+---
+
+Let's format the checkpoint message in the sessionDetails page better. Reuse the way we format the intent and open items on the top of the sessionDetails page. Make the section headings more legible, format lists more clearly, etc. If you can, also show individual line changes for files touched.
+
+---
+
+Is there any kind of markdown formatting we can use for code snippets in the checkpoint summaries? Also, we're not showing the files changed
+
+---
+
+You can show files changed better by finding the commit, running `git show` on that commit, and then rendering the diff nicely using a library like diff2html
+
+---
+
+The diff2html stuff doesn't show up well in dark mode- please make it match the rest of the formatting. In light mode it's ok, but the fonts and styling need to match the rest of the app
+
+---
+
+dark mode is a little better but generally still looks bad. In this image, the number of diff lines shouldn't be outlined, the titles of the files should be in the same font and size as elsewhere, and the header shouldn't be so strongly outlined
+
+---
+
+still bad on dark mode:
+
+---
+
+Use the light-dark directives, now it looks good in dark mode but light mode is broken. See how the existing code implements dark mode
+
+---
+
+Looking a lot better, but get rid of the little "changed" indicator. Also only show the file name once, it's being shown twice:
