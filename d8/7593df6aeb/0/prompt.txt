@@ -1,0 +1,74 @@
+Please work on the following open items:
+- The legacy `Session` table is no longer consulted for session listing but may still exist in the DB — no migration or cleanup was done to remove stale rows.
+
+---
+
+Why are we still using the sessions table at all? The tables we should care about are CheckpointSessionMetadata and ShadowSession
+
+---
+
+We don't care about the hook handler at all anymore. We only want to index from the entire cli logs and the poll loop.
+
+---
+
+Search results don't show the git username properly anymore, that's a regression
+
+---
+
+Restart the server
+
+---
+
+The username still does not show up on the search results
+
+---
+
+start the server
+
+---
+
+Do the github usernames get stored on the tool uses or messages in the database or are they always gotten from the git config?
+
+---
+
+Different checkpoints will be made by different people tho. We shouldn't be getting the user from the local machine's settings, we should be getting the user from the git commit that's linked to the given checkpoint.
+
+---
+
+We have a method to link a checkpoint to a commit, we can use that
+
+---
+
+does the indexer polling loop also fetch new changes from the entire/checkpoints/v1 branch? i seem to be missing a session
+
+---
+
+now, when we click on a search result, it links to the associated session details. What we want to do is link to the session details and scroll down to the actual search result. We can do this by adding the eventId as a query param to the session details page url. Then, get the element by its eventId, and call scrollIntoView() on it. Also ideally highlight the matching text if you can.
+
+---
+
+restart the server
+
+---
+
+The scroll doesn't work- is there anything else we need to do?
+
+---
+
+Still doesn't work. Are we passing the right eventIds and are they being set right on the html?
+
+---
+
+Still not scrolling. Can you add diagnostic console logs the print out the event id from the search result, the event id for the events in the session detail, and the id in the query param?
+
+---
+
+Ok the message, tool_call, and tool_result scrolls work, it's just the thinking scroll that is broken still
+
+---
+
+Are the thinking events not displayed directly on the session details page?
+
+---
+
+yes
