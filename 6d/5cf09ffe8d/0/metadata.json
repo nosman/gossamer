@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "6d5cf09ffe8d",
+  "session_id": "a36395cc-12c3-4df3-9e89-63a1835410ad",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-12T02:15:24.250005Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "prisma/schema.prisma",
+    "src/gitUtils.ts",
+    "src/indexer.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "e61d6000a368",
+  "token_usage": {
+    "input_tokens": 116,
+    "cache_creation_tokens": 114919,
+    "cache_read_tokens": 8240616,
+    "output_tokens": 46685,
+    "api_call_count": 96
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Remove the legacy Session table from the gossamer codebase, eliminate the hook handler entirely, and ensure git user attribution on search results and checkpoints comes from actual git commit authors rather than local machine config.",
+    "outcome": "Deleted the hook handler and SDK CLI entry point, dropped legacy DB models (Session, AgentParent, PendingToolUse, Event, and old v1 checkpoint tables), fixed git user attribution by storing authorName/authorEmail from git commits into CheckpointMetadata at index time, and restored correct display of git usernames in search results.",
+    "learnings": {
+      "repo": [
+        "The gossamer project has two distinct eras of DB schema: old v1 tables (Checkpoint, CheckpointSession, CheckpointSessionLink, CheckpointSummary, CheckpointMessage) and the current tables (CheckpointSessionMetadata, ShadowSession, LogEvent, LogContent).",
+        "The hook handler (handler.ts) was a separate process spawned per hook event that maintained cross-invocation state in the Session table — all of that is now dead code since indexing moved to a poll loop over CLI logs.",
+        "The server reads gitUser at startup from local git config and was stamping that single value onto all search results and sessions — wrong for multi-author repos.",
+        "findCommitForCheckpoint in gitUtils.ts already walks git log to link checkpoints to commits; extending it to also capture authorName/authorEmail was the right hook point for per-checkpoint git user attribution.",
+        "Prisma cannot drop FTS5 virtual tables automatically — they must be dropped manually via sqlite3 before db push can succeed.",
+        "The old server process (handler.js) persisted after pkill because it was a different binary; targeted kill by process name was needed."
+      ],
+      "code": [
+        {
+          "path": "src/handler.ts",
+          "line": 720,
+          "end_line": 720,
+          "finding": "applyEvent deletes state.sessions[session_id] on SessionEnd, so ended sessions were always removed from in-memory state but writeStateToDb never pruned the DB rows — stale rows accumulated indefinitely."
+        },
+        {
+          "path": "src/handler.ts",
+          "line": 1395,
+          "end_line": 1395,
+          "finding": "db.session.findUnique was used to get cwd for auto-linking, but the full HookInput JSON (including cwd) is already stored in the Event table data column — no extra query needed."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "gitUser is read once at server startup via getGitUser(repoDir) and was previously spread onto every search result and session response — correct for single-user repos, wrong for shared/multi-author repos."
+        },
+        {
+          "path": "src/gitUtils.ts",
+          "finding": "Extended gitlog fields to include authorName and authorEmail so findCommitForCheckpoint can return commit author info alongside the OID."
+        },
+        {
+          "path": "src/indexer.ts",
+          "finding": "saveGitOidMapping is the right place to write gitUserName/gitUserEmail onto CheckpointMetadata since it already resolves the commit for a given checkpoint."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "Added gitUserName and gitUserEmail fields to CheckpointMetadata model to store per-checkpoint author info from git commits."
+        }
+      ],
+      "workflow": [
+        "When old server processes survive pkill, check the actual running command with ps to identify the correct process name/binary to kill.",
+        "Prisma db push with --accept-data-loss is required when dropping columns or tables; FTS5 virtual tables need manual sqlite3 DROP before Prisma can proceed.",
+        "Before removing a DB join that supplies UI data, trace the UI consumption first (e.g., Search.tsx) to understand what fields are actually rendered and ensure they're preserved via an alternative source."
+      ]
+    },
+    "friction": [
+      "Prisma cannot drop FTS5 virtual tables — required manual sqlite3 intervention before db push could succeed; this happened twice across the session.",
+      "Old server process (handler.js) survived pkill because it was a different binary than the new build, causing apparent regressions that were actually stale-process issues.",
+      "The git user regression (null values from getGitUser) was caused by the old process still serving requests, not an actual code bug — hard to diagnose without checking which process was listening."
+    ],
+    "open_items": [
+      "Existing CheckpointMetadata rows in the live DB have null gitUserName/gitUserEmail — they will only be populated when the indexer next runs saveGitOidMapping for those checkpoints; historical sessions will show no git user until re-indexed.",
+      "Shadow sessions that haven't been committed yet still fall back to local git config for user attribution — this is a documented limitation but not yet addressed.",
+      "The live DB still needs db push run to drop the old tables (Event, Session, AgentParent, PendingToolUse, and v1 checkpoint tables) — they still exist in the SQLite file.",
+      "search.ts previously enriched results with gitUserName/gitUserEmail via LEFT JOIN Session — the new approach requires a post-query lookup per result in server.ts, which may be N+1 for large result sets."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-12T02:14:56.440133Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 9870,
+    "total_committed": 65,
+    "agent_percentage": 0
+  }
+}

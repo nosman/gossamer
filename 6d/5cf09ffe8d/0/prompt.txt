@@ -1,0 +1,38 @@
+Please work on the following open items:
+- The legacy `Session` table is no longer consulted for session listing but may still exist in the DB — no migration or cleanup was done to remove stale rows.
+
+---
+
+Why are we still using the sessions table at all? The tables we should care about are CheckpointSessionMetadata and ShadowSession
+
+---
+
+We don't care about the hook handler at all anymore. We only want to index from the entire cli logs and the poll loop.
+
+---
+
+Search results don't show the git username properly anymore, that's a regression
+
+---
+
+Restart the server
+
+---
+
+The username still does not show up on the search results
+
+---
+
+start the server
+
+---
+
+Do the github usernames get stored on the tool uses or messages in the database or are they always gotten from the git config?
+
+---
+
+Different checkpoints will be made by different people tho. We shouldn't be getting the user from the local machine's settings, we should be getting the user from the git commit that's linked to the given checkpoint.
+
+---
+
+We have a method to link a checkpoint to a commit, we can use that
