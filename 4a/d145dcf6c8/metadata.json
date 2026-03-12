@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "4ad145dcf6c8",
+  "strategy": "manual-commit",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "package.json",
+    "prisma/schema.prisma",
+    "src/db.ts",
+    "src/handler.ts",
+    "src/index.ts",
+    "src/search.ts",
+    "src/serve.ts",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4a/d145dcf6c8/0/metadata.json",
+      "transcript": "/4a/d145dcf6c8/0/full.jsonl",
+      "content_hash": "/4a/d145dcf6c8/0/content_hash.txt",
+      "prompt": "/4a/d145dcf6c8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 79765,
+    "cache_read_tokens": 2371884,
+    "output_tokens": 29976,
+    "api_call_count": 41
+  }
+}
