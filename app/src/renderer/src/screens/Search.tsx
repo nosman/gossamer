@@ -8,7 +8,42 @@ import claudeLogo from "../assets/claude-logo.png";
 
 // ── Snippet renderer ──────────────────────────────────────────────────────────
 
-function Snippet({ raw }: { raw: string }) {
+/** Highlight matched terms inside a plain-text string (for code/pre blocks). */
+function HighlightedCode({ raw }: { raw: string }) {
+  const parts = raw.split(/(«[^»]*»)/g);
+  return (
+    <code
+      style={{
+        display: "block",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-all",
+        fontFamily: "monospace",
+        fontSize: 12,
+        lineHeight: 1.5,
+        color: "inherit",
+      }}
+    >
+      {parts.map((part, i) => {
+        if (part.startsWith("«") && part.endsWith("»")) {
+          return (
+            <mark
+              key={i}
+              style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}
+            >
+              {part.slice(1, -1)}
+            </mark>
+          );
+        }
+        return part;
+      })}
+    </code>
+  );
+}
+
+function Snippet({ raw, contentType }: { raw: string; contentType?: string }) {
+  if (contentType === "tool_use" || contentType === "tool_result") {
+    return <HighlightedCode raw={raw} />;
+  }
   const terms: string[] = [];
   const re = /«([^»]+)»/g;
   let m: RegExpExecArray | null;
@@ -93,7 +128,7 @@ function ResultCard({ r, onClick }: { r: SearchResult; onClick: () => void }) {
             : "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-8))",
         }}
       >
-        <Snippet raw={r.snippet} />
+        <Snippet raw={r.snippet} contentType={r.contentType} />
       </Box>
     </UnstyledButton>
   );
