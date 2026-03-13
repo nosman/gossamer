@@ -3,9 +3,12 @@
   "checkpoint_id": "4a2860105819",
   "strategy": "manual-commit",
   "branch": "ParsingEntireLog",
-  "checkpoints_count": 2,
+  "checkpoints_count": 4,
   "files_touched": [
-    "app/src/renderer/src/diff2html-theme.css"
+    "app/src/renderer/src/api.ts",
+    "app/src/renderer/src/components/SessionRow.tsx",
+    "app/src/renderer/src/diff2html-theme.css",
+    "src/server.ts"
   ],
   "sessions": [
     {
@@ -19,13 +22,19 @@
       "transcript": "/4a/2860105819/1/full.jsonl",
       "content_hash": "/4a/2860105819/1/content_hash.txt",
       "prompt": "/4a/2860105819/1/prompt.txt"
+    },
+    {
+      "metadata": "/4a/2860105819/2/metadata.json",
+      "transcript": "/4a/2860105819/2/full.jsonl",
+      "content_hash": "/4a/2860105819/2/content_hash.txt",
+      "prompt": "/4a/2860105819/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 283,
-    "cache_creation_tokens": 285177,
-    "cache_read_tokens": 18707254,
-    "output_tokens": 126284,
-    "api_call_count": 214
+    "input_tokens": 303,
+    "cache_creation_tokens": 354941,
+    "cache_read_tokens": 19783194,
+    "output_tokens": 130870,
+    "api_call_count": 230
   }
 }
