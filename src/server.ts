@@ -594,6 +594,26 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // POST /api/sessions/:id/resume
+  app.post("/api/sessions/:id/resume", (req, res) => {
+    const sessionId = req.params.id;
+    const { cwd } = req.body as { cwd?: string };
+    try {
+      const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
+      const safeId = sessionId.replace(/'/g, "");
+      const script = [
+        `tell application "Terminal"`,
+        `  activate`,
+        `  do script "cd '${safeCwd}' && claude resume ${safeId}"`,
+        `end tell`,
+      ].join("\n");
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+      res.json({ started: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // GET /api/search?q=TEXT[&limit=N]
   app.get("/api/search", async (req, res) => {
     const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";

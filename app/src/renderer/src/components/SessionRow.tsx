@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Table, Text, Anchor, ActionIcon, Tooltip, Badge } from "@mantine/core";
 import type { Session } from "../api";
+import { resumeSession } from "../api";
 import { relativeTime, absoluteTime } from "./TimeAgo";
 
 interface Props {
@@ -79,6 +80,7 @@ export function SessionRow({ session, onPress }: Props) {
   const intent = session.intent ?? session.summary ?? session.prompt?.slice(0, 160) ?? "—";
   const shortId = session.sessionId.slice(0, 8) + "…";
   const shortParent = session.parentSessionId ? session.parentSessionId.slice(0, 8) + "…" : null;
+  const [resuming, setResuming] = useState(false);
 
   return (
     <>
@@ -96,6 +98,23 @@ export function SessionRow({ session, onPress }: Props) {
             <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
               {shortId}
             </Text>
+            <Tooltip label="Resume in terminal" withArrow position="top" openDelay={300}>
+              <ActionIcon
+                size="sm"
+                variant="light"
+                color="indigo"
+                loading={resuming}
+                style={{ flexShrink: 0 }}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setResuming(true);
+                  try { await resumeSession(session.sessionId, session.cwd); }
+                  finally { setResuming(false); }
+                }}
+              >
+                →
+              </ActionIcon>
+            </Tooltip>
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live

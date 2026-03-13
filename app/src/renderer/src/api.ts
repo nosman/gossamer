@@ -267,6 +267,15 @@ export async function updateOpenItemStatus(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export async function resumeSession(sessionId: string, cwd: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cwd }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function spawnSession(prompt: string, cwd: string, openItemIds?: number[], parentSessionId?: string): Promise<void> {
   const res = await fetch(`${API_BASE}/sessions/spawn`, {
     method: "POST",
