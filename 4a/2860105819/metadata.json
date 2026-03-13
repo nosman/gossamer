@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "4a2860105819",
+  "strategy": "manual-commit",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "app/src/renderer/src/diff2html-theme.css"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4a/2860105819/0/metadata.json",
+      "transcript": "/4a/2860105819/0/full.jsonl",
+      "content_hash": "/4a/2860105819/0/content_hash.txt",
+      "prompt": "/4a/2860105819/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 270,
+    "cache_creation_tokens": 254488,
+    "cache_read_tokens": 18426927,
+    "output_tokens": 121060,
+    "api_call_count": 203
+  }
+}
