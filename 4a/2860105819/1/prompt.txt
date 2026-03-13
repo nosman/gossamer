@@ -1,0 +1,2 @@
+Please work on the following open items:
+- The diff viewer falls back to a plain `filesTouched` filename list when no `CheckpointIdGitOidJoin` mapping exists for a checkpoint — checkpoints without a git OID mapping will never show actual diffs.
