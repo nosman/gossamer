@@ -9,6 +9,8 @@ import { Checkpoints } from "./screens/Checkpoints";
 import { CheckpointTimeline } from "./screens/CheckpointTimeline";
 import { CheckpointDetail } from "./screens/CheckpointDetail";
 import { Search } from "./screens/Search";
+import { Repos } from "./screens/Repos";
+import { BranchLog } from "./screens/BranchLog";
 
 export default function App() {
   return (
@@ -23,6 +25,8 @@ export default function App() {
           <Route path="checkpoints/timeline" element={<CheckpointTimeline />} />
           <Route path="checkpoints/:checkpointId" element={<CheckpointDetail />} />
           <Route path="search" element={<Search />} />
+          <Route path="repos" element={<Repos />} />
+          <Route path="branch-log" element={<BranchLog />} />
         </Route>
       </Routes>
     </MemoryRouter>

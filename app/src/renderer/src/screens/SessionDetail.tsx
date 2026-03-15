@@ -25,17 +25,17 @@ import "../diff2html-theme.css";
 import { TimeAgo } from "../components/TimeAgo";
 import claudeLogo from "../assets/claude-logo.png";
 
-type DisplayItem =
+export type DisplayItem =
   | { kind: "event"; event: Event }
   | { kind: "toolGroup"; tools: ToolUseData[] }
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
-type RenderItem =
+export type RenderItem =
   | { kind: "event"; event: Event }
   | { kind: "claudeTurn"; toolGroups: ToolUseData[][]; stop: Event | null }
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
-function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
+export function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
   const result: RenderItem[] = [];
   let i = 0;
   while (i < items.length) {
@@ -83,7 +83,7 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   );
 }
 
-function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
+export function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
   toolGroups: ToolUseData[][];
   stop: Event | null;
   isTarget?: boolean;
@@ -194,7 +194,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
  * match the shape the existing UI components expect.  This lets all downstream
  * grouping and rendering code remain unchanged.
  */
-function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
+export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   const result: Event[] = [];
   let id = -1;
   let lastAssistantText: string | null = null;
@@ -337,7 +337,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   return result;
 }
 
-function groupEvents(events: Event[]): DisplayItem[] {
+export function groupEvents(events: Event[]): DisplayItem[] {
   const postMap = new Map<string, Event>();
   for (const event of events) {
     if (event.event === "PostToolUse" || event.event === "PostToolUseFailure") {
@@ -411,7 +411,7 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
   );
 }
 
-function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint; onPress: () => void }) {
+export function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
   // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
   const [diffPatch, setDiffPatch] = useState<string | null>(null);

@@ -46,6 +46,60 @@ export interface InteractionOverview {
   endedAt: string;
 }
 
+export interface RepoConfig {
+  name: string;
+  remote: string;
+  localPath: string;
+  dbPath: string;
+}
+
+export interface RepoStatus {
+  name: string;
+  localPath: string;
+  remote: string;
+  currentBranch: string | null;
+  latestCheckpointId: string | null;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
+}
+
+export async function fetchRepoStatuses(): Promise<RepoStatus[]> {
+  const res = await fetch(`${API_BASE}/repos/status`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoStatus[]>;
+}
+
+export async function fetchRepos(): Promise<RepoConfig[]> {
+  const res = await fetch(`${API_BASE}/repos`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig[]>;
+}
+
+export async function fetchCurrentRepo(): Promise<RepoConfig | null> {
+  const res = await fetch(`${API_BASE}/repos/current`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig | null>;
+}
+
+export async function addRepo(repo: { name: string; remote: string; localPath: string }): Promise<RepoConfig> {
+  const res = await fetch(`${API_BASE}/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(repo),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig>;
+}
+
+export async function deleteRepo(localPath: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/repos`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ localPath }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function fetchSessions(): Promise<Session[]> {
   const res = await fetch(`${API_BASE}/sessions`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -226,6 +280,25 @@ export interface LogEventItem {
     level: string | null;
     durationMs: number | null;
   } | null;
+}
+
+export interface BranchLogEntry {
+  checkpointId: string;
+  sessionId: string;
+  branch: string | null;
+  createdAt: string | null;
+  filesTouched: string[];
+  tokenUsage: TokenUsage | null;
+  summary: CheckpointSummary | null;
+  logEvents: LogEventItem[];
+}
+
+export async function fetchBranchLog(localPath: string, branch: string): Promise<BranchLogEntry[]> {
+  const res = await fetch(
+    `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}`,
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<BranchLogEntry[]>;
 }
 
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {

@@ -1,141 +1,188 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { useParams, useLocation } from "react-router-dom";
-import {
-  Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Button,
-} from "@mantine/core";
-import {
-  fetchCheckpoint,
-  fetchCheckpointMessages,
-  type Checkpoint,
-  type CheckpointMessage,
-  type CheckpointSummary,
-} from "../api";
-import { CheckpointMessageItem, type ToolResultBlock } from "../components/CheckpointMessageItem";
+import React, { useEffect, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton } from "@mantine/core";
+import { fetchCheckpoint, fetchCheckpointDiff, type Checkpoint, type CheckpointSummary, type OpenItem } from "../api";
+import { html as diff2htmlHtml } from "diff2html";
+import "diff2html/bundles/css/diff2html.min.css";
+import "../diff2html-theme.css";
+import { InlineMarkdown } from "../components/MarkdownView";
 
-function SummarySection({ label, items }: { label: string; items: string[] }) {
-  const [open, setOpen] = useState(false);
-  if (items.length === 0) return null;
+function SectionBlock({ title, color = "dimmed", children }: { title: string; color?: string; children: React.ReactNode }) {
   return (
-    <Box>
-      <UnstyledButton onClick={() => setOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
-        <Text size="xs" fw={600}>{label} ({items.length})</Text>
-        <Text size="xs" c="dimmed">{open ? "▲" : "▼"}</Text>
-      </UnstyledButton>
-      <Collapse in={open}>
-        {items.map((item, i) => <Text key={i} size="xs" c="dimmed" pl={8} style={{ lineHeight: "18px" }}>· {item}</Text>)}
-      </Collapse>
+    <Box style={{ borderLeft: "2px solid light-dark(var(--mantine-color-teal-3), var(--mantine-color-teal-8))", paddingLeft: 10 }}>
+      <Text size="xs" fw={600} c={color} mb={5} tt="uppercase" style={{ letterSpacing: 0.4 }}>{title}</Text>
+      {children}
     </Box>
   );
 }
 
-function CodeLearningSections({ items }: { items: Array<{ path: string; finding: string }> }) {
-  const [open, setOpen] = useState(false);
-  if (items.length === 0) return null;
+function BulletList({ items, color }: { items: string[]; color?: string }) {
   return (
-    <Box>
-      <UnstyledButton onClick={() => setOpen((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
-        <Text size="xs" fw={600}>Code learnings ({items.length})</Text>
-        <Text size="xs" c="dimmed">{open ? "▲" : "▼"}</Text>
-      </UnstyledButton>
-      <Collapse in={open}>
-        {items.map((item, i) => (
-          <Box key={i} pl={8} mb={4}>
-            <Text size="xs" ff="monospace" c="violet" fw={600}>{item.path}</Text>
-            <Text size="xs" c="dimmed">{item.finding}</Text>
+    <Box style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {items.map((it, i) => (
+        <Group key={i} gap={6} wrap="nowrap" align="flex-start">
+          <Text size="xs" c={color ?? "teal"} style={{ flexShrink: 0, lineHeight: 1.6 }}>·</Text>
+          <InlineMarkdown text={it} style={{ fontSize: 12, lineHeight: 1.6 }} />
+        </Group>
+      ))}
+    </Box>
+  );
+}
+
+function SummaryDetail({ summary, diff, fileCount }: { summary: CheckpointSummary | null; diff: string | null; fileCount: number }) {
+  return (
+    <Box style={{ display: "flex", flexDirection: "column", gap: 14, padding: "16px 20px" }}>
+      {summary?.intent && (
+        <Text size="sm" fs="italic" c="dimmed">{summary.intent}</Text>
+      )}
+
+      {summary?.outcome && (
+        <SectionBlock title="Outcome">
+          <InlineMarkdown text={summary.outcome} style={{ fontSize: 12, lineHeight: 1.6 }} />
+        </SectionBlock>
+      )}
+
+      {(summary?.repoLearnings?.length ?? 0) > 0 && (
+        <SectionBlock title="Repo learnings">
+          <BulletList items={summary!.repoLearnings} />
+        </SectionBlock>
+      )}
+
+      {(summary?.codeLearnings?.length ?? 0) > 0 && (
+        <SectionBlock title="Code learnings">
+          <Box style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {summary!.codeLearnings.map((it, i) => (
+              <Box key={i}>
+                <Text size="xs" ff="monospace" c="violet" fw={600} mb={2}>{it.path}</Text>
+                <Box pl={8}><InlineMarkdown text={`→ ${it.finding}`} style={{ fontSize: 12, lineHeight: 1.6 }} /></Box>
+              </Box>
+            ))}
           </Box>
-        ))}
-      </Collapse>
-    </Box>
-  );
-}
+        </SectionBlock>
+      )}
 
-function SummaryCard({ summary }: { summary: CheckpointSummary }) {
-  return (
-    <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-teal-2), var(--mantine-color-teal-8))", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
-      <Text size="xs" fw={700} c="teal" tt="uppercase" style={{ letterSpacing: 0.6 }}>Summary</Text>
-      <Box>
-        <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Intent</Text>
-        <Text size="sm">{summary.intent}</Text>
-      </Box>
-      <Box>
-        <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Outcome</Text>
-        <Text size="sm">{summary.outcome}</Text>
-      </Box>
-      <SummarySection label="Repo learnings"     items={summary.repoLearnings} />
-      <CodeLearningSections                        items={summary.codeLearnings} />
-      <SummarySection label="Workflow learnings"  items={summary.workflowLearnings} />
-      <SummarySection label="Friction"            items={summary.friction} />
-      <SummarySection label="Open items"          items={summary.openItems.map((it) => it.text)} />
+      {(summary?.workflowLearnings?.length ?? 0) > 0 && (
+        <SectionBlock title="Workflow learnings">
+          <BulletList items={summary!.workflowLearnings} />
+        </SectionBlock>
+      )}
+
+      {(summary?.friction?.length ?? 0) > 0 && (
+        <SectionBlock title="Friction" color="orange">
+          <BulletList items={summary!.friction} color="orange" />
+        </SectionBlock>
+      )}
+
+      {(summary?.openItems?.length ?? 0) > 0 && (
+        <SectionBlock title="Open items">
+          <Box style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            {summary!.openItems.map((it: OpenItem) => {
+              const statusColor = it.status === "complete" ? "teal" : it.status === "in_progress" ? "orange" : it.status === "na" ? "gray" : "blue";
+              const statusLabel = it.status === "in_progress" ? "in progress" : it.status === "na" ? "n/a" : it.status;
+              return (
+                <Group key={it.id} gap={8} wrap="nowrap" align="flex-start">
+                  <Badge color={statusColor} size="xs" variant="light" style={{ flexShrink: 0, marginTop: 2, textTransform: "none" }}>{statusLabel}</Badge>
+                  <InlineMarkdown text={it.text} style={{ fontSize: 12, lineHeight: 1.6 }} />
+                </Group>
+              );
+            })}
+          </Box>
+        </SectionBlock>
+      )}
+
+      <SectionBlock title="Files changed">
+        {diff === null ? (
+          <Text size="xs" c="dimmed">Loading…</Text>
+        ) : diff === "" ? (
+          fileCount > 0 ? (
+            <Text size="xs" c="dimmed">{fileCount} file{fileCount !== 1 ? "s" : ""} changed (diff not available)</Text>
+          ) : (
+            <Text size="xs" c="dimmed">No changes</Text>
+          )
+        ) : (
+          <Box
+            className="d2h-wrapper"
+            style={{ fontSize: 12, overflowX: "auto" }}
+            dangerouslySetInnerHTML={{
+              __html: diff2htmlHtml(diff, {
+                drawFileList: true,
+                matching: "lines",
+                outputFormat: "line-by-line",
+                colorScheme: "light",
+              }),
+            }}
+          />
+        )}
+      </SectionBlock>
     </Box>
   );
 }
 
 export function CheckpointDetail() {
+  const navigate = useNavigate();
   const { checkpointId } = useParams<{ checkpointId: string }>();
-  const { state } = useLocation();
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
-  const [messages, setMessages] = useState<CheckpointMessage[]>([]);
+  const [diff, setDiff] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showCompact, setShowCompact] = useState(false);
 
   const id = checkpointId!;
 
   useEffect(() => {
-    Promise.all([fetchCheckpoint(id), fetchCheckpointMessages(id)])
-      .then(([cp, msgs]) => { setCheckpoint(cp); setMessages(msgs); setError(null); })
+    fetchCheckpoint(id)
+      .then((cp) => {
+        setCheckpoint(cp);
+        setError(null);
+        return fetchCheckpointDiff(id);
+      })
+      .then((d) => setDiff(d ?? ""))
       .catch((err: unknown) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [id]);
 
-  const toolResults = useMemo(() => {
-    const map = new Map<string, ToolResultBlock>();
-    for (const msg of messages) {
-      if (msg.type !== "user") continue;
-      const d = msg.data as Record<string, unknown>;
-      const content = (d.message as Record<string, unknown> | undefined)?.content;
-      if (!Array.isArray(content)) continue;
-      for (const block of content as ToolResultBlock[]) {
-        if (block.type === "tool_result" && block.tool_use_id) map.set(block.tool_use_id, block);
-      }
-    }
-    return map;
-  }, [messages]);
-
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="teal" /></Center>;
-  if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
+  if (error)   return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
+  if (!checkpoint) return null;
 
-  const counts = messages.reduce<Record<string, number>>((acc, m) => {
-    acc[m.type] = (acc[m.type] ?? 0) + 1;
-    return acc;
-  }, {});
+  const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
+  const fileCount = checkpoint.filesTouched.length;
 
   return (
     <ScrollArea style={{ flex: 1 }}>
-      <Group gap={6} p="xs" style={{ backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))", borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-5))" }} wrap="wrap">
-        {Object.entries(counts).map(([type, count]) => (
-          <Badge key={type} variant="light" color="gray" size="sm" ff="monospace">{type} {count}</Badge>
-        ))}
-        <Button
-          variant={showCompact ? "filled" : "outline"}
-          color="dark"
-          size="xs"
-          ml="auto"
-          onClick={() => setShowCompact((v) => !v)}
+      <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
+
+        {/* Header */}
+        <Box
+          style={{
+            display: "flex", alignItems: "center", gap: 10,
+            padding: "8px 20px",
+            backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-6))",
+            borderBottom: "1px solid light-dark(var(--mantine-color-teal-2), var(--mantine-color-dark-4))",
+          }}
         >
-          {showCompact ? "▲ hide system" : "▼ show system"}
-        </Button>
-      </Group>
+          <Box style={{ flex: 1 }}>
+            <Group gap={8} mb={2}>
+              <Text size="xs" fw={700} c="teal" tt="uppercase">Checkpoint</Text>
+              <Text ff="monospace" size="xs" c="green" fw={600}>{checkpoint.checkpointId}</Text>
+              {checkpoint.branch && (
+                <UnstyledButton onClick={() => navigate("/checkpoints/timeline")}>
+                  <Badge variant="light" color="teal" size="xs" style={{ cursor: "pointer" }}>{checkpoint.branch}</Badge>
+                </UnstyledButton>
+              )}
+            </Group>
+            {checkpoint.summary?.intent && (
+              <Text size="xs" c="dimmed" fs="italic">{checkpoint.summary.intent}</Text>
+            )}
+          </Box>
+          <Box style={{ textAlign: "right", flexShrink: 0 }}>
+            {fileCount > 0 && <Text size="xs" c="dimmed" ff="monospace">{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>}
+            {outTokens > 0 && <Text size="xs" c="dimmed" ff="monospace">{outTokens.toLocaleString()} tok</Text>}
+          </Box>
+        </Box>
 
-      {checkpoint?.summary && <SummaryCard summary={checkpoint.summary} />}
+        <SummaryDetail summary={checkpoint.summary} diff={diff} fileCount={fileCount} />
 
-      {messages.length === 0 ? (
-        <Center p="xl"><Text c="dimmed" size="sm">No messages in this checkpoint.</Text></Center>
-      ) : (
-        messages.map((msg) => (
-          <CheckpointMessageItem key={msg.uuid} msg={msg} toolResults={toolResults} showCompact={showCompact} />
-        ))
-      )}
+      </Box>
     </ScrollArea>
   );
 }

@@ -12,6 +12,7 @@ interface Props {
 export const COL_WIDTHS = {
   sessionId:       180,
   user:            160,
+  repo:            130,
   branch:          120,
   intent:          340,
   parentSessionId: 120,
@@ -137,6 +138,12 @@ export function SessionRow({ session, onPress }: Props) {
               {session.gitUserName ?? "—"}
             </Text>
           )}
+        </CopyCell>
+
+        <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
+          <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
+            {session.repoName ?? "—"}
+          </Text>
         </CopyCell>
 
         <CopyCell copyValue={session.branch ?? ""} width={COL_WIDTHS.branch}>
