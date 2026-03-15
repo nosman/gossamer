@@ -1,0 +1,26 @@
+Please work on the following open items:
+- A broader codebase-wide grep for hardcoded color values (#fff, #000, light Mantine color tokens used without light-dark()) has not been performed and may surface additional issues.
+
+---
+
+git status
+
+---
+
+pwd
+
+---
+
+On the main sessions table, add an extra little button next to each session id that has an arrow. Clicking the button should open a terminal window with the prompt "claude resume <session_id>". We already have buttons like this that spawn new sessions in the SessionDetail component on line 730, so make it look the same way as that.
+
+---
+
+can you show the "live" badge after the arrow? So that the arrow is always lined up down the column
+
+---
+
+What is the difference between claude thinking mode and plan mode? OR are they the same
+
+---
+
+I don't see the "thinking" events from claude in the latest few sessions. is it because i flipped a switch or is something buggy?
