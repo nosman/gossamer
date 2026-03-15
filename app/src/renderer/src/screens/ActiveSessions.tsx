@@ -16,7 +16,7 @@ const SESSION_COLUMNS: { label: string; width: number }[] = [
   { label: "Updated",     width: COL_WIDTHS.updated         },
 ];
 
-const REPO_COLUMNS = ["Checkpoint ID", "Repo", "User", "Branch"] as const;
+const REPO_COLUMNS = ["Repo", "User", "Branch"] as const;
 
 const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
@@ -46,10 +46,8 @@ export function ActiveSessions() {
     load().then((data) => {
       const first = data[0];
       const user = first?.gitUserName ?? first?.gitUserEmail ?? null;
-      const repo = first?.repoName ?? null;
       setCrumbs([
         ...(user ? [{ label: user }] : []),
-        ...(repo ? [{ label: repo }] : []),
       ]);
     }).finally(() => setLoading(false));
     return subscribeToUpdates(() => { load().catch(() => undefined); });
@@ -140,43 +138,29 @@ export function ActiveSessions() {
                   {repoStatuses.map((repo) => (
                     <Table.Tr key={repo.localPath}>
                       <Table.Td>
-                        {repo.latestCheckpointId ? (
+                        {repo.currentBranch ? (
                           <Anchor
                             size="sm"
-                            ff="monospace"
-                            onClick={() => navigate(`/checkpoints/${repo.latestCheckpointId}`)}
+                            fw={500}
+                            onClick={() => navigate(
+                              `/branch-log?localPath=${encodeURIComponent(repo.localPath)}&branch=${encodeURIComponent(repo.currentBranch!)}&repoName=${encodeURIComponent(repo.name)}`,
+                            )}
                             style={{ cursor: "pointer" }}
                             underline="never"
                           >
-                            {repo.latestCheckpointId.slice(0, 10)}…
+                            {repo.name}
                           </Anchor>
                         ) : (
-                          <Text size="sm" c="dimmed">—</Text>
+                          <Text size="sm" fw={500}>{repo.name}</Text>
                         )}
-                      </Table.Td>
-                      <Table.Td>
-                        <Text size="sm" fw={500}>{repo.name}</Text>
                       </Table.Td>
                       <Table.Td>
                         <Text size="sm" c="dimmed">{repo.gitUserName ?? repo.gitUserEmail ?? "—"}</Text>
                       </Table.Td>
                       <Table.Td>
-                        {repo.currentBranch ? (
-                          <Anchor
-                            size="sm"
-                            ff="monospace"
-                            c="teal"
-                            underline="never"
-                            style={{ cursor: "pointer" }}
-                            onClick={() => navigate(
-                              `/branch-log?localPath=${encodeURIComponent(repo.localPath)}&branch=${encodeURIComponent(repo.currentBranch!)}`,
-                            )}
-                          >
-                            {repo.currentBranch}
-                          </Anchor>
-                        ) : (
-                          <Text size="sm" c="dimmed">—</Text>
-                        )}
+                        <Text size="sm" ff="monospace" c={repo.currentBranch ? "teal" : "dimmed"}>
+                          {repo.currentBranch ?? "—"}
+                        </Text>
                       </Table.Td>
                     </Table.Tr>
                   ))}

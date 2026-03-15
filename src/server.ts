@@ -78,6 +78,23 @@ interface OverviewResponse {
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
 
+// SQLite has a limit of 999 bind variables per statement. When doing IN queries
+// over large sets, chunk and union the results.
+const SQLITE_IN_CHUNK = 500;
+
+async function findManyInChunks<T>(
+  ids: string[],
+  fetch: (chunk: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  if (ids.length === 0) return [];
+  const results: T[] = [];
+  for (let i = 0; i < ids.length; i += SQLITE_IN_CHUNK) {
+    const chunk = ids.slice(i, i + SQLITE_IN_CHUNK);
+    results.push(...await fetch(chunk));
+  }
+  return results;
+}
+
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
@@ -566,7 +583,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // GET /api/branch-log?localPath=<>&branch=<>
   // Walks git log on the branch, parses "Entire-Checkpoint: <id>" trailers from
-  // commit bodies, and supplements with CheckpointIdGitOidJoin for indexed commits.
+  // commit bodies, then looks up each checkpoint in the DB individually.
   app.get("/api/branch-log", async (req, res) => {
     try {
       const localPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
@@ -576,153 +593,66 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         return;
       }
 
+      const page = typeof req.query.page === "string" ? Math.max(0, parseInt(req.query.page, 10) || 0) : 0;
+      const PAGE_SIZE = 50;
+
       const repo = findRepo(localPath);
       if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }
 
       const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
 
-      // Walk git log: parse "Entire-Checkpoint: <id>" from each commit body
+      // Walk git log and collect checkpoint IDs in commit order
       const orderedIds: string[] = [];
-      const seenIds   = new Set<string>();
-      const allOids:   string[]  = [];
-
+      const seenIds = new Set<string>();
       try {
-        // Use ASCII unit/record separators to safely delimit fields and commits
         const { stdout: gitOut } = await exec(
-          `git -C ${JSON.stringify(localPath)} log --format=%H%x1f%B%x1e ${JSON.stringify(branch)}`,
+          `git -C ${JSON.stringify(localPath)} log --format=%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
           { timeout: 10_000 },
         );
-        for (const entry of gitOut.split("\x1e")) {
-          const sep = entry.indexOf("\x1f");
-          if (sep === -1) continue;
-          const oid  = entry.slice(0, sep).trim();
-          const body = entry.slice(sep + 1);
-          if (oid) allOids.push(oid);
+        for (const body of gitOut.split("\x1e")) {
           const match = body.match(/^Entire-Checkpoint:\s*(\S+)$/m);
-          if (match) {
-            const id = match[1];
-            if (!seenIds.has(id)) { seenIds.add(id); orderedIds.push(id); }
+          if (match && !seenIds.has(match[1])) {
+            seenIds.add(match[1]);
+            orderedIds.push(match[1]);
           }
         }
-      } catch { /* git unavailable or branch not found — fall through to db */ }
+      } catch { /* git unavailable or branch not found */ }
 
-      // Supplement with CheckpointIdGitOidJoin for commits that are indexed
-      if (allOids.length > 0) {
-        const joins = await repoDb.checkpointIdGitOidJoin.findMany({
-          where: { gitOid: { in: allOids } },
-        });
-        for (const j of joins) {
-          if (!seenIds.has(j.checkpointId)) {
-            seenIds.add(j.checkpointId);
-            orderedIds.push(j.checkpointId);
-          }
+      const result = [];
+      for (const checkpointId of orderedIds) {
+        const [sessions, cpMeta] = await Promise.all([
+          repoDb.checkpointSessionMetadata.findMany({
+            where:   { checkpointId },
+            orderBy: { createdAt: "asc" },
+            include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
+          }),
+          repoDb.checkpointMetadata.findUnique({
+            where:  { checkpointId },
+            select: { gitUserName: true, gitUserEmail: true },
+          }),
+        ]);
+        for (const s of sessions) {
+          result.push({
+            checkpointId:  s.checkpointId,
+            sessionId:     s.sessionId,
+            branch:        s.branch,
+            createdAt:     s.createdAt?.toISOString() ?? null,
+            gitUserName:   cpMeta?.gitUserName  ?? null,
+            gitUserEmail:  cpMeta?.gitUserEmail ?? null,
+            filesTouched:  s.filesTouched.map((f) => f.filePath.path),
+            tokenUsage:   s.tokenUsage ? {
+              inputTokens:         s.tokenUsage.inputTokens,
+              cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
+              cacheReadTokens:     s.tokenUsage.cacheReadTokens,
+              outputTokens:        s.tokenUsage.outputTokens,
+              apiCallCount:        s.tokenUsage.apiCallCount,
+            } : null,
+            summary:   s.summary ? mapV2Summary(s.summary) : null,
+          });
         }
       }
 
-      // If git found nothing (no trailers, no OID matches), fall back to db branch field
-      const checkpointFilter = orderedIds.length > 0
-        ? { checkpointId: { in: orderedIds } }
-        : { branch };
-
-      const sessions = await repoDb.checkpointSessionMetadata.findMany({
-        where:   checkpointFilter,
-        orderBy: { createdAt: "desc" },
-        include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
-      });
-
-      const sessionIds = [...new Set(sessions.map((s) => s.sessionId))];
-      // logEvents are always written to the primary db by the hook handler,
-      // even for repos that have their own separate checkpoint db.
-      const allLogEvents = await db.logEvent.findMany({
-        where:   { sessionId: { in: sessionIds } },
-        orderBy: { id: "asc" },
-        include: {
-          contents:    { orderBy: { contentIndex: "asc" } },
-          usage:       true,
-          hookProgress: true,
-          systemData:  true,
-        },
-      });
-
-      const logEventsBySession = new Map<string, typeof allLogEvents>();
-      for (const e of allLogEvents) {
-        if (!e.sessionId) continue;
-        const arr = logEventsBySession.get(e.sessionId) ?? [];
-        arr.push(e);
-        logEventsBySession.set(e.sessionId, arr);
-      }
-
-      // Sort by git log order when available, otherwise by createdAt (already ordered by db query)
-      const cpOrder = new Map(orderedIds.map((id, i) => [id, i]));
-      if (orderedIds.length > 0) {
-        sessions.sort((a, b) => (cpOrder.get(a.checkpointId) ?? 9999) - (cpOrder.get(b.checkpointId) ?? 9999));
-      }
-
-      const result = sessions
-        .map((s) => ({
-          checkpointId: s.checkpointId,
-          sessionId:    s.sessionId,
-          branch:       s.branch,
-          createdAt:    s.createdAt?.toISOString() ?? null,
-          filesTouched: s.filesTouched.map((f) => f.filePath.path),
-          tokenUsage:   s.tokenUsage ? {
-            inputTokens:         s.tokenUsage.inputTokens,
-            cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
-            cacheReadTokens:     s.tokenUsage.cacheReadTokens,
-            outputTokens:        s.tokenUsage.outputTokens,
-            apiCallCount:        s.tokenUsage.apiCallCount,
-          } : null,
-          summary: s.summary ? mapV2Summary(s.summary) : null,
-          logEvents: (logEventsBySession.get(s.sessionId) ?? []).map((e) => ({
-            id:             e.id,
-            uuid:           e.uuid,
-            sessionId:      e.sessionId,
-            parentUuid:     e.parentUuid,
-            type:           e.type,
-            timestamp:      e.timestamp?.toISOString() ?? null,
-            cwd:            e.cwd,
-            gitBranch:      e.gitBranch,
-            slug:           e.slug,
-            isSidechain:    e.isSidechain,
-            toolUseId:      e.toolUseId,
-            parentToolUseId: e.parentToolUseId,
-            contents: e.contents.map((c) => ({
-              contentType:       c.contentType,
-              contentIndex:      c.contentIndex,
-              text:              c.text,
-              thinking:          c.thinking,
-              toolUseId:         c.toolUseId,
-              toolName:          c.toolName,
-              toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
-              toolResultContent: c.toolResultContent,
-              isError:           c.isError,
-            })),
-            usage: e.usage ? {
-              model:                    e.usage.model,
-              stopReason:               e.usage.stopReason,
-              inputTokens:              e.usage.inputTokens,
-              outputTokens:             e.usage.outputTokens,
-              cacheCreationInputTokens: e.usage.cacheCreationInputTokens,
-              cacheReadInputTokens:     e.usage.cacheReadInputTokens,
-            } : null,
-            hookProgress: e.hookProgress ? {
-              type:      e.hookProgress.type,
-              hookEvent: e.hookProgress.hookEvent,
-              hookName:  e.hookProgress.hookName,
-              command:   e.hookProgress.command,
-            } : null,
-            systemData: e.systemData ? {
-              subtype:               e.systemData.subtype,
-              hookCount:             e.systemData.hookCount,
-              stopReason:            e.systemData.stopReason,
-              preventedContinuation: e.systemData.preventedContinuation,
-              level:                 e.systemData.level,
-              durationMs:            e.systemData.durationMs,
-            } : null,
-          })),
-        }));
-
-      res.json(result);
+      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

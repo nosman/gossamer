@@ -99,6 +99,7 @@
 /* Line numbers */
 .d2h-code-linenumber,
 .d2h-code-side-linenumber {
+  position: static !important;
   background-color: light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6)) !important;
   border-color: light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-5)) !important;
   color: light-dark(var(--mantine-color-gray-5), var(--mantine-color-gray-6)) !important;

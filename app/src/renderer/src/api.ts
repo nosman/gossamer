@@ -291,18 +291,19 @@ export interface BranchLogEntry {
   sessionId: string;
   branch: string | null;
   createdAt: string | null;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
   filesTouched: string[];
   tokenUsage: TokenUsage | null;
   summary: CheckpointSummary | null;
-  logEvents: LogEventItem[];
 }
 
-export async function fetchBranchLog(localPath: string, branch: string): Promise<BranchLogEntry[]> {
+export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean }> {
   const res = await fetch(
-    `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}`,
+    `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}&page=${page}`,
   );
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json() as Promise<BranchLogEntry[]>;
+  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean }>;
 }
 
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
