@@ -581,8 +581,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   });
 
   // GET /api/branch-log?localPath=<>&branch=<>
-  // Walks git log on the branch, resolves checkpoint IDs via CheckpointIdGitOidJoin,
-  // and returns each checkpoint's sessions with their log events.
+  // Walks git log on the branch, parses "Entire-Checkpoint: <id>" trailers from
+  // commit bodies, and supplements with CheckpointIdGitOidJoin for indexed commits.
   app.get("/api/branch-log", async (req, res) => {
     try {
       const localPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
@@ -595,31 +595,54 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const repo = findRepo(localPath);
       if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }
 
-      // All commit OIDs on the branch, newest first
-      const { stdout } = await exec(
-        `git -C ${JSON.stringify(localPath)} log --format=%H ${JSON.stringify(branch)}`,
-      );
-      const oids = stdout.trim().split("\n").filter(Boolean);
-      if (oids.length === 0) { res.json([]); return; }
+      const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
 
-      const repoDb = await getDb(repo.dbPath);
+      // Walk git log: parse "Entire-Checkpoint: <id>" from each commit body
+      const orderedIds: string[] = [];
+      const seenIds   = new Set<string>();
+      const allOids:   string[]  = [];
 
-      // OID → checkpointId
-      const joins = await repoDb.checkpointIdGitOidJoin.findMany({
-        where: { gitOid: { in: oids } },
-      });
-      const oidOrder = new Map(oids.map((oid, i) => [oid, i]));
-      const checkpointIds = [...new Map(
-        joins
-          .sort((a, b) => (oidOrder.get(a.gitOid) ?? 0) - (oidOrder.get(b.gitOid) ?? 0))
-          .map((j) => [j.checkpointId, j.checkpointId] as [string, string]),
-      ).values()];
+      try {
+        // Use ASCII unit/record separators to safely delimit fields and commits
+        const { stdout: gitOut } = await exec(
+          `git -C ${JSON.stringify(localPath)} log --format=%H%x1f%B%x1e ${JSON.stringify(branch)}`,
+          { timeout: 10_000 },
+        );
+        for (const entry of gitOut.split("\x1e")) {
+          const sep = entry.indexOf("\x1f");
+          if (sep === -1) continue;
+          const oid  = entry.slice(0, sep).trim();
+          const body = entry.slice(sep + 1);
+          if (oid) allOids.push(oid);
+          const match = body.match(/^Entire-Checkpoint:\s*(\S+)$/m);
+          if (match) {
+            const id = match[1];
+            if (!seenIds.has(id)) { seenIds.add(id); orderedIds.push(id); }
+          }
+        }
+      } catch { /* git unavailable or branch not found — fall through to db */ }
 
-      if (checkpointIds.length === 0) { res.json([]); return; }
+      // Supplement with CheckpointIdGitOidJoin for commits that are indexed
+      if (allOids.length > 0) {
+        const joins = await repoDb.checkpointIdGitOidJoin.findMany({
+          where: { gitOid: { in: allOids } },
+        });
+        for (const j of joins) {
+          if (!seenIds.has(j.checkpointId)) {
+            seenIds.add(j.checkpointId);
+            orderedIds.push(j.checkpointId);
+          }
+        }
+      }
+
+      // If git found nothing (no trailers, no OID matches), fall back to db branch field
+      const checkpointFilter = orderedIds.length > 0
+        ? { checkpointId: { in: orderedIds } }
+        : { branch };
 
       const sessions = await repoDb.checkpointSessionMetadata.findMany({
-        where:   { checkpointId: { in: checkpointIds } },
-        orderBy: { createdAt: "asc" },
+        where:   checkpointFilter,
+        orderBy: { createdAt: "desc" },
         include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
       });
 
@@ -643,9 +666,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         logEventsBySession.set(e.sessionId, arr);
       }
 
-      const cpOrder = new Map(checkpointIds.map((id, i) => [id, i]));
+      // Sort by git log order when available, otherwise by createdAt (already ordered by db query)
+      const cpOrder = new Map(orderedIds.map((id, i) => [id, i]));
+      if (orderedIds.length > 0) {
+        sessions.sort((a, b) => (cpOrder.get(a.checkpointId) ?? 9999) - (cpOrder.get(b.checkpointId) ?? 9999));
+      }
+
       const result = sessions
-        .sort((a, b) => (cpOrder.get(a.checkpointId) ?? 0) - (cpOrder.get(b.checkpointId) ?? 0))
         .map((s) => ({
           checkpointId: s.checkpointId,
           sessionId:    s.sessionId,
