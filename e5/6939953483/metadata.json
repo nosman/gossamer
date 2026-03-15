@@ -3,7 +3,7 @@
   "checkpoint_id": "e56939953483",
   "strategy": "manual-commit",
   "branch": "ParsingEntireLog",
-  "checkpoints_count": 21,
+  "checkpoints_count": 22,
   "files_touched": [
     "app/src/renderer/src/App.tsx",
     "app/src/renderer/src/Layout.tsx",
@@ -24,13 +24,19 @@
       "transcript": "/e5/6939953483/0/full.jsonl",
       "content_hash": "/e5/6939953483/0/content_hash.txt",
       "prompt": "/e5/6939953483/0/prompt.txt"
+    },
+    {
+      "metadata": "/e5/6939953483/1/metadata.json",
+      "transcript": "/e5/6939953483/1/full.jsonl",
+      "content_hash": "/e5/6939953483/1/content_hash.txt",
+      "prompt": "/e5/6939953483/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1175,
-    "cache_creation_tokens": 435743,
-    "cache_read_tokens": 13231521,
-    "output_tokens": 94589,
-    "api_call_count": 161
+    "input_tokens": 1445,
+    "cache_creation_tokens": 690231,
+    "cache_read_tokens": 31658448,
+    "output_tokens": 215649,
+    "api_call_count": 364
   }
 }
