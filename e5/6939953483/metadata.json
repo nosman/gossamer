@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "e56939953483",
+  "strategy": "manual-commit",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 21,
+  "files_touched": [
+    "app/src/renderer/src/App.tsx",
+    "app/src/renderer/src/Layout.tsx",
+    "app/src/renderer/src/api.ts",
+    "app/src/renderer/src/components/SessionRow.tsx",
+    "app/src/renderer/src/screens/ActiveSessions.tsx",
+    "app/src/renderer/src/screens/BranchLog.tsx",
+    "app/src/renderer/src/screens/CheckpointDetail.tsx",
+    "app/src/renderer/src/screens/Repos.tsx",
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "src/config.ts",
+    "src/serve.ts",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e5/6939953483/0/metadata.json",
+      "transcript": "/e5/6939953483/0/full.jsonl",
+      "content_hash": "/e5/6939953483/0/content_hash.txt",
+      "prompt": "/e5/6939953483/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1175,
+    "cache_creation_tokens": 435743,
+    "cache_read_tokens": 13231521,
+    "output_tokens": 94589,
+    "api_call_count": 161
+  }
+}

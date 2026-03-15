@@ -1,0 +1,103 @@
+we want to update the data model to handle multiple repos. Right now we're just handling a single hardcoded repo in a database. Update the prisma schema with a repo table. Repo table should store the directory of the local repo, the name of the repo, and a boolean for is_entire_enabled
+
+---
+
+Now let's add a foreign key to Repo from CheckpointMetadata to link the checkpoint to the repo it came from
+
+---
+
+Actually let's use a different approach. Let's assume that a single sqlite db represents a single repository. We can choose a current repository to work from. We should store a config file in the user's home directory that stores each repo's data- the repo's name, remote, and path to the local repo on the user's machine.
+
+---
+
+Yes, let's wire it into server.ts. let's make a new UI that lets us onboard a repo as well.
+
+---
+
+I get this issue as soon as i enter text into the new repo page: Uncaught TypeError: Cannot read properties of null (reading 'value')
+    at Repos.tsx:135:76
+    at basicStateReducer (
+
+---
+
+Add a new column to the sessions table called "repo" showing the repo that the session is currently in
+
+---
+
+Now we need to update the indexer polling loop to look at every repo that it knows about
+
+---
+
+Add logging on the change poller to print out each repo name as it indexes it
+
+---
+
+When we create a hidden .gossamer directory in the repo, do we check if it exists already?
+
+---
+
+I'm getting a permissions issue when running the server: node:fs:1334
+  const result = binding.mkdir(
+                         ^
+
+Error: EACCES: permission denied, mkdir '/Users/stsoucas/gossamer/.gossamer'
+    at mkdirSync (node:fs:1334:26)
+    at ensureWorktree (file:///Users/stephanostsoucas/gossamer/dist/server.js:707:9)
+    at indexCheckpointsForRepo (file:///Users/stephanostsoucas/gossamer/dist/server.js:722:36)
+    at file:///Users/stephanostsoucas/gossamer/dist/server.js:768:44
+    at Array.map (<anonymous>)
+    at runAllCheckpoints (file:///Users/stephanostsoucas/gossamer/dist/server.js:768:33)
+    at startServer (file:///Users/stephanostsoucas/gossamer/dist/server.js:770:10)
+    at async file:///Users/stephanostsoucas/gossamer/dist/serve.js:16:1 {
+  errno: -13,
+  code: 'EACCES',
+  syscall: 'mkdir',
+  path: '/Users/stsoucas/gossamer/.gossamer'
+}
+
+---
+
+when we onboard a new repo, we need to push the prisma schema definitions to it so that the tables exist
+
+---
+
+Does this ever actually create the database in the onboarded repo?
+
+---
+
+make sure this whole onboard process is idempotent. If i try and onboard the same directory twice, the second time shouldn't throw any exceptions
+
+---
+
+Once the repo config entry is created, and the db is created at the root of the repo, the entire/checkpoints/v1 branch should be checked out to its own worktree and indexed. Does that last part happen already?
+
+---
+
+Now that we support multiple repos, we need to update the main screen with an additional view. Make it able to toggle between a "sessions" view (which is what we already have) and a "repos" view, which should show a table with checkpointId, repo name, userId, and branch (the branch is what's currently checked out for that repo)
+
+---
+
+A 404 is thrown when i click to a checkpoint: Cannot GET /api/checkpoints/ffd2a5cf8a87/messages
+
+---
+
+Why is the frontend still looking for this endpoint? Cannot GET /api/checkpoints/ffd2a5cf8a87/messages
+
+---
+
+You're still hitting another missing route: http://localhost:3000/api/v2/checkpoints/ffd2a5cf8a87 gives {error: "Not found"}
+error
+: 
+"Not found"
+
+---
+
+It's barely better: for the gossamer repo, i don't even get a checkpoint, which i know exists. For the entireio/cli repo, it shows me checkpoint ffd2a5cf8a but when i click on it it shows "no summary for this checkpoint" and nothing else
+
+---
+
+I still see no branch or checkpointId for the gossamer repo. Get it from git if you have to
+
+---
+
+2 doesn't make sense- if the checkpoints aren't in the database, why will looking at the git log help? We still won't have any data for it. Second of all, i still don't have data showing up for the gossamer repo. Third, we should be showing the checkpoint view the same way as sessionDetail, including the diff2html view of the diff of the attached commit.
