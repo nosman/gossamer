@@ -1,0 +1,13 @@
+Write a README for this project. It's a desktop control panel for your claude code sessions. It lets you index, search, and back up old claude code sessions so that you can always revisit and access them. Also say that because it uses Entire.io, it links your AI sessions with your commits so that you never lose the context behind your code. Include instructions on how to run the app locally. Mention that you need the entire cli installed, and that it's an electron app with a server and ui component. Also say that brew installs are coming soon. Make it exciting
+
+---
+
+Add a section about privacy and how your data never leaves your own machine. The search index and database is all built on a local sqlite instance. The session history is stored in your local git repository and can be pushed to your remote repo. The data is completely under your control.
+
+---
+
+In the coming soon session, don't put native text search, since we already do that. Also get rid of cloud backup and sync across machines.
+
+---
+
+onboarding a new repo gives an error with the db push: Error: Command failed: \"/Users/stephanostsoucas/gossamer/node_modules/.bin/prisma\" db push --skip-generate\nLoaded Prisma config from prisma.config.ts.\n\n\n! unknown or unexpected option: --skip-generate\n\n🙌  Push the state from your Prisma schema to your database\n\nUsage\n\n  $ prisma db push [options]\n\n  The datasource URL configuration is read from the Prisma config file (e.g., prisma.config.ts).\n\nOptions\n\n           -h, --help   Display this help message\n             --config   Custom path to your Prisma config file\n             --schema   Custom path to your Prisma schema\n                 --url   Override the datasource URL from the Prisma config file\n   --accept-data-loss   Ignore data loss warnings\n        --force-reset   Force a reset of the database before push\n\nExamples\n\n  Push the Prisma schema state to the database\n  $ prisma db push\n\n  Specify a schema\n  $ prisma db push --schema=./schema.prisma\n\n  Ignore data loss warnings\n  $ prisma db push --accept-data-loss\n\n
