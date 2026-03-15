@@ -100,7 +100,7 @@ export function Checkpoints() {
             checkpoint={cp}
             onPress={() =>
               navigate(`/checkpoints/${cp.checkpointId}`, {
-                state: { title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId },
+                state: { title: cp.branch ? `${cp.branch} · ${cp.checkpointId}` : cp.checkpointId, localPath: cp.localPath },
               })
             }
           />

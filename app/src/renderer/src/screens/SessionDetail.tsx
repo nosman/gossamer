@@ -258,7 +258,15 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       if (!currentTurnLogEventIds.includes(le.id)) currentTurnLogEventIds.push(le.id);
 
       if (textBlocks.length > 0) {
-        lastAssistantText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+        const newText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+        // If there was already planning text and tool uses have been emitted since,
+        // fold the planning text into the thinking block so it isn't lost.
+        if (lastAssistantText !== null && lastToolsLogEventId !== null) {
+          lastAssistantThinking = lastAssistantThinking
+            ? lastAssistantThinking + "\n\n" + lastAssistantText
+            : lastAssistantText;
+        }
+        lastAssistantText = newText;
         lastAssistantLogEventId = le.id;
       }
       if (thinkingBlocks.length > 0) {
@@ -411,7 +419,7 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
   );
 }
 
-export function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint; onPress: () => void }) {
+export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: SessionCheckpoint; localPath: string | null; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
   // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
   const [diffPatch, setDiffPatch] = useState<string | null>(null);
@@ -421,11 +429,11 @@ export function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionChec
 
   useEffect(() => {
     if (expanded && diffPatch === null) {
-      fetchCheckpointDiff(checkpoint.checkpointId)
+      fetchCheckpointDiff(checkpoint.checkpointId, localPath)
         .then((d) => setDiffPatch(d ?? ""))
         .catch(() => setDiffPatch(""));
     }
-  }, [expanded, checkpoint.checkpointId, diffPatch]);
+  }, [expanded, checkpoint.checkpointId, localPath, diffPatch]);
 
   return (
     <Box style={{ padding: "4px 20px 4px 58px" }}>
@@ -866,8 +874,9 @@ export function SessionDetail() {
               ) : item.kind === "checkpoint" ? (
                 <CheckpointRow
                   checkpoint={item.checkpoint}
+                  localPath={session?.repoRoot ?? null}
                   onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
-                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId },
+                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId, localPath: session?.repoRoot ?? null },
                   })}
                 />
               ) : (

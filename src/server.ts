@@ -78,31 +78,6 @@ interface OverviewResponse {
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
 
-// ─── Multi-repo db lookup ─────────────────────────────────────────────────────
-
-/**
- * Find the db and localPath for the repo that contains the given checkpointId.
- * Tries the primary db first, then falls back through all configured repos.
- */
-async function repoForCheckpoint(
-  primaryDb: PrismaClient,
-  primaryDbPath: string,
-  primaryLocalPath: string | undefined,
-  checkpointId: string,
-): Promise<{ db: PrismaClient; localPath: string | undefined }> {
-  const found = await primaryDb.checkpointMetadata.findUnique({ where: { checkpointId }, select: { id: true } });
-  if (found) return { db: primaryDb, localPath: primaryLocalPath };
-  for (const repo of readConfig().repos) {
-    if (repo.dbPath === primaryDbPath) continue;
-    try {
-      const repoDb = await getDb(repo.dbPath);
-      const hit = await repoDb.checkpointMetadata.findUnique({ where: { checkpointId }, select: { id: true } });
-      if (hit) return { db: repoDb, localPath: repo.localPath };
-    } catch { /* db may not exist yet */ }
-  }
-  return { db: primaryDb, localPath: primaryLocalPath }; // let the caller handle the 404
-}
-
 // ─── Server ───────────────────────────────────────────────────────────────────
 
 export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
@@ -448,6 +423,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           } : null,
           filesTouched:  c.filesTouched.map((f) => f.filePath.path),
           sessionCount:  cpSessions.length,
+          localPath:     repoDir ?? null,
           summary: summary ? mapV2Summary(summary) : null,
         };
       }));
@@ -460,7 +436,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/checkpoints/:id", async (req, res) => {
     try {
       const checkpointId = req.params.id;
-      const { db: cdb } = await repoForCheckpoint(db, dbPath, repoDir, checkpointId);
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
       const checkpoint = await cdb.checkpointMetadata.findUnique({
         where: { checkpointId },
         include: {
@@ -505,7 +483,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/checkpoints/:id/diff", async (req, res) => {
     try {
       const checkpointId = req.params.id;
-      const { db: cdb, localPath: cpLocalPath } = await repoForCheckpoint(db, dbPath, repoDir, checkpointId);
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const cpLocalPath = repo ? repo.localPath : repoDir;
       if (!cpLocalPath) { res.status(404).end(); return; }
       const join = await cdb.checkpointIdGitOidJoin.findFirst({
         where: { checkpointId },
@@ -526,7 +507,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/checkpoints/:id/diff-stats", async (req, res) => {
     try {
       const checkpointId = req.params.id;
-      const { db: cdb, localPath: cpLocalPath } = await repoForCheckpoint(db, dbPath, repoDir, checkpointId);
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const cpLocalPath = repo ? repo.localPath : repoDir;
       if (!cpLocalPath) { res.json([]); return; }
       const join = await cdb.checkpointIdGitOidJoin.findFirst({
         where: { checkpointId },
@@ -647,7 +631,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
 
       const sessionIds = [...new Set(sessions.map((s) => s.sessionId))];
-      const allLogEvents = await repoDb.logEvent.findMany({
+      // logEvents are always written to the primary db by the hook handler,
+      // even for repos that have their own separate checkpoint db.
+      const allLogEvents = await db.logEvent.findMany({
         where:   { sessionId: { in: sessionIds } },
         orderBy: { id: "asc" },
         include: {

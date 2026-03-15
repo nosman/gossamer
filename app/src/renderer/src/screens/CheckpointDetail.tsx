@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton } from "@mantine/core";
 import { fetchCheckpoint, fetchCheckpointDiff, type Checkpoint, type CheckpointSummary, type OpenItem } from "../api";
 import { html as diff2htmlHtml } from "diff2html";
@@ -121,6 +121,8 @@ function SummaryDetail({ summary, diff, fileCount }: { summary: CheckpointSummar
 export function CheckpointDetail() {
   const navigate = useNavigate();
   const { checkpointId } = useParams<{ checkpointId: string }>();
+  const location = useLocation();
+  const localPath = (location.state as { localPath?: string | null } | null)?.localPath ?? null;
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [diff, setDiff] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -129,11 +131,11 @@ export function CheckpointDetail() {
   const id = checkpointId!;
 
   useEffect(() => {
-    fetchCheckpoint(id)
+    fetchCheckpoint(id, localPath)
       .then((cp) => {
         setCheckpoint(cp);
         setError(null);
-        return fetchCheckpointDiff(id);
+        return fetchCheckpointDiff(id, localPath);
       })
       .then((d) => setDiff(d ?? ""))
       .catch((err: unknown) => setError(String(err)))

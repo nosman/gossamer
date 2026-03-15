@@ -161,6 +161,7 @@ export interface Checkpoint {
   filesTouched: string[];
   tokenUsage: TokenUsage | null;
   sessionCount: number;
+  localPath: string | null;
   summary: CheckpointSummary | null;
 }
 
@@ -185,20 +186,23 @@ export interface FileDiffStat {
   deletions: number;
 }
 
-export async function fetchCheckpointDiff(checkpointId: string): Promise<string | null> {
-  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff`);
+export async function fetchCheckpointDiff(checkpointId: string, localPath?: string | null): Promise<string | null> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff${qs}`);
   if (!res.ok) return null;
   return res.text();
 }
 
-export async function fetchCheckpointDiffStats(checkpointId: string): Promise<FileDiffStat[]> {
-  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff-stats`);
+export async function fetchCheckpointDiffStats(checkpointId: string, localPath?: string | null): Promise<FileDiffStat[]> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff-stats${qs}`);
   if (!res.ok) return [];
   return res.json() as Promise<FileDiffStat[]>;
 }
 
-export async function fetchCheckpoint(id: string): Promise<Checkpoint> {
-  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}`);
+export async function fetchCheckpoint(id: string, localPath?: string | null): Promise<Checkpoint> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Checkpoint>;
 }
