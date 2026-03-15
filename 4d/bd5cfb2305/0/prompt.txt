@@ -1,0 +1,13 @@
+resume
+
+---
+
+There are a bunch of routes in server.ts that use the repoForCheckpoint method. This method is very inefficient, querying multiple databases to find the appropriate repo. Instead, each of these routes should have the repo as part of it so that it already knows which database to query.
+
+---
+
+There is an event where claude is planning: "Now I have everything I need. Here's the plan" - i don't see that showing up in sessionDetails
+
+---
+
+Instead of that, i want you to just add the plan event in the "thinking" block like it was showing up before. The new changes are too noisy
