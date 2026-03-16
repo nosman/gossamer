@@ -757,7 +757,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // GET /api/search?q=TEXT[&limit=N]
   app.get("/api/search", async (req, res) => {
-    const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";
+    const q     = typeof req.query.q     === "string" ? decodeURIComponent(req.query.q.trim()) : "";
     const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit)  : 50;
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {
