@@ -3,10 +3,13 @@
   "checkpoint_id": "54dbf8b292f7",
   "strategy": "manual-commit",
   "branch": "ParsingEntireLog",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
     "app/src/renderer/src/Layout.tsx",
-    "prisma/schema.prisma"
+    "app/src/renderer/src/api.ts",
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "prisma/schema.prisma",
+    "src/server.ts"
   ],
   "sessions": [
     {
@@ -20,13 +23,19 @@
       "transcript": "/54/dbf8b292f7/1/full.jsonl",
       "content_hash": "/54/dbf8b292f7/1/content_hash.txt",
       "prompt": "/54/dbf8b292f7/1/prompt.txt"
+    },
+    {
+      "metadata": "/54/dbf8b292f7/2/metadata.json",
+      "transcript": "/54/dbf8b292f7/2/full.jsonl",
+      "content_hash": "/54/dbf8b292f7/2/content_hash.txt",
+      "prompt": "/54/dbf8b292f7/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 193,
-    "cache_creation_tokens": 232099,
-    "cache_read_tokens": 14521484,
-    "output_tokens": 79368,
-    "api_call_count": 155
+    "input_tokens": 202,
+    "cache_creation_tokens": 253323,
+    "cache_read_tokens": 14653721,
+    "output_tokens": 81387,
+    "api_call_count": 162
   }
 }
