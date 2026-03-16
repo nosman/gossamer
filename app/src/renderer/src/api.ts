@@ -34,6 +34,8 @@ export interface Event {
   _sourceLogEventId?: number;
   /** Additional LogEvent IDs for the same turn (e.g. separate thinking events). */
   _extraSourceLogEventIds?: number[];
+  /** Original UUID from the JSONL log event this synthetic event was derived from. */
+  _sourceUuid?: string;
 }
 
 export interface InteractionOverview {
@@ -42,6 +44,66 @@ export interface InteractionOverview {
   keywords: string[];
   startedAt: string;
   endedAt: string;
+}
+
+export interface RepoConfig {
+  name: string;
+  remote: string;
+  localPath: string;
+  dbPath: string;
+}
+
+export interface RepoStatus {
+  name: string;
+  localPath: string;
+  remote: string;
+  currentBranch: string | null;
+  latestCheckpointId: string | null;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
+}
+
+export async function fetchRepoStatuses(): Promise<RepoStatus[]> {
+  const res = await fetch(`${API_BASE}/repos/status`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoStatus[]>;
+}
+
+export async function fetchBranches(localPath: string): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/branches?localPath=${encodeURIComponent(localPath)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<string[]>;
+}
+
+export async function fetchRepos(): Promise<RepoConfig[]> {
+  const res = await fetch(`${API_BASE}/repos`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig[]>;
+}
+
+export async function fetchCurrentRepo(): Promise<RepoConfig | null> {
+  const res = await fetch(`${API_BASE}/repos/current`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig | null>;
+}
+
+export async function addRepo(repo: { name: string; remote: string; localPath: string }): Promise<RepoConfig> {
+  const res = await fetch(`${API_BASE}/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(repo),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<RepoConfig>;
+}
+
+export async function deleteRepo(localPath: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/repos`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ localPath }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export async function fetchSessions(): Promise<Session[]> {
@@ -105,6 +167,7 @@ export interface Checkpoint {
   filesTouched: string[];
   tokenUsage: TokenUsage | null;
   sessionCount: number;
+  localPath: string | null;
   summary: CheckpointSummary | null;
 }
 
@@ -123,8 +186,29 @@ export interface CheckpointMessage {
   data: unknown;
 }
 
-export async function fetchCheckpoint(id: string): Promise<Checkpoint> {
-  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}`);
+export interface FileDiffStat {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+export async function fetchCheckpointDiff(checkpointId: string, localPath?: string | null): Promise<string | null> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff${qs}`);
+  if (!res.ok) return null;
+  return res.text();
+}
+
+export async function fetchCheckpointDiffStats(checkpointId: string, localPath?: string | null): Promise<FileDiffStat[]> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(checkpointId)}/diff-stats${qs}`);
+  if (!res.ok) return [];
+  return res.json() as Promise<FileDiffStat[]>;
+}
+
+export async function fetchCheckpoint(id: string, localPath?: string | null): Promise<Checkpoint> {
+  const qs = localPath ? `?localPath=${encodeURIComponent(localPath)}` : "";
+  const res = await fetch(`${API_BASE}/v2/checkpoints/${encodeURIComponent(id)}${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Checkpoint>;
 }
@@ -150,6 +234,8 @@ export interface SessionCheckpoint {
   tokenUsage: TokenUsage | null;
   createdAt: string | null;
   summary: CheckpointSummary | null;
+  commitMessage: string | null;
+  commitHash: string | null;
 }
 
 export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckpoint[]> {
@@ -208,6 +294,28 @@ export interface LogEventItem {
   } | null;
 }
 
+export interface BranchLogEntry {
+  checkpointId: string;
+  sessionId: string;
+  branch: string | null;
+  createdAt: string | null;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
+  filesTouched: string[];
+  tokenUsage: TokenUsage | null;
+  summary: CheckpointSummary | null;
+  commitMessage: string | null;
+  commitHash: string | null;
+}
+
+export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean }> {
+  const res = await fetch(
+    `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}&page=${page}`,
+  );
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean }>;
+}
+
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
   const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/log-events`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -243,6 +351,15 @@ export async function updateOpenItemStatus(
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ status, ...(subSessionId !== undefined ? { subSessionId } : {}) }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function resumeSession(sessionId: string, cwd: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cwd }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }

@@ -6,6 +6,7 @@ import {
   fetchSession,
   fetchLogEvents,
   fetchSessionCheckpoints,
+  fetchCheckpointDiff,
   spawnSession,
   updateOpenItemStatus,
   subscribeToUpdates,
@@ -17,21 +18,24 @@ import {
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
-import { MarkdownView } from "../components/MarkdownView";
+import { MarkdownView, InlineMarkdown } from "../components/MarkdownView";
+import { html as diff2htmlHtml } from "diff2html";
+import "diff2html/bundles/css/diff2html.min.css";
+import "../diff2html-theme.css";
 import { TimeAgo } from "../components/TimeAgo";
 import claudeLogo from "../assets/claude-logo.png";
 
-type DisplayItem =
+export type DisplayItem =
   | { kind: "event"; event: Event }
   | { kind: "toolGroup"; tools: ToolUseData[] }
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
-type RenderItem =
+export type RenderItem =
   | { kind: "event"; event: Event }
   | { kind: "claudeTurn"; toolGroups: ToolUseData[][]; stop: Event | null }
   | { kind: "checkpoint"; checkpoint: SessionCheckpoint };
 
-function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
+export function groupClaudeTurns(items: DisplayItem[]): RenderItem[] {
   const result: RenderItem[] = [];
   let i = 0;
   while (i < items.length) {
@@ -79,7 +83,7 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   );
 }
 
-function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
+export function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, expandThinking, targetLogEventId }: {
   toolGroups: ToolUseData[][];
   stop: Event | null;
   isTarget?: boolean;
@@ -93,7 +97,10 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
   const thinking = str(d.thinking);
   const reason = str(d.reason);
   const thinkingLogEventId = typeof d.thinkingLogEventId === "number" ? d.thinkingLogEventId : null;
+  const thinkingUuid = typeof d.thinkingUuid === "string" ? d.thinkingUuid : null;
   const toolsLogEventId = typeof d.toolsLogEventId === "number" ? d.toolsLogEventId : null;
+  const toolsUuid = typeof d.toolsUuid === "string" ? d.toolsUuid : null;
+  const hasRedactedThinking = d.hasRedactedThinking === true;
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
@@ -115,8 +122,13 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
           {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
+        {!thinking && hasRedactedThinking && (
+          <Box mb={6}>
+            <Text size="xs" c="dimmed" fs="italic">thinking (redacted)</Text>
+          </Box>
+        )}
         {thinking && (
-          <Box mb={6} id={thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined}>
+          <Box mb={6} id={thinkingUuid ?? (thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined)}>
             <Group
               gap={6}
               mb={4}
@@ -155,7 +167,7 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
           </Box>
         )}
         {toolGroups.length > 0 && (
-          <Box id={toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined}>
+          <Box id={toolsUuid ?? (toolsLogEventId != null ? `log-event-${toolsLogEventId}` : undefined)}>
             <Group
               gap={6}
               mb={4}
@@ -188,14 +200,17 @@ function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandTools, e
  * match the shape the existing UI components expect.  This lets all downstream
  * grouping and rendering code remain unchanged.
  */
-function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
+export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   const result: Event[] = [];
   let id = -1;
   let lastAssistantText: string | null = null;
   let lastAssistantThinking: string | null = null;
   let lastAssistantLogEventId: number | null = null;
   let lastThinkingLogEventId: number | null = null;
+  let lastThinkingUuid: string | null = null;
   let lastToolsLogEventId: number | null = null;
+  let lastToolsUuid: string | null = null;
+  let hasRedactedThinking = false;
   // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
   const currentTurnLogEventIds: number[] = [];
 
@@ -233,35 +248,50 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
               tool_response: !failed ? (tr.toolResultContent ?? "") : undefined,
               error:          failed ? (tr.toolResultContent ?? "") : undefined,
             },
-            summary: null, keywords: [], _sourceLogEventId: le.id,
+            summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined,
           });
         }
       } else if (textBlocks.length > 0) {
         const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id });
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
       }
 
     } else if (le.type === "assistant") {
       const toolUses      = le.contents.filter((c) => c.contentType === "tool_use");
       const textBlocks    = le.contents.filter((c) => c.contentType === "text");
       const thinkingBlocks = le.contents.filter((c) => c.contentType === "thinking");
+      const redactedThinkingBlocks = le.contents.filter((c) => c.contentType === "redacted_thinking");
 
       // Track all LogEvent IDs in this turn so thinking-only events are reachable
       if (!currentTurnLogEventIds.includes(le.id)) currentTurnLogEventIds.push(le.id);
 
       if (textBlocks.length > 0) {
-        lastAssistantText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+        const newText = textBlocks.map((b) => b.text ?? "").filter(Boolean).join("\n\n");
+        // If there was already planning text and tool uses have been emitted since,
+        // fold the planning text into the thinking block so it isn't lost.
+        if (lastAssistantText !== null && lastToolsLogEventId !== null) {
+          lastAssistantThinking = lastAssistantThinking
+            ? lastAssistantThinking + "\n\n" + lastAssistantText
+            : lastAssistantText;
+        }
+        lastAssistantText = newText;
         lastAssistantLogEventId = le.id;
       }
       if (thinkingBlocks.length > 0) {
         const thinking = thinkingBlocks.map((b) => b.thinking ?? "").filter(Boolean).join("\n\n");
         lastAssistantThinking = lastAssistantThinking ? lastAssistantThinking + "\n\n" + thinking : thinking;
         lastThinkingLogEventId = le.id;
+        lastThinkingUuid = le.uuid ?? null;
+        if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
+      }
+      if (redactedThinkingBlocks.length > 0) {
+        hasRedactedThinking = true;
         if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
       }
 
       for (const tu of toolUses) {
         lastToolsLogEventId = le.id;
+        lastToolsUuid = le.uuid ?? null;
         result.push({
           id: id--,
           timestamp: ts,
@@ -269,7 +299,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           sessionId: sid,
           blocked: false,
           data: { tool_name: tu.toolName ?? "?", tool_use_id: tu.toolUseId, tool_input: tu.toolInput },
-          summary: null, keywords: [], _sourceLogEventId: le.id,
+          summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined,
         });
       }
 
@@ -287,7 +317,10 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           thinking: lastAssistantThinking ?? "",
           reason: le.systemData.stopReason ?? "",
           thinkingLogEventId: lastThinkingLogEventId ?? undefined,
+          thinkingUuid: lastThinkingUuid ?? undefined,
           toolsLogEventId: lastToolsLogEventId ?? undefined,
+          toolsUuid: lastToolsUuid ?? undefined,
+          hasRedactedThinking,
         },
         summary: null, keywords: [],
         _sourceLogEventId: primaryId,
@@ -297,7 +330,10 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       lastAssistantThinking = null;
       lastAssistantLogEventId = null;
       lastThinkingLogEventId = null;
+      lastThinkingUuid = null;
       lastToolsLogEventId = null;
+      lastToolsUuid = null;
+      hasRedactedThinking = false;
       currentTurnLogEventIds.length = 0;
     }
   }
@@ -323,7 +359,7 @@ function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   return result;
 }
 
-function groupEvents(events: Event[]): DisplayItem[] {
+export function groupEvents(events: Event[]): DisplayItem[] {
   const postMap = new Map<string, Event>();
   for (const event of events) {
     if (event.event === "PostToolUse" || event.event === "PostToolUseFailure") {
@@ -375,28 +411,62 @@ function groupEvents(events: Event[]): DisplayItem[] {
   return result;
 }
 
-function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint; onPress: () => void }) {
+function SectionBlock({ title, color = "dimmed", children }: { title: string; color?: string; children: React.ReactNode }) {
+  return (
+    <Box style={{ borderLeft: "2px solid light-dark(var(--mantine-color-teal-3), var(--mantine-color-teal-8))", paddingLeft: 10 }}>
+      <Text size="xs" fw={600} c={color} mb={5} tt="uppercase" style={{ letterSpacing: 0.4 }}>{title}</Text>
+      {children}
+    </Box>
+  );
+}
+
+function BulletList({ items, color }: { items: string[]; color?: string }) {
+  return (
+    <Box style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {items.map((it, i) => (
+        <Group key={i} gap={6} wrap="nowrap" align="flex-start">
+          <Text size="xs" c={color ?? "teal"} style={{ flexShrink: 0, lineHeight: 1.6 }}>·</Text>
+          <InlineMarkdown text={it} style={{ fontSize: 12, lineHeight: 1.6 }} />
+        </Group>
+      ))}
+    </Box>
+  );
+}
+
+export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: SessionCheckpoint; localPath: string | null; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
+  const [diffPatch, setDiffPatch] = useState<string | null>(null);
   const outTokens = checkpoint.tokenUsage?.outputTokens ?? 0;
   const fileCount = checkpoint.filesTouched.length;
   const sum = checkpoint.summary;
 
+  useEffect(() => {
+    if (expanded && diffPatch === null) {
+      fetchCheckpointDiff(checkpoint.checkpointId, localPath)
+        .then((d) => setDiffPatch(d ?? ""))
+        .catch(() => setDiffPatch(""));
+    }
+  }, [expanded, checkpoint.checkpointId, localPath, diffPatch]);
+
   return (
     <Box style={{ padding: "4px 20px 4px 58px" }}>
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)", borderRadius: 8, overflow: "hidden" }}>
+    <Box style={{ borderRadius: 8, overflow: "hidden" }}>
       <UnstyledButton
         onClick={() => setExpanded((v) => !v)}
         style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-6))" }}
       >
         <Box style={{ flex: 1 }}>
-          <Group gap={8} mb={2}>
-            <Text size="xs" fw={700} c="teal" tt="uppercase">Checkpoint</Text>
-            <Text ff="monospace" size="xs" c="green" fw={600}>{checkpoint.checkpointId}</Text>
+          {sum?.intent ? (
+            <Text size="xs" c="dimmed" fs="italic" lineClamp={expanded ? undefined : 1} mb={4}>{sum.intent}</Text>
+          ) : checkpoint.commitMessage ? (
+            <Text size="xs" c="dimmed" lineClamp={expanded ? undefined : 1} mb={4}>{checkpoint.commitMessage}</Text>
+          ) : null}
+          <Group gap={8}>
+            <Text ff="monospace" size="xs" c="teal">{checkpoint.checkpointId}</Text>
             {checkpoint.branch && <Badge variant="light" color="teal" size="xs">{checkpoint.branch}</Badge>}
+            {checkpoint.commitHash && <Text ff="monospace" size="xs" c="dimmed">{checkpoint.commitHash.slice(0, 7)}</Text>}
           </Group>
-          {sum?.intent && (
-            <Text size="xs" c="dimmed" fs="italic" lineClamp={expanded ? undefined : 1}>{sum.intent}</Text>
-          )}
         </Box>
         <Box style={{ textAlign: "right", flexShrink: 0 }}>
           {fileCount > 0 && <Text size="xs" c="dimmed" ff="monospace">{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>}
@@ -405,60 +475,91 @@ function CheckpointRow({ checkpoint, onPress }: { checkpoint: SessionCheckpoint;
       </UnstyledButton>
 
       <Collapse in={expanded}>
-        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+        <Box style={{ backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-7))", borderTop: "1px solid var(--mantine-color-teal-2)", padding: "16px 16px", display: "flex", flexDirection: "column", gap: 14 }}>
+
           {sum?.outcome && (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>✓ Outcome</Text>
-              <Text size="xs">{sum.outcome}</Text>
-            </Box>
+            <SectionBlock title="Outcome">
+              <InlineMarkdown text={sum.outcome} style={{ fontSize: 12, lineHeight: 1.6 }} />
+            </SectionBlock>
           )}
+
           {sum?.repoLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◎ Repo learnings</Text>
-              {sum.repoLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Repo learnings">
+              <BulletList items={sum.repoLearnings} />
+            </SectionBlock>
           ) : null}
+
           {sum?.codeLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>{"</>"} Code learnings</Text>
-              {sum.codeLearnings.map((it, i) => (
-                <Box key={i} pl={4} mb={2}>
-                  <Text size="xs" ff="monospace" c="violet" fw={600}>{it.path}</Text>
-                  <Text size="xs">· {it.finding}</Text>
-                </Box>
-              ))}
-            </Box>
+            <SectionBlock title="Code learnings">
+              <Box style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {sum.codeLearnings.map((it, i) => (
+                  <Box key={i}>
+                    <Text size="xs" ff="monospace" c="violet" fw={600} mb={2}>{it.path}</Text>
+                    <Box pl={8}><InlineMarkdown text={`→ ${it.finding}`} style={{ fontSize: 12, lineHeight: 1.6 }} /></Box>
+                  </Box>
+                ))}
+              </Box>
+            </SectionBlock>
           ) : null}
+
           {sum?.workflowLearnings?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>↺ Workflow learnings</Text>
-              {sum.workflowLearnings.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Workflow learnings">
+              <BulletList items={sum.workflowLearnings} />
+            </SectionBlock>
           ) : null}
+
           {sum?.friction?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>△ Friction</Text>
-              {sum.friction.map((it, i) => <Text key={i} size="xs">· {it}</Text>)}
-            </Box>
+            <SectionBlock title="Friction" color="orange">
+              <BulletList items={sum.friction} color="orange" />
+            </SectionBlock>
           ) : null}
+
           {sum?.openItems?.length ? (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>◇ Open items</Text>
-              {sum.openItems.map((it, i) => <Text key={i} size="xs">· {it.text}</Text>)}
-            </Box>
+            <SectionBlock title="Open items">
+              <Box style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {sum.openItems.map((it) => {
+                  const statusColor = it.status === "complete" ? "teal" : it.status === "in_progress" ? "orange" : it.status === "na" ? "gray" : "blue";
+                  const statusLabel = it.status === "in_progress" ? "in progress" : it.status === "na" ? "n/a" : it.status;
+                  return (
+                    <Group key={it.id} gap={8} wrap="nowrap" align="flex-start">
+                      <Badge color={statusColor} size="xs" variant="light" style={{ flexShrink: 0, marginTop: 2, textTransform: "none" }}>{statusLabel}</Badge>
+                      <InlineMarkdown text={it.text} style={{ fontSize: 12, lineHeight: 1.6 }} />
+                    </Group>
+                  );
+                })}
+              </Box>
+            </SectionBlock>
           ) : null}
-          {fileCount > 0 && (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={2}>Files touched</Text>
-              {checkpoint.filesTouched.map((f, i) => <Text key={i} size="xs" ff="monospace" c="dimmed" pl={4}>{f}</Text>)}
-            </Box>
-          )}
-          <UnstyledButton
-            onClick={onPress}
-            style={{ alignSelf: "flex-start", marginTop: 4, padding: "5px 10px", borderRadius: 4, border: "1px solid var(--mantine-color-teal-3)" }}
-          >
-            <Text size="xs" c="teal" ff="monospace">Open checkpoint →</Text>
-          </UnstyledButton>
+
+          <SectionBlock title="Files changed">
+            {diffPatch === null ? (
+              <Text size="xs" c="dimmed">Loading…</Text>
+            ) : diffPatch === "" ? (
+              fileCount > 0 ? (
+                <Box style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                  {checkpoint.filesTouched.map((path) => (
+                    <Text key={path} size="xs" ff="monospace" c="dimmed">{path}</Text>
+                  ))}
+                </Box>
+              ) : (
+                <Text size="xs" c="dimmed">No diff available</Text>
+              )
+            ) : (
+              <Box
+                className="d2h-wrapper"
+                style={{ fontSize: 12, overflowX: "auto" }}
+                dangerouslySetInnerHTML={{
+                  __html: diff2htmlHtml(diffPatch, {
+                    drawFileList: true,
+                    matching: "lines",
+                    outputFormat: "line-by-line",
+                    colorScheme: "light",
+                  }),
+                }}
+              />
+            )}
+          </SectionBlock>
+
         </Box>
       </Collapse>
     </Box>
@@ -512,6 +613,7 @@ export function SessionDetail() {
   const [highlightActive, setHighlightActive] = useState(false);
   const scrolledRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const logEventsRef = useRef<LogEventItem[]>([]);
   const [session, setSession] = useState<Session | null>(null);
   const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
   const [items, setItems] = useState<RenderItem[]>([]);
@@ -549,6 +651,7 @@ export function SessionDetail() {
   useEffect(() => {
     Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
       .then(([s, logEvs, checkpoints]) => {
+        logEventsRef.current = logEvs;
         setSession(s);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
@@ -586,7 +689,7 @@ export function SessionDetail() {
     const t = setTimeout(() => {
       setHighlightActive(true);
       scrolledRef.current = true;
-      setTimeout(() => setHighlightActive(false), 2500);
+      setTimeout(() => setHighlightActive(false), 10000);
     }, 150);
     return () => clearTimeout(t);
   }, [items, targetLogEventId]);
@@ -597,14 +700,16 @@ export function SessionDetail() {
     // Wait for Collapse animations (~200ms) to reach their final layout before measuring
     const t = setTimeout(() => {
       requestAnimationFrame(() => {
-        // Prefer an inner element with the precise id (thinking/tools section), fall back to the card div
-        const el = (document.getElementById(`log-event-${targetLogEventId}`)
-          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)) as HTMLElement | null;
+        // Resolve UUID for the target logEventId, then find the most precise element
+        const uuid = logEventsRef.current.find((le) => le.id === targetLogEventId)?.uuid ?? null;
+        const el = (
+          (uuid ? document.getElementById(uuid) : null)
+          ?? document.getElementById(`log-event-${targetLogEventId}`)
+          ?? document.querySelector(`[data-log-event-id="${targetLogEventId}"]`)
+        ) as HTMLElement | null;
         const viewport = viewportRef.current;
         if (!el || !viewport) return;
-        const mark = el.querySelector("mark") as HTMLElement | null;
-        const target = mark ?? el;
-        const targetRect = target.getBoundingClientRect();
+        const targetRect = el.getBoundingClientRect();
         const vpRect = viewport.getBoundingClientRect();
         const scrollTop = viewport.scrollTop + targetRect.top - vpRect.top - viewport.clientHeight / 2 + targetRect.height / 2 + 16;
         viewport.scrollTo({ top: Math.max(0, scrollTop), behavior: "smooth" });
@@ -751,7 +856,7 @@ export function SessionDetail() {
             0%   { background-color: rgba(255, 210, 0, 0.25); box-shadow: 0 0 0 2px rgba(255, 210, 0, 0.6); border-radius: 8px; }
             100% { background-color: rgba(255, 210, 0, 0);    box-shadow: 0 0 0 2px rgba(255, 210, 0, 0);   border-radius: 8px; }
           }
-          .search-target-highlight { animation: search-highlight-fade 2.5s ease-out forwards; border-radius: 8px; }
+          .search-target-highlight { animation: search-highlight-fade 10s ease-out forwards; border-radius: 8px; }
         `}</style>
         {items.map((item, idx) => {
           const sourceIds = getItemSourceIds(item);
@@ -779,8 +884,9 @@ export function SessionDetail() {
               ) : item.kind === "checkpoint" ? (
                 <CheckpointRow
                   checkpoint={item.checkpoint}
+                  localPath={session?.repoRoot ?? null}
                   onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
-                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId },
+                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId, localPath: session?.repoRoot ?? null },
                   })}
                 />
               ) : (

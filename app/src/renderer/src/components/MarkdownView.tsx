@@ -115,7 +115,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): React.ReactElement {
       {nodes.map((n, i) => {
         if (n.t === "bold") return <strong key={i}><Inline nodes={parseInline(n.s)} /></strong>;
         if (n.t === "italic") return <em key={i}><Inline nodes={parseInline(n.s)} /></em>;
-        if (n.t === "code") return <code key={i} style={{ fontFamily: "monospace", fontSize: 12, backgroundColor: "light-dark(#f1f5f9, var(--mantine-color-dark-5))", color: "light-dark(#0f172a, var(--mantine-color-dark-0))", padding: "0 3px", borderRadius: 3 }}>{n.s}</code>;
+        if (n.t === "code") return <code key={i} style={{ fontFamily: "monospace", fontSize: 12, backgroundColor: "light-dark(#f1f5f9, var(--mantine-color-dark-5))", color: "light-dark(#0f172a, var(--mantine-color-dark-0))", padding: "0 3px", borderRadius: 3 }}><HighlightText s={n.s} /></code>;
         return <React.Fragment key={i}><HighlightText s={n.s} /></React.Fragment>;
       })}
     </>

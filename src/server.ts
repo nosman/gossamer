@@ -2,12 +2,30 @@ import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
-import { execSync } from "child_process";
+import { execSync, exec as execCb } from "child_process";
+import { promisify } from "util";
+
+const exec = promisify(execCb);
 import { existsSync, mkdirSync } from "fs";
-import { basename, join } from "path";
+import { basename, dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
 import { getDb } from "./db.js";
+import type { PrismaClient } from "../prisma/generated/client/index.js";
 import { indexAllCheckpointsV2, indexAllShadowBranches } from "./indexer.js";
 import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
+import { readConfig, addRepo, removeRepo, findRepo, defaultDbPath, type RepoConfig } from "./config.js";
+
+// ─── Schema push ──────────────────────────────────────────────────────────────
+
+const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const PRISMA_BIN   = join(PROJECT_ROOT, "node_modules", ".bin", "prisma");
+
+async function pushSchema(dbFilePath: string): Promise<void> {
+  await exec(`${JSON.stringify(PRISMA_BIN)} db push`, {
+    env: { ...process.env, DATABASE_URL: `file:${dbFilePath}` },
+    cwd: PROJECT_ROOT,
+  });
+}
 
 // ─── Git user ─────────────────────────────────────────────────────────────────
 
@@ -59,6 +77,23 @@ interface OverviewResponse {
 }
 
 // ─── Mapping helpers ──────────────────────────────────────────────────────────
+
+// SQLite has a limit of 999 bind variables per statement. When doing IN queries
+// over large sets, chunk and union the results.
+const SQLITE_IN_CHUNK = 500;
+
+async function findManyInChunks<T>(
+  ids: string[],
+  fetch: (chunk: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  if (ids.length === 0) return [];
+  const results: T[] = [];
+  for (let i = 0; i < ids.length; i += SQLITE_IN_CHUNK) {
+    const chunk = ids.slice(i, i + SQLITE_IN_CHUNK);
+    results.push(...await fetch(chunk));
+  }
+  return results;
+}
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -405,6 +440,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           } : null,
           filesTouched:  c.filesTouched.map((f) => f.filePath.path),
           sessionCount:  cpSessions.length,
+          localPath:     repoDir ?? null,
           summary: summary ? mapV2Summary(summary) : null,
         };
       }));
@@ -417,7 +453,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/checkpoints/:id", async (req, res) => {
     try {
       const checkpointId = req.params.id;
-      const checkpoint = await db.checkpointMetadata.findUnique({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const checkpoint = await cdb.checkpointMetadata.findUnique({
         where: { checkpointId },
         include: {
           tokenUsage: true,
@@ -426,7 +465,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       if (!checkpoint) { res.status(404).json({ error: "Not found" }); return; }
 
-      const sessions = await db.checkpointSessionMetadata.findMany({
+      const sessions = await cdb.checkpointSessionMetadata.findMany({
         where:   { checkpointId },
         orderBy: V2_SESSION_ORDER,
         include: V2_SESSION_INCLUDE,
@@ -457,6 +496,57 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // GET /api/v2/checkpoints/:id/diff — raw unified diff for use with diff2html
+  app.get("/api/v2/checkpoints/:id/diff", async (req, res) => {
+    try {
+      const checkpointId = req.params.id;
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const cpLocalPath = repo ? repo.localPath : repoDir;
+      if (!cpLocalPath) { res.status(404).end(); return; }
+      const join = await cdb.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId },
+        select: { gitOid: true },
+      });
+      if (!join) { res.status(404).end(); return; }
+      const { stdout } = await exec(
+        `git -C ${JSON.stringify(cpLocalPath)} diff-tree -p --no-commit-id -r ${join.gitOid}`,
+      );
+      res.set("Content-Type", "text/plain; charset=utf-8");
+      res.send(stdout);
+    } catch {
+      res.status(500).end();
+    }
+  });
+
+  // GET /api/v2/checkpoints/:id/diff-stats
+  app.get("/api/v2/checkpoints/:id/diff-stats", async (req, res) => {
+    try {
+      const checkpointId = req.params.id;
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const cpLocalPath = repo ? repo.localPath : repoDir;
+      if (!cpLocalPath) { res.json([]); return; }
+      const join = await cdb.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId },
+        select: { gitOid: true },
+      });
+      if (!join) { res.json([]); return; }
+      const { stdout } = await exec(
+        `git -C ${JSON.stringify(cpLocalPath)} diff-tree --numstat -r ${join.gitOid}`,
+      );
+      const stats = stdout.trim().split("\n").filter(Boolean).map((line) => {
+        const [add, del, path] = line.split("\t");
+        return { path, additions: parseInt(add, 10) || 0, deletions: parseInt(del, 10) || 0 };
+      });
+      res.json(stats);
+    } catch {
+      res.json([]);
+    }
+  });
+
   // GET /api/v2/sessions/:id/checkpoints
   app.get("/api/v2/sessions/:id/checkpoints", async (req, res) => {
     try {
@@ -472,20 +562,115 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
 
       res.json(sessionRows.map((s) => ({
-        checkpointId: s.checkpointId,
-        cliVersion:   s.cliVersion,
-        branch:       s.branch,
-        createdAt:    s.createdAt?.toISOString() ?? null,
-        tokenUsage:   s.tokenUsage ? {
+        checkpointId:  s.checkpointId,
+        cliVersion:    s.cliVersion,
+        branch:        s.branch,
+        createdAt:     s.createdAt?.toISOString() ?? null,
+        tokenUsage:    s.tokenUsage ? {
           inputTokens:         s.tokenUsage.inputTokens,
           cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
           cacheReadTokens:     s.tokenUsage.cacheReadTokens,
           outputTokens:        s.tokenUsage.outputTokens,
           apiCallCount:        s.tokenUsage.apiCallCount,
         } : null,
-        filesTouched: s.filesTouched.map((f) => f.filePath.path),
-        summary:      s.summary ? mapV2Summary(s.summary) : null,
+        filesTouched:  s.filesTouched.map((f) => f.filePath.path),
+        summary:       s.summary ? mapV2Summary(s.summary) : null,
+        commitMessage: null,
+        commitHash:    null,
       })));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/branch-log?localPath=<>&branch=<>
+  // Walks git log on the branch, parses "Entire-Checkpoint: <id>" trailers from
+  // commit bodies, then looks up each checkpoint in the DB individually.
+  app.get("/api/branch-log", async (req, res) => {
+    try {
+      const localPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const branch    = typeof req.query.branch    === "string" ? req.query.branch    : null;
+      if (!localPath || !branch) {
+        res.status(400).json({ error: "localPath and branch are required" });
+        return;
+      }
+
+      const page = typeof req.query.page === "string" ? Math.max(0, parseInt(req.query.page, 10) || 0) : 0;
+      const PAGE_SIZE = 50;
+
+      const repo = findRepo(localPath);
+      if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }
+
+      const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
+
+      // Walk git log and collect checkpoint IDs in commit order
+      const orderedIds: string[] = [];
+      const commitMessages = new Map<string, string>();
+      const commitHashes   = new Map<string, string>();
+      const seenIds = new Set<string>();
+      try {
+        const { stdout: gitOut } = await exec(
+          `git -C ${JSON.stringify(localPath)} log --format=%H%x00%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
+          { timeout: 10_000 },
+        );
+        for (const record of gitOut.split("\x1e")) {
+          const nullIdx = record.indexOf("\x00");
+          if (nullIdx === -1) continue;
+          const hash = record.slice(0, nullIdx).trim();
+          const body = record.slice(nullIdx + 1);
+          const match = body.match(/^Entire-Checkpoint:\s*(\S+)$/m);
+          if (match && !seenIds.has(match[1])) {
+            seenIds.add(match[1]);
+            orderedIds.push(match[1]);
+            if (hash) commitHashes.set(match[1], hash);
+            // Commit message = body with trailer line(s) removed, trimmed
+            const message = body
+              .split("\n")
+              .filter((l) => !/^Entire-Checkpoint:\s*\S+$/.test(l.trim()))
+              .join("\n")
+              .trim();
+            if (message) commitMessages.set(match[1], message);
+          }
+        }
+      } catch { /* git unavailable or branch not found */ }
+
+      const result = [];
+      for (const checkpointId of orderedIds) {
+        const [sessions, cpMeta] = await Promise.all([
+          repoDb.checkpointSessionMetadata.findMany({
+            where:   { checkpointId },
+            orderBy: { createdAt: "asc" },
+            include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
+          }),
+          repoDb.checkpointMetadata.findUnique({
+            where:  { checkpointId },
+            select: { gitUserName: true, gitUserEmail: true },
+          }),
+        ]);
+        for (const s of sessions) {
+          result.push({
+            checkpointId:  s.checkpointId,
+            sessionId:     s.sessionId,
+            branch:        s.branch,
+            createdAt:     s.createdAt?.toISOString() ?? null,
+            gitUserName:   cpMeta?.gitUserName  ?? null,
+            gitUserEmail:  cpMeta?.gitUserEmail ?? null,
+            filesTouched:  s.filesTouched.map((f) => f.filePath.path),
+            tokenUsage:   s.tokenUsage ? {
+              inputTokens:         s.tokenUsage.inputTokens,
+              cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
+              cacheReadTokens:     s.tokenUsage.cacheReadTokens,
+              outputTokens:        s.tokenUsage.outputTokens,
+              apiCallCount:        s.tokenUsage.apiCallCount,
+            } : null,
+            summary:       s.summary ? mapV2Summary(s.summary) : null,
+            commitMessage: commitMessages.get(s.checkpointId) ?? null,
+            commitHash:    commitHashes.get(s.checkpointId)   ?? null,
+          });
+        }
+      }
+
+      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -550,6 +735,26 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // POST /api/sessions/:id/resume
+  app.post("/api/sessions/:id/resume", (req, res) => {
+    const sessionId = req.params.id;
+    const { cwd } = req.body as { cwd?: string };
+    try {
+      const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
+      const safeId = sessionId.replace(/'/g, "");
+      const script = [
+        `tell application "Terminal"`,
+        `  activate`,
+        `  do script "cd '${safeCwd}' && claude resume ${safeId}"`,
+        `end tell`,
+      ].join("\n");
+      execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+      res.json({ started: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // GET /api/search?q=TEXT[&limit=N]
   app.get("/api/search", async (req, res) => {
     const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";
@@ -588,128 +793,288 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // ─── Repo config endpoints ───────────────────────────────────────────────────
+
+  // GET /api/repos/status — per-repo current branch + latest checkpoint
+  app.get("/api/repos/status", async (_req, res) => {
+    try {
+      const repos = readConfig().repos;
+      const statuses = await Promise.all(repos.map(async (repo) => {
+        let currentBranch: string | null = null;
+        try {
+          const { stdout } = await exec(`git -C ${JSON.stringify(repo.localPath)} branch --show-current`);
+          currentBranch = stdout.trim() || null;
+        } catch { /* not a git repo or path missing */ }
+        if (!currentBranch) {
+          try {
+            const { stdout } = await exec(`git -C ${JSON.stringify(repo.localPath)} symbolic-ref --short HEAD`);
+            currentBranch = stdout.trim() || null;
+          } catch { /* detached HEAD or not a git repo */ }
+        }
+
+        let latestCheckpointId: string | null = null;
+        let gitUserName: string | null = null;
+        let gitUserEmail: string | null = null;
+        try {
+          // Reuse the already-open primary db if this repo's dbPath matches
+          const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
+          const latest = await repoDb.checkpointMetadata.findFirst({
+            orderBy: { id: "desc" },
+            select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+          });
+          latestCheckpointId = latest?.checkpointId ?? null;
+          gitUserName       = latest?.gitUserName  ?? null;
+          gitUserEmail      = latest?.gitUserEmail ?? null;
+        } catch { /* db may not exist yet */ }
+
+        if (!gitUserName && !gitUserEmail) {
+          const u = getGitUser(repo.localPath);
+          gitUserName  = u.name;
+          gitUserEmail = u.email;
+        }
+
+        return { name: repo.name, localPath: repo.localPath, remote: repo.remote, currentBranch, latestCheckpointId, gitUserName, gitUserEmail };
+      }));
+      res.json(statuses);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/branches?localPath=<> — list local git branches for a repo
+  app.get("/api/branches", async (req, res) => {
+    try {
+      const localPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      if (!localPath) {
+        res.status(400).json({ error: "localPath is required" });
+        return;
+      }
+      const { stdout } = await exec(`git -C ${JSON.stringify(localPath)} branch`);
+      const branches = stdout
+        .split("\n")
+        .map((l) => l.replace(/^\*\s*/, "").trim())
+        .filter(Boolean);
+      res.json(branches);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/repos — list all repos from ~/.gossamer/config.json
+  app.get("/api/repos", (_req, res) => {
+    try {
+      res.json(readConfig().repos);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/repos/current — return the config entry for the repo this server is running against
+  app.get("/api/repos/current", (_req, res) => {
+    try {
+      const current = repoDir
+        ? readConfig().repos.find((r) => r.localPath === repoDir) ?? null
+        : null;
+      res.json(current);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // POST /api/repos — add or update a repo { name, remote, localPath }; dbPath is auto-derived
+  app.post("/api/repos", async (req, res) => {
+    try {
+      const { name, remote, localPath } = req.body as Partial<RepoConfig>;
+      if (!name || !localPath) {
+        res.status(400).json({ error: "name and localPath are required" });
+        return;
+      }
+      // Preserve existing dbPath on re-onboard so we don't orphan an existing db.
+      // If this localPath is the repo the server is already serving, reuse the
+      // server's primary dbPath so existing indexed data remains visible.
+      const existing = findRepo(localPath);
+      const resolvedDbPath =
+        existing?.dbPath
+        ?? (localPath === repoDir ? dbPath : null)
+        ?? defaultDbPath(name);
+      const entry: RepoConfig = {
+        name,
+        remote: remote ?? "",
+        localPath,
+        dbPath: resolvedDbPath,
+      };
+      addRepo(entry);
+      mkdirSync(dirname(entry.dbPath), { recursive: true });
+      process.stderr.write(`repo onboard [${name}]: pushing schema to ${entry.dbPath}\n`);
+      try {
+        await pushSchema(entry.dbPath);
+        process.stderr.write(`repo onboard [${name}]: schema ready\n`);
+      } catch (err) {
+        // Non-fatal: schema may already be applied
+        process.stderr.write(`repo onboard [${name}]: schema push warning — ${err}\n`);
+      }
+
+      // Kick off initial indexing in the background — don't block the response
+      void indexCheckpointsForRepo(name, localPath, entry.dbPath);
+      void indexShadowsForRepo(name, localPath, entry.dbPath);
+
+      res.status(201).json(entry);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // DELETE /api/repos — remove a repo by localPath { localPath }
+  app.delete("/api/repos", (req, res) => {
+    try {
+      const { localPath } = req.body as { localPath?: string };
+      if (!localPath) {
+        res.status(400).json({ error: "localPath is required" });
+        return;
+      }
+      removeRepo(localPath);
+      res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // Create HTTP server and attach WebSocket server (shared port)
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
 
-  // WebSocket change detection — poll every 2s, broadcast on new log events, checkpoints, or shadow sessions
-  let lastMaxLogEventId: number | null = null;
-  let lastMaxCheckpointId: number | null = null;
-  let lastMaxShadowSessionId: number | null = null;
   const broadcast = () => {
     const message = JSON.stringify({ type: "sessions_updated" });
     for (const client of wss.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
+      if (client.readyState === WebSocket.OPEN) client.send(message);
     }
   };
+
+  // ── WebSocket change detection — poll every 2s across all known repo dbs ──
+
+  // Per-db watermarks keyed by dbPath
+  const wsWatermarks = new Map<string, { logEvent: number | null; checkpoint: number | null; shadow: number | null }>();
+
   const poller = setInterval(async () => {
-    try {
-      const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
-        db.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-        db.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-        db.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-      ]);
-      const curLogEvent   = latestLogEvent?.id   ?? null;
-      const curCheckpoint = latestCheckpoint?.id ?? null;
-      const curShadow     = latestShadow?.id     ?? null;
-      if (curLogEvent !== lastMaxLogEventId || curCheckpoint !== lastMaxCheckpointId || curShadow !== lastMaxShadowSessionId) {
-        lastMaxLogEventId   = curLogEvent;
-        lastMaxCheckpointId = curCheckpoint;
-        lastMaxShadowSessionId = curShadow;
-        broadcast();
-      }
-    } catch {
-      // Non-fatal polling error — keep running
-    }
+    const repos = readConfig().repos;
+    const nameByDbPath = new Map(repos.map((r) => [r.dbPath, r.name]));
+    // Always include the primary db even if it isn't in config yet
+    const dbPaths = [...new Set([dbPath, ...repos.map((r) => r.dbPath)])];
+    let changed = false;
+    await Promise.all(dbPaths.map(async (p) => {
+      try {
+        const repoDb = await getDb(p);
+        const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
+          repoDb.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+          repoDb.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+          repoDb.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        ]);
+        const cur = {
+          logEvent:   latestLogEvent?.id   ?? null,
+          checkpoint: latestCheckpoint?.id ?? null,
+          shadow:     latestShadow?.id     ?? null,
+        };
+        const prev = wsWatermarks.get(p);
+        if (!prev || prev.logEvent !== cur.logEvent || prev.checkpoint !== cur.checkpoint || prev.shadow !== cur.shadow) {
+          wsWatermarks.set(p, cur);
+          changed = true;
+          const label = nameByDbPath.get(p) ?? p;
+          process.stderr.write(`change poller [${label}]: change detected — broadcasting\n`);
+        }
+      } catch { /* non-fatal — db may not exist yet */ }
+    }));
+    if (changed) broadcast();
   }, 2000);
 
-  // ── Checkpoint auto-indexer ───────────────────────────────────────────────
+  // ── Per-repo indexer helpers ───────────────────────────────────────────────
 
   const CHECKPOINT_BRANCH = "entire/checkpoints/v1";
-  let checkpointPoller: ReturnType<typeof setInterval> | null = null;
 
-  if (repoDir) {
-    const WORKTREE_PATH = join(repoDir, ".gossamer", "checkpoints");
-    mkdirSync(join(repoDir, ".gossamer"), { recursive: true });
-
-    // Ensure worktree exists (reuse across restarts)
-    if (!existsSync(WORKTREE_PATH)) {
+  async function ensureWorktree(localPath: string): Promise<string> {
+    const worktreePath = join(localPath, ".gossamer", "checkpoints");
+    mkdirSync(join(localPath, ".gossamer"), { recursive: true });
+    if (!existsSync(worktreePath)) {
       try {
-        // Prune stale worktree registration first, then re-add
-        execSync(`git -C ${JSON.stringify(repoDir)} worktree prune`, { stdio: "pipe" });
+        execSync(`git -C ${JSON.stringify(localPath)} worktree prune`, { stdio: "pipe" });
         execSync(
-          `git -C ${JSON.stringify(repoDir)} worktree add ${JSON.stringify(WORKTREE_PATH)} ${CHECKPOINT_BRANCH}`,
+          `git -C ${JSON.stringify(localPath)} worktree add ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
           { stdio: "pipe" },
         );
-        process.stderr.write(`checkpoint indexer: worktree created at ${WORKTREE_PATH}\n`);
+        process.stderr.write(`checkpoint indexer: worktree created at ${worktreePath}\n`);
       } catch (err) {
-        process.stderr.write(`checkpoint indexer: failed to create worktree — ${err}\n`);
+        process.stderr.write(`checkpoint indexer: failed to create worktree for ${localPath} — ${err}\n`);
       }
     }
-
-    const runIndex = async () => {
-      if (!existsSync(WORKTREE_PATH)) return;
-      try {
-        // Fetch from remote, then reset to the remote tracking ref so new commits
-        // pushed by teammates are actually applied to the worktree.
-        // Falls back to the local branch tip if the remote is unavailable.
-        try {
-          execSync(
-            `git -C ${JSON.stringify(WORKTREE_PATH)} fetch origin ${CHECKPOINT_BRANCH}`,
-            { stdio: "pipe" },
-          );
-          execSync(
-            `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard origin/${CHECKPOINT_BRANCH}`,
-            { stdio: "pipe" },
-          );
-        } catch {
-          // Remote unavailable — fall back to local branch tip
-          try {
-            execSync(
-              `git -C ${JSON.stringify(WORKTREE_PATH)} reset --hard ${CHECKPOINT_BRANCH}`,
-              { stdio: "pipe" },
-            );
-          } catch { /* non-fatal */ }
-        }
-      } catch { /* non-fatal */ }
-      try {
-        const { checkpoints } = await indexAllCheckpointsV2(db, WORKTREE_PATH, undefined, repoDir);
-        if (checkpoints > 0) {
-          process.stderr.write(`checkpoint indexer: indexed ${checkpoints} checkpoints\n`);
-          broadcast();
-        }
-      } catch { /* non-fatal */ }
-    };
-
-    void runIndex();
-    checkpointPoller = setInterval(runIndex, 30_000);
-    process.stderr.write(`checkpoint indexer: polling every 30s (worktree: ${WORKTREE_PATH})\n`);
+    return worktreePath;
   }
 
-  // ── Shadow branch indexer ──────────────────────────────────────────────────
-
-  let shadowPoller: ReturnType<typeof setInterval> | null = null;
-
-  if (repoDir) {
-    const runShadowIndex = async () => {
+  async function indexCheckpointsForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
+    process.stderr.write(`checkpoint indexer [${name}]: running\n`);
+    try {
+      const worktreePath = await ensureWorktree(localPath);
+      if (!existsSync(worktreePath)) return;
       try {
-        const { sessions } = await indexAllShadowBranches(db, repoDir);
-        if (sessions > 0) broadcast();
+        await exec(`git -C ${JSON.stringify(worktreePath)} fetch origin ${CHECKPOINT_BRANCH}`, { timeout: 10_000 });
+      } catch { /* remote unavailable — index local state */ }
+      try {
+        await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard refs/heads/${CHECKPOINT_BRANCH}`);
       } catch { /* non-fatal */ }
-    };
-
-    void runShadowIndex();
-    shadowPoller = setInterval(runShadowIndex, 5_000);
-    process.stderr.write(`shadow indexer: polling every 5s (repo: ${repoDir})\n`);
+      const repoDb = await getDb(repoDdPath);
+      const { checkpoints } = await indexAllCheckpointsV2(repoDb, worktreePath, undefined, localPath);
+      if (checkpoints > 0) {
+        process.stderr.write(`checkpoint indexer [${name}]: indexed ${checkpoints} new checkpoint(s)\n`);
+        broadcast();
+      } else {
+        process.stderr.write(`checkpoint indexer [${name}]: up to date\n`);
+      }
+    } catch (err) {
+      process.stderr.write(`checkpoint indexer [${name}]: error — ${err}\n`);
+    }
   }
+
+  async function indexShadowsForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
+    process.stderr.write(`shadow indexer [${name}]: running\n`);
+    try {
+      const repoDb = await getDb(repoDdPath);
+      const { sessions } = await indexAllShadowBranches(repoDb, localPath);
+      if (sessions > 0) {
+        process.stderr.write(`shadow indexer [${name}]: indexed ${sessions} new session(s)\n`);
+        broadcast();
+      } else {
+        process.stderr.write(`shadow indexer [${name}]: up to date\n`);
+      }
+    } catch (err) {
+      process.stderr.write(`shadow indexer [${name}]: error — ${err}\n`);
+    }
+  }
+
+  // ── Checkpoint auto-indexer — all repos, every 30s ────────────────────────
+
+  const runAllCheckpoints = async () => {
+    const repos = readConfig().repos;
+    await Promise.all(repos.map((r) => indexCheckpointsForRepo(r.name, r.localPath, r.dbPath)));
+  };
+
+  void runAllCheckpoints();
+  const checkpointPoller = setInterval(runAllCheckpoints, 30_000);
+  process.stderr.write(`checkpoint indexer: polling every 30s across ${readConfig().repos.length} repo(s)\n`);
+
+  // ── Shadow branch indexer — all repos, every 5s ───────────────────────────
+
+  const runAllShadows = async () => {
+    const repos = readConfig().repos;
+    await Promise.all(repos.map((r) => indexShadowsForRepo(r.name, r.localPath, r.dbPath)));
+  };
+
+  void runAllShadows();
+  const shadowPoller = setInterval(runAllShadows, 5_000);
+  process.stderr.write(`shadow indexer: polling every 5s across ${readConfig().repos.length} repo(s)\n`);
 
   // Graceful shutdown
   const shutdown = () => {
     clearInterval(poller);
-    if (checkpointPoller) clearInterval(checkpointPoller);
-    if (shadowPoller) clearInterval(shadowPoller);
+    clearInterval(checkpointPoller);
+    clearInterval(shadowPoller);
     httpServer.close();
     process.exit(0);
   };
