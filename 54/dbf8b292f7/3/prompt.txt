@@ -1,0 +1,54 @@
+Please work on the following open items:
+- Consider adding UI indication when thinking blocks exist but are redacted, so the user knows thinking occurred rather than seeing nothing.
+
+---
+
+On the repos table view, add a dropdown that lets the user select which branch to view. The choices should be populated by doing "git branch list" within the given repo. When the branch is changed, the checkpoints UI should be repopulated with the relevant checkpoints (found by doing git log <branch> and parsing the Entire-Checkpoint values from the commit messages)
+
+---
+
+Don't put this on the ActiveSessions screen - put it on the repos table
+
+---
+
+The copy action is overriding the dropdown
+
+---
+
+The dropdown should be directly to the right of the breadcrumbs on the top bar. It should be visible only when you've clicked into an individual repo
+
+---
+
+Let's display the commit message for each commit associated with a checkpoint, if there is no summary attached to it
+
+---
+
+Does it also show the commit messages on the branchlog view?
+
+---
+
+Then update the UI to actually display the commit message in the checkpoint header
+
+---
+
+what about branchlog ui?
+
+---
+
+is the checkpoint component the same across branchLong and sessionDetail? or is it just using the same code
+
+---
+
+Great. let's change its design a little bit. remove the thick, curved green border from the left hand side
+
+---
+
+Put the commit message/intent line at the top, and the checkpoint id and branch name at the bottom. also add the linked commit hash
+
+---
+
+get rid of the "checkpoint" text
+
+---
+
+get rid of the "open checkpoint" link at the bottom, it doesn't do anything
