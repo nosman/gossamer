@@ -308,12 +308,17 @@ export interface BranchLogEntry {
   commitHash: string | null;
 }
 
-export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean }> {
+export interface BranchLiveSession {
+  sessionId: string;
+  prompt: string | null;
+}
+
+export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean; liveSession: BranchLiveSession | null }> {
   const res = await fetch(
     `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}&page=${page}`,
   );
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean }>;
+  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean; liveSession: BranchLiveSession | null }>;
 }
 
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {

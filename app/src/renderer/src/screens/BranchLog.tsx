@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Center, Loader, Text, ScrollArea, Box, Button, Badge, Group, UnstyledButton } from "@mantine/core";
-import { fetchBranchLog, fetchLogEvents, type BranchLogEntry, type LogEventItem, type SessionCheckpoint } from "../api";
+import { fetchBranchLog, fetchLogEvents, type BranchLiveSession, type BranchLogEntry, type LogEventItem, type SessionCheckpoint } from "../api";
 import type { UserInfo } from "../components/EventItem";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { EventItem } from "../components/EventItem";
@@ -67,6 +67,7 @@ export function BranchLog() {
   const [loadingMore, setLoadingMore]   = useState(false);
   const [error, setError]               = useState<string | null>(null);
 
+  const [liveSession, setLiveSession]   = useState<BranchLiveSession | null>(null);
   const [selectedId, setSelectedId]     = useState<string | null>(null);
   const [rightItems, setRightItems]     = useState<RenderItem[]>([]);
   const [rightLoading, setRightLoading] = useState(false);
@@ -80,6 +81,22 @@ export function BranchLog() {
     const sessionEntries = allItems.filter((e) => e.sessionId === entry.sessionId);
     const filtered = filterEventsForEntry(entry, sessionEntries, cachedEvents);
     setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(filtered))));
+  }
+
+  function loadLivePanel(sessionId: string) {
+    const cached = sessionEventsCache.current.get(sessionId);
+    if (cached) {
+      setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(cached))));
+      return;
+    }
+    setRightLoading(true);
+    fetchLogEvents(sessionId)
+      .then((logEvents) => {
+        sessionEventsCache.current.set(sessionId, logEvents);
+        setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(logEvents))));
+      })
+      .catch(() => setRightItems([]))
+      .finally(() => setRightLoading(false));
   }
 
   function loadRightPanel(entry: BranchLogEntry, allItems: BranchLogEntry[]) {
@@ -108,12 +125,17 @@ export function BranchLog() {
     setPage(0);
     setSelectedId(null);
     setRightItems([]);
+    setLiveSession(null);
     sessionEventsCache.current.clear();
     fetchBranchLog(localPath, branch, 0)
-      .then(({ entries, hasMore: more }) => {
+      .then(({ entries, hasMore: more, liveSession: live }) => {
         setItems(entries);
         setHasMore(more);
-        if (entries.length > 0) {
+        setLiveSession(live);
+        if (live) {
+          setSelectedId("live");
+          loadLivePanel(live.sessionId);
+        } else if (entries.length > 0) {
           setSelectedId(entryKey(entries[0]));
           loadRightPanel(entries[0], entries);
         }
@@ -177,6 +199,32 @@ export function BranchLog() {
         display: "flex",
         flexDirection: "column",
       }}>
+        {liveSession && (
+          <UnstyledButton
+            onClick={() => {
+              if (selectedId === "live") return;
+              setSelectedId("live");
+              loadLivePanel(liveSession.sessionId);
+            }}
+            style={{
+              width: "100%",
+              padding: "12px 14px",
+              borderBottom: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))",
+              backgroundColor: selectedId === "live"
+                ? "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-5))"
+                : undefined,
+            }}
+          >
+            <Group gap={6} mb={liveSession.prompt ? 4 : 0}>
+              <Box style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "var(--mantine-color-teal-5)", flexShrink: 0 }} />
+              <Text size="xs" fw={600} c="teal">In progress</Text>
+            </Group>
+            {liveSession.prompt && (
+              <Text size="xs" c="dimmed" lineClamp={2}>{liveSession.prompt}</Text>
+            )}
+          </UnstyledButton>
+        )}
+
         {items.map((entry) => {
           const label = entry.summary?.intent ?? entry.commitMessage ?? null;
           const isSelected = selectedId === entryKey(entry);

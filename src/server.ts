@@ -670,7 +670,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         }
       }
 
-      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE });
+      // Find the live (shadow) session on this branch, if any
+      const liveShadow = await repoDb.shadowSession.findFirst({
+        where: { gitBranch: branch },
+        orderBy: { id: "desc" },
+        select: { sessionId: true, prompt: true },
+      });
+      const liveSession = liveShadow
+        ? { sessionId: liveShadow.sessionId, prompt: liveShadow.prompt ?? null }
+        : null;
+
+      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE, liveSession });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
