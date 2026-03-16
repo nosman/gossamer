@@ -100,6 +100,7 @@ export function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandT
   const thinkingUuid = typeof d.thinkingUuid === "string" ? d.thinkingUuid : null;
   const toolsLogEventId = typeof d.toolsLogEventId === "number" ? d.toolsLogEventId : null;
   const toolsUuid = typeof d.toolsUuid === "string" ? d.toolsUuid : null;
+  const hasRedactedThinking = d.hasRedactedThinking === true;
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
@@ -121,6 +122,11 @@ export function ClaudeTurnCard({ toolGroups, stop, isTarget, matchTerms, expandT
           {reason && <Badge color="orange" size="xs" variant="light">{reason}</Badge>}
           {stop && <TimeAgo iso={stop.timestamp} />}
         </Group>
+        {!thinking && hasRedactedThinking && (
+          <Box mb={6}>
+            <Text size="xs" c="dimmed" fs="italic">thinking (redacted)</Text>
+          </Box>
+        )}
         {thinking && (
           <Box mb={6} id={thinkingUuid ?? (thinkingLogEventId != null ? `log-event-${thinkingLogEventId}` : undefined)}>
             <Group
@@ -204,6 +210,7 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
   let lastThinkingUuid: string | null = null;
   let lastToolsLogEventId: number | null = null;
   let lastToolsUuid: string | null = null;
+  let hasRedactedThinking = false;
   // All LogEvent IDs seen in the current assistant turn (thinking, text, tool_use may be separate events)
   const currentTurnLogEventIds: number[] = [];
 
@@ -253,6 +260,7 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       const toolUses      = le.contents.filter((c) => c.contentType === "tool_use");
       const textBlocks    = le.contents.filter((c) => c.contentType === "text");
       const thinkingBlocks = le.contents.filter((c) => c.contentType === "thinking");
+      const redactedThinkingBlocks = le.contents.filter((c) => c.contentType === "redacted_thinking");
 
       // Track all LogEvent IDs in this turn so thinking-only events are reachable
       if (!currentTurnLogEventIds.includes(le.id)) currentTurnLogEventIds.push(le.id);
@@ -274,6 +282,10 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
         lastAssistantThinking = lastAssistantThinking ? lastAssistantThinking + "\n\n" + thinking : thinking;
         lastThinkingLogEventId = le.id;
         lastThinkingUuid = le.uuid ?? null;
+        if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
+      }
+      if (redactedThinkingBlocks.length > 0) {
+        hasRedactedThinking = true;
         if (lastAssistantLogEventId === null) lastAssistantLogEventId = le.id;
       }
 
@@ -308,6 +320,7 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
           thinkingUuid: lastThinkingUuid ?? undefined,
           toolsLogEventId: lastToolsLogEventId ?? undefined,
           toolsUuid: lastToolsUuid ?? undefined,
+          hasRedactedThinking,
         },
         summary: null, keywords: [],
         _sourceLogEventId: primaryId,
@@ -320,6 +333,7 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       lastThinkingUuid = null;
       lastToolsLogEventId = null;
       lastToolsUuid = null;
+      hasRedactedThinking = false;
       currentTurnLogEventIds.length = 0;
     }
   }
@@ -437,20 +451,22 @@ export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: 
 
   return (
     <Box style={{ padding: "4px 20px 4px 58px" }}>
-    <Box style={{ borderLeft: "4px solid var(--mantine-color-teal-6)", borderRadius: 8, overflow: "hidden" }}>
+    <Box style={{ borderRadius: 8, overflow: "hidden" }}>
       <UnstyledButton
         onClick={() => setExpanded((v) => !v)}
         style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", backgroundColor: "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-6))" }}
       >
         <Box style={{ flex: 1 }}>
-          <Group gap={8} mb={2}>
-            <Text size="xs" fw={700} c="teal" tt="uppercase">Checkpoint</Text>
-            <Text ff="monospace" size="xs" c="green" fw={600}>{checkpoint.checkpointId}</Text>
+          {sum?.intent ? (
+            <Text size="xs" c="dimmed" fs="italic" lineClamp={expanded ? undefined : 1} mb={4}>{sum.intent}</Text>
+          ) : checkpoint.commitMessage ? (
+            <Text size="xs" c="dimmed" lineClamp={expanded ? undefined : 1} mb={4}>{checkpoint.commitMessage}</Text>
+          ) : null}
+          <Group gap={8}>
+            <Text ff="monospace" size="xs" c="teal">{checkpoint.checkpointId}</Text>
             {checkpoint.branch && <Badge variant="light" color="teal" size="xs">{checkpoint.branch}</Badge>}
+            {checkpoint.commitHash && <Text ff="monospace" size="xs" c="dimmed">{checkpoint.commitHash.slice(0, 7)}</Text>}
           </Group>
-          {sum?.intent && (
-            <Text size="xs" c="dimmed" fs="italic" lineClamp={expanded ? undefined : 1}>{sum.intent}</Text>
-          )}
         </Box>
         <Box style={{ textAlign: "right", flexShrink: 0 }}>
           {fileCount > 0 && <Text size="xs" c="dimmed" ff="monospace">{fileCount} file{fileCount !== 1 ? "s" : ""}</Text>}
@@ -544,12 +560,6 @@ export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: 
             )}
           </SectionBlock>
 
-          <UnstyledButton
-            onClick={onPress}
-            style={{ alignSelf: "flex-start", padding: "5px 10px", borderRadius: 4, border: "1px solid var(--mantine-color-teal-3)" }}
-          >
-            <Text size="xs" c="teal" ff="monospace">Open checkpoint →</Text>
-          </UnstyledButton>
         </Box>
       </Collapse>
     </Box>

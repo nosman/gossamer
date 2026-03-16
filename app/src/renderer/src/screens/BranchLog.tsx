@@ -16,13 +16,15 @@ import {
 
 function entryToCheckpoint(entry: BranchLogEntry): SessionCheckpoint {
   return {
-    checkpointId: entry.checkpointId,
-    branch:       entry.branch,
-    cliVersion:   null,
-    filesTouched: entry.filesTouched,
-    tokenUsage:   entry.tokenUsage,
-    createdAt:    entry.createdAt,
-    summary:      entry.summary,
+    checkpointId:  entry.checkpointId,
+    branch:        entry.branch,
+    cliVersion:    null,
+    filesTouched:  entry.filesTouched,
+    tokenUsage:    entry.tokenUsage,
+    createdAt:     entry.createdAt,
+    summary:       entry.summary,
+    commitMessage: entry.commitMessage,
+    commitHash:    entry.commitHash,
   };
 }
 

@@ -562,19 +562,21 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
 
       res.json(sessionRows.map((s) => ({
-        checkpointId: s.checkpointId,
-        cliVersion:   s.cliVersion,
-        branch:       s.branch,
-        createdAt:    s.createdAt?.toISOString() ?? null,
-        tokenUsage:   s.tokenUsage ? {
+        checkpointId:  s.checkpointId,
+        cliVersion:    s.cliVersion,
+        branch:        s.branch,
+        createdAt:     s.createdAt?.toISOString() ?? null,
+        tokenUsage:    s.tokenUsage ? {
           inputTokens:         s.tokenUsage.inputTokens,
           cacheCreationTokens: s.tokenUsage.cacheCreationTokens,
           cacheReadTokens:     s.tokenUsage.cacheReadTokens,
           outputTokens:        s.tokenUsage.outputTokens,
           apiCallCount:        s.tokenUsage.apiCallCount,
         } : null,
-        filesTouched: s.filesTouched.map((f) => f.filePath.path),
-        summary:      s.summary ? mapV2Summary(s.summary) : null,
+        filesTouched:  s.filesTouched.map((f) => f.filePath.path),
+        summary:       s.summary ? mapV2Summary(s.summary) : null,
+        commitMessage: null,
+        commitHash:    null,
       })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -603,17 +605,31 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
       // Walk git log and collect checkpoint IDs in commit order
       const orderedIds: string[] = [];
+      const commitMessages = new Map<string, string>();
+      const commitHashes   = new Map<string, string>();
       const seenIds = new Set<string>();
       try {
         const { stdout: gitOut } = await exec(
-          `git -C ${JSON.stringify(localPath)} log --format=%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
+          `git -C ${JSON.stringify(localPath)} log --format=%H%x00%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
           { timeout: 10_000 },
         );
-        for (const body of gitOut.split("\x1e")) {
+        for (const record of gitOut.split("\x1e")) {
+          const nullIdx = record.indexOf("\x00");
+          if (nullIdx === -1) continue;
+          const hash = record.slice(0, nullIdx).trim();
+          const body = record.slice(nullIdx + 1);
           const match = body.match(/^Entire-Checkpoint:\s*(\S+)$/m);
           if (match && !seenIds.has(match[1])) {
             seenIds.add(match[1]);
             orderedIds.push(match[1]);
+            if (hash) commitHashes.set(match[1], hash);
+            // Commit message = body with trailer line(s) removed, trimmed
+            const message = body
+              .split("\n")
+              .filter((l) => !/^Entire-Checkpoint:\s*\S+$/.test(l.trim()))
+              .join("\n")
+              .trim();
+            if (message) commitMessages.set(match[1], message);
           }
         }
       } catch { /* git unavailable or branch not found */ }
@@ -647,7 +663,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
               outputTokens:        s.tokenUsage.outputTokens,
               apiCallCount:        s.tokenUsage.apiCallCount,
             } : null,
-            summary:   s.summary ? mapV2Summary(s.summary) : null,
+            summary:       s.summary ? mapV2Summary(s.summary) : null,
+            commitMessage: commitMessages.get(s.checkpointId) ?? null,
+            commitHash:    commitHashes.get(s.checkpointId)   ?? null,
           });
         }
       }
@@ -818,6 +836,25 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         return { name: repo.name, localPath: repo.localPath, remote: repo.remote, currentBranch, latestCheckpointId, gitUserName, gitUserEmail };
       }));
       res.json(statuses);
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // GET /api/branches?localPath=<> — list local git branches for a repo
+  app.get("/api/branches", async (req, res) => {
+    try {
+      const localPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      if (!localPath) {
+        res.status(400).json({ error: "localPath is required" });
+        return;
+      }
+      const { stdout } = await exec(`git -C ${JSON.stringify(localPath)} branch`);
+      const branches = stdout
+        .split("\n")
+        .map((l) => l.replace(/^\*\s*/, "").trim())
+        .filter(Boolean);
+      res.json(branches);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }

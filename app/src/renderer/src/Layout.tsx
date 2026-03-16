@@ -1,11 +1,12 @@
-import React, { useState } from "react";
-import { Outlet, useNavigate, useLocation } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { Outlet, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
-  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor, TextInput,
+  AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor, TextInput, Select,
   useMantineColorScheme, useComputedColorScheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { useBreadcrumb } from "./BreadcrumbContext";
+import { fetchBranches } from "./api";
 
 const NAV_ITEMS = [
   { label: "Sessions",     path: "/",                     sym: "≡"  },
@@ -26,14 +27,52 @@ function getActiveNav(pathname: string): string {
   return "";
 }
 
+function BranchSelector({ localPath, branch, repoName }: { localPath: string; branch: string; repoName: string | null }) {
+  const navigate = useNavigate();
+  const [branches, setBranches] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchBranches(localPath)
+      .then(setBranches)
+      .catch(() => setBranches(branch ? [branch] : []))
+      .finally(() => setLoading(false));
+  }, [localPath]);
+
+  return (
+    <Select
+      size="xs"
+      value={branch}
+      data={branches}
+      disabled={loading}
+      placeholder={loading ? "loading…" : undefined}
+      onChange={(b) => {
+        if (!b) return;
+        navigate(`/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(b)}${repoName ? `&repoName=${encodeURIComponent(repoName)}` : ""}`);
+      }}
+      styles={{ input: { fontFamily: "monospace", fontSize: 12 } }}
+      comboboxProps={{ withinPortal: true }}
+      allowDeselect={false}
+      w={200}
+    />
+  );
+}
+
 export function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const [searchParams] = useSearchParams();
   const { toggleColorScheme } = useMantineColorScheme();
   const colorScheme = useComputedColorScheme("dark");
   const [sidebarOpen, { toggle: toggleSidebar }] = useDisclosure(true);
   const { crumbs } = useBreadcrumb();
   const [searchValue, setSearchValue] = useState("");
+
+  const isBranchLog = pathname === "/branch-log";
+  const branchLogLocalPath = isBranchLog ? (searchParams.get("localPath") ?? "") : "";
+  const branchLogBranch    = isBranchLog ? (searchParams.get("branch")    ?? "") : "";
+  const branchLogRepoName  = isBranchLog ? searchParams.get("repoName") : null;
 
   const activeNav = getActiveNav(pathname);
   const canGoBack = !TOP_LEVEL.has(pathname);
@@ -84,6 +123,13 @@ export function Layout() {
                 </React.Fragment>
               ))}
             </Group>
+          )}
+          {isBranchLog && branchLogLocalPath && branchLogBranch && (
+            <BranchSelector
+              localPath={branchLogLocalPath}
+              branch={branchLogBranch}
+              repoName={branchLogRepoName}
+            />
           )}
           <Box style={{ flex: 1 }} />
           <TextInput

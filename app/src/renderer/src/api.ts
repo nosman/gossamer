@@ -69,6 +69,12 @@ export async function fetchRepoStatuses(): Promise<RepoStatus[]> {
   return res.json() as Promise<RepoStatus[]>;
 }
 
+export async function fetchBranches(localPath: string): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/branches?localPath=${encodeURIComponent(localPath)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<string[]>;
+}
+
 export async function fetchRepos(): Promise<RepoConfig[]> {
   const res = await fetch(`${API_BASE}/repos`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -228,6 +234,8 @@ export interface SessionCheckpoint {
   tokenUsage: TokenUsage | null;
   createdAt: string | null;
   summary: CheckpointSummary | null;
+  commitMessage: string | null;
+  commitHash: string | null;
 }
 
 export async function fetchSessionCheckpoints(id: string): Promise<SessionCheckpoint[]> {
@@ -296,6 +304,8 @@ export interface BranchLogEntry {
   filesTouched: string[];
   tokenUsage: TokenUsage | null;
   summary: CheckpointSummary | null;
+  commitMessage: string | null;
+  commitHash: string | null;
 }
 
 export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean }> {

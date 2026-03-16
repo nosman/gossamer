@@ -235,6 +235,8 @@ model LogEvent {
   systemData      LogSystemEvent?
 
   @@index([sessionId])
+  @@index([sessionId, timestamp])
+  @@index([sessionId, id])
   @@index([type])
   @@index([sessionLinkId])
   @@index([shadowSessionId])
