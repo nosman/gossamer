@@ -1,0 +1,98 @@
+Please work on the following open items:
+- Consider adding UI indication when thinking blocks exist but are redacted, so the user knows thinking occurred rather than seeing nothing.
+
+---
+
+On the repos table view, add a dropdown that lets the user select which branch to view. The choices should be populated by doing "git branch list" within the given repo. When the branch is changed, the checkpoints UI should be repopulated with the relevant checkpoints (found by doing git log <branch> and parsing the Entire-Checkpoint values from the commit messages)
+
+---
+
+Don't put this on the ActiveSessions screen - put it on the repos table
+
+---
+
+The copy action is overriding the dropdown
+
+---
+
+The dropdown should be directly to the right of the breadcrumbs on the top bar. It should be visible only when you've clicked into an individual repo
+
+---
+
+Let's display the commit message for each commit associated with a checkpoint, if there is no summary attached to it
+
+---
+
+Does it also show the commit messages on the branchlog view?
+
+---
+
+Then update the UI to actually display the commit message in the checkpoint header
+
+---
+
+what about branchlog ui?
+
+---
+
+is the checkpoint component the same across branchLong and sessionDetail? or is it just using the same code
+
+---
+
+Great. let's change its design a little bit. remove the thick, curved green border from the left hand side
+
+---
+
+Put the commit message/intent line at the top, and the checkpoint id and branch name at the bottom. also add the linked commit hash
+
+---
+
+get rid of the "checkpoint" text
+
+---
+
+get rid of the "open checkpoint" link at the bottom, it doesn't do anything
+
+---
+
+in the search bar, url-encode the search query before it gets sent to the server, and url-decode it before it gets run on sqlite
+
+---
+
+let's rework the sessionDetails page. There should be a list of checkpoints on the left of the screen, 1/3 width. On the right of the screen should be the chat for that particular checkpoint. The first element of the checkpoints list should be a synthetic checkpoint with the user's changes that are on the shadow branch.
+
+---
+
+Let's do the same thing for the branchlog view. Checkpoints on the left, session messages on the right. Exactly the same 2 page layout
+
+---
+
+When i click on checkpoints of the same session, they're all selected together. I'd like to be able to only select them one at a time and show the specific events linked to that particular checkpoint.
+
+---
+
+I'm still seeing the issue tho. When i click, these 4 checkpoints are selected together:
+
+---
+
+show the same "In progress" checkpoint on the branchlog view.
+
+---
+
+How is a shadow branch linked with a working branch?
+
+---
+
+If i check out a new branch and start working on that, will the shadow session just be associated with the new checked out branch?
+
+---
+
+is the relationship that each session has its own shadow branch?
+
+---
+
+the comment on line 807 of which file?
+
+---
+
+ok but that's my code. I'm asking about how entire does it. check the entire repo: ~/cli
