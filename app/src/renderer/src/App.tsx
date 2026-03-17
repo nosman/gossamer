@@ -27,6 +27,7 @@ export default function App() {
           <Route path="search" element={<Search />} />
           <Route path="repos" element={<Repos />} />
           <Route path="branch-log" element={<BranchLog />} />
+          <Route path="terminal" element={null} />
         </Route>
       </Routes>
     </MemoryRouter>

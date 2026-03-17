@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import { TerminalManager } from "./screens/TerminalManager";
+import { TerminalContext, type TerminalTab } from "./TerminalContext";
 import { Outlet, useNavigate, useLocation, useSearchParams } from "react-router-dom";
 import {
   AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor, TextInput, Select,
@@ -14,9 +16,10 @@ const NAV_ITEMS = [
   { label: "Checkpoints",  path: "/checkpoints",          sym: "⬛" },
   { label: "Timeline",     path: "/checkpoints/timeline", sym: "◎"  },
   { label: "Repos",        path: "/repos",                sym: "⊡"  },
+  { label: "Terminal",     path: "/terminal",             sym: ">"  },
 ] as const;
 
-const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline", "/repos"]);
+const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline", "/repos", "/terminal"]);
 
 function getActiveNav(pathname: string): string {
   if (pathname === "/" || pathname.startsWith("/sessions/")) return "/";
@@ -24,6 +27,7 @@ function getActiveNav(pathname: string): string {
   if (pathname === "/checkpoints/timeline") return "/checkpoints/timeline";
   if (pathname.startsWith("/checkpoints")) return "/checkpoints";
   if (pathname === "/repos") return "/repos";
+  if (pathname === "/terminal") return "/terminal";
   return "";
 }
 
@@ -59,6 +63,10 @@ function BranchSelector({ localPath, branch, repoName }: { localPath: string; br
   );
 }
 
+let tabCounter = 0;
+function newTabId() { return `term-${++tabCounter}`; }
+function newTabLabel(tabs: TerminalTab[]) { return `Terminal ${tabs.length + 1}`; }
+
 export function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -69,6 +77,43 @@ export function Layout() {
   const { crumbs } = useBreadcrumb();
   const [searchValue, setSearchValue] = useState("");
 
+  const [tabs, setTabs] = useState<TerminalTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
+  const openTerminal = useCallback((options?: { id?: string; label?: string; cwd?: string }) => {
+    setTabs((prev) => {
+      if (options?.id) {
+        const existing = prev.find((t) => t.id === options.id);
+        if (existing) {
+          setActiveTabId(existing.id);
+          navigate("/terminal");
+          return prev;
+        }
+      }
+      const id = options?.id ?? newTabId();
+      const label = options?.label ?? newTabLabel(prev);
+      const next = [...prev, { id, label, cwd: options?.cwd }];
+      setActiveTabId(id);
+      navigate("/terminal");
+      return next;
+    });
+  }, [navigate]);
+
+  const handleNewTab = useCallback(() => openTerminal(), [openTerminal]);
+
+  const handleCloseTab = useCallback((id: string) => {
+    setTabs((prev) => {
+      const idx = prev.findIndex((t) => t.id === id);
+      const next = prev.filter((t) => t.id !== id);
+      setActiveTabId((cur) => {
+        if (cur !== id) return cur;
+        if (next.length === 0) { navigate("/"); return null; }
+        return next[Math.min(idx, next.length - 1)].id;
+      });
+      return next;
+    });
+  }, [navigate]);
+
   const isBranchLog = pathname === "/branch-log";
   const branchLogLocalPath = isBranchLog ? (searchParams.get("localPath") ?? "") : "";
   const branchLogBranch    = isBranchLog ? (searchParams.get("branch")    ?? "") : "";
@@ -77,7 +122,10 @@ export function Layout() {
   const activeNav = getActiveNav(pathname);
   const canGoBack = !TOP_LEVEL.has(pathname);
 
+  const isTerminal = pathname === "/terminal";
+
   return (
+  <TerminalContext.Provider value={{ openTerminal }}>
     <AppShell
       header={{ height: 40 }}
       navbar={{ width: 220, breakpoint: "sm", collapsed: { desktop: !sidebarOpen, mobile: !sidebarOpen } }}
@@ -172,7 +220,23 @@ export function Layout() {
                 </Text>
               }
               active={activeNav === path}
-              onClick={() => navigate(path)}
+              onClick={() => {
+                if (path === "/terminal") {
+                  // open a new tab if none exist, otherwise just navigate
+                  setTabs((prev) => {
+                    if (prev.length === 0) {
+                      const id = newTabId();
+                      setActiveTabId(id);
+                      navigate("/terminal");
+                      return [{ id, label: "Terminal 1" }];
+                    }
+                    navigate("/terminal");
+                    return prev;
+                  });
+                } else {
+                  navigate(path);
+                }
+              }}
               styles={{ root: { borderRadius: 6, marginBottom: 2, fontSize: 13 } }}
             />
           ))}
@@ -203,10 +267,20 @@ export function Layout() {
           paddingTop: 40, // offset for the header
         }}
       >
-        <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        {/* TerminalManager is always mounted to keep PTY sessions alive */}
+        <TerminalManager
+          tabs={tabs}
+          activeTabId={activeTabId}
+          visible={isTerminal}
+          onSelectTab={setActiveTabId}
+          onCloseTab={handleCloseTab}
+          onNewTab={handleNewTab}
+        />
+        <Box style={{ flex: 1, overflow: "hidden", display: isTerminal ? "none" : "flex", flexDirection: "column" }}>
           <Outlet />
         </Box>
       </AppShell.Main>
     </AppShell>
+  </TerminalContext.Provider>
   );
 }

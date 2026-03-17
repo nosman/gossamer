@@ -11,12 +11,16 @@
   "dependencies": {
     "@mantine/core": "^8.3.16",
     "@mantine/hooks": "^8.3.16",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "diff2html": "^3.4.56",
+    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "@types/react": "^18.3.0",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.7.0",
