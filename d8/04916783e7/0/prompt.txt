@@ -1,0 +1,17 @@
+Add a new component that creates an xterm window. This will let us use claude directly from gossamer, instead of having to open separate terminal windows
+
+---
+
+yes, add a keep alive approach
+
+---
+
+Error with the terminal view: No routes matched location "/terminal"
+
+---
+
+the terminal shows up now but it immediately says "process exited"
+
+---
+
+Make this component reusable so that we can create new instances of it at will. I want to be able to have one window per claude code session, potentially. Also i want to be able to spawn new windows within the app to fix open items
