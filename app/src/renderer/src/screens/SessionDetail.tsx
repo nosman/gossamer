@@ -433,6 +433,74 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
   );
 }
 
+export function FilesChangedPanel({ checkpointId, localPath, filesTouched }: { checkpointId: string; localPath: string | null; filesTouched: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [diffPatch, setDiffPatch] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (expanded && diffPatch === null) {
+      fetchCheckpointDiff(checkpointId, localPath)
+        .then((d) => setDiffPatch(d ?? ""))
+        .catch(() => setDiffPatch(""));
+    }
+  }, [expanded, checkpointId, localPath, diffPatch]);
+
+  const fileCount = filesTouched.length;
+
+  return (
+    <Box style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))" }}>
+      <UnstyledButton
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 20px",
+          backgroundColor: expanded
+            ? "light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6))"
+            : "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+        }}
+      >
+        <Text size="xs" c={expanded ? undefined : "dimmed"} fw={500} style={{ flex: 1 }}>
+          Files changed{fileCount > 0 ? ` (${fileCount})` : ""}
+        </Text>
+        <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>
+      </UnstyledButton>
+      <Collapse in={expanded}>
+        <Box style={{ padding: "0 20px 16px", backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))" }}>
+          {diffPatch === null ? (
+            <Text size="xs" c="dimmed" pt={12}>Loading…</Text>
+          ) : diffPatch === "" ? (
+            fileCount > 0 ? (
+              <Box pt={12} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {filesTouched.map((path) => (
+                  <Text key={path} size="xs" ff="monospace" c="dimmed">{path}</Text>
+                ))}
+              </Box>
+            ) : (
+              <Text size="xs" c="dimmed" pt={12}>No diff available</Text>
+            )
+          ) : (
+            <Box
+              className="d2h-wrapper"
+              style={{ fontSize: 12, overflowX: "auto", paddingTop: 12 }}
+              dangerouslySetInnerHTML={{
+                __html: diff2htmlHtml(diffPatch, {
+                  drawFileList: true,
+                  matching: "lines",
+                  outputFormat: "line-by-line",
+                  colorScheme: "light",
+                }),
+              }}
+            />
+          )}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
 export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: SessionCheckpoint; localPath: string | null; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
   // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
@@ -728,6 +796,7 @@ export function SessionDetail() {
     return () => clearTimeout(t);
   }, [groups, targetLogEventId]);
 
+
   useEffect(() => {
     if (!highlightActive || targetLogEventId === null) return;
     const t = setTimeout(() => {
@@ -850,6 +919,18 @@ export function SessionDetail() {
               <Text size="xs" c="green" ff="monospace" fw={600} td="underline">{childId.slice(0, 8)}…</Text>
             </UnstyledButton>
           ))}
+
+          {selectedId !== "shadow" && (() => {
+            const cp = checkpoints.find((c) => c.checkpointId === selectedId);
+            return cp ? (
+              <FilesChangedPanel
+                key={selectedId}
+                checkpointId={cp.checkpointId}
+                localPath={session?.cwd ?? null}
+                filesTouched={cp.filesTouched}
+              />
+            ) : null;
+          })()}
 
           {latestCheckpoint?.summary && (
             <Box style={{

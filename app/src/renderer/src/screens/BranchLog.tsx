@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Center, Loader, Text, ScrollArea, Box, Button, Badge, Group, UnstyledButton } from "@mantine/core";
-import { fetchBranchLog, fetchLogEvents, type BranchLiveSession, type BranchLogEntry, type LogEventItem, type SessionCheckpoint } from "../api";
+import { fetchBranchLog, fetchLogEvents, fetchCheckpointLogEvents, type BranchLiveSession, type BranchLogEntry, type SessionCheckpoint } from "../api";
 import type { UserInfo } from "../components/EventItem";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { EventItem } from "../components/EventItem";
@@ -12,31 +12,12 @@ import {
   groupClaudeTurns,
   ClaudeTurnCard,
   CheckpointRow,
+  FilesChangedPanel,
   type RenderItem,
 } from "./SessionDetail";
 
 function entryKey(entry: BranchLogEntry): string {
   return `${entry.sessionId}:${entry.checkpointId}`;
-}
-
-/** Returns only the log events that belong to the selected checkpoint's time window. */
-function filterEventsForEntry(
-  entry: BranchLogEntry,
-  sessionEntries: BranchLogEntry[],
-  logEvents: LogEventItem[],
-): LogEventItem[] {
-  const sorted = [...sessionEntries].sort((a, b) =>
-    (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1,
-  );
-  return logEvents.filter((ev) => {
-    const evTime = ev.timestamp ?? "";
-    for (const cp of sorted) {
-      if (evTime <= (cp.createdAt ?? "")) {
-        return cp.checkpointId === entry.checkpointId;
-      }
-    }
-    return false;
-  });
 }
 
 function entryToCheckpoint(entry: BranchLogEntry): SessionCheckpoint {
@@ -72,45 +53,20 @@ export function BranchLog() {
   const [rightItems, setRightItems]     = useState<RenderItem[]>([]);
   const [rightLoading, setRightLoading] = useState(false);
 
-  // Cache raw log events per sessionId to avoid redundant fetches
-  const sessionEventsCache = useRef<Map<string, LogEventItem[]>>(new Map());
-
   const { setCrumbs } = useBreadcrumb();
 
-  function applyEntry(entry: BranchLogEntry, allItems: BranchLogEntry[], cachedEvents: LogEventItem[]) {
-    const sessionEntries = allItems.filter((e) => e.sessionId === entry.sessionId);
-    const filtered = filterEventsForEntry(entry, sessionEntries, cachedEvents);
-    setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(filtered))));
-  }
-
-  function loadLivePanel(sessionId: string) {
-    const cached = sessionEventsCache.current.get(sessionId);
-    if (cached) {
-      setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(cached))));
-      return;
-    }
+  function loadRightPanel(entry: BranchLogEntry) {
     setRightLoading(true);
-    fetchLogEvents(sessionId)
-      .then((logEvents) => {
-        sessionEventsCache.current.set(sessionId, logEvents);
-        setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(logEvents))));
-      })
+    fetchCheckpointLogEvents(entry.sessionId, entry.checkpointId)
+      .then((logEvents) => setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(logEvents)))))
       .catch(() => setRightItems([]))
       .finally(() => setRightLoading(false));
   }
 
-  function loadRightPanel(entry: BranchLogEntry, allItems: BranchLogEntry[]) {
-    const cached = sessionEventsCache.current.get(entry.sessionId);
-    if (cached) {
-      applyEntry(entry, allItems, cached);
-      return;
-    }
+  function loadLivePanel(sessionId: string) {
     setRightLoading(true);
-    fetchLogEvents(entry.sessionId)
-      .then((logEvents) => {
-        sessionEventsCache.current.set(entry.sessionId, logEvents);
-        applyEntry(entry, allItems, logEvents);
-      })
+    fetchLogEvents(sessionId)
+      .then((logEvents) => setRightItems(groupClaudeTurns(groupEvents(logEventsToEvents(logEvents)))))
       .catch(() => setRightItems([]))
       .finally(() => setRightLoading(false));
   }
@@ -126,7 +82,6 @@ export function BranchLog() {
     setSelectedId(null);
     setRightItems([]);
     setLiveSession(null);
-    sessionEventsCache.current.clear();
     fetchBranchLog(localPath, branch, 0)
       .then(({ entries, hasMore: more, liveSession: live }) => {
         setItems(entries);
@@ -137,19 +92,20 @@ export function BranchLog() {
           loadLivePanel(live.sessionId);
         } else if (entries.length > 0) {
           setSelectedId(entryKey(entries[0]));
-          loadRightPanel(entries[0], entries);
+          loadRightPanel(entries[0]);
         }
       })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
   }, [localPath, branch]);
 
-  function handleSelectEntry(entry: BranchLogEntry, allItems: BranchLogEntry[]) {
+  function handleSelectEntry(entry: BranchLogEntry) {
     const key = entryKey(entry);
     if (selectedId === key) return;
     setSelectedId(key);
-    loadRightPanel(entry, allItems);
+    loadRightPanel(entry);
   }
+
 
   const loadMore = () => {
     const nextPage = page + 1;
@@ -231,7 +187,7 @@ export function BranchLog() {
           return (
             <UnstyledButton
               key={`${entry.checkpointId}-${entry.sessionId}`}
-              onClick={() => handleSelectEntry(entry, items)}
+              onClick={() => handleSelectEntry(entry)}
               style={{
                 width: "100%",
                 padding: "10px 14px",
@@ -269,6 +225,14 @@ export function BranchLog() {
       {/* ── Right: events panel (2/3) ─────────────────────────────────── */}
       <ScrollArea style={{ flex: 1 }}>
         <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
+          {selectedEntry && (
+            <FilesChangedPanel
+              key={selectedId ?? ""}
+              checkpointId={selectedEntry.checkpointId}
+              localPath={localPath}
+              filesTouched={selectedEntry.filesTouched ?? []}
+            />
+          )}
           {rightLoading ? (
             <Center p="xl"><Loader size="sm" color="teal" /></Center>
           ) : rightItems.length === 0 ? (

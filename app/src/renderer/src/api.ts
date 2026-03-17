@@ -327,6 +327,12 @@ export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
   return res.json() as Promise<LogEventItem[]>;
 }
 
+export async function fetchCheckpointLogEvents(sessionId: string, checkpointId: string): Promise<LogEventItem[]> {
+  const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}/log-events`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LogEventItem[]>;
+}
+
 export interface SearchResult {
   logContentId: number;
   logEventId: number;
