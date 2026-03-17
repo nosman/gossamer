@@ -1,0 +1,13 @@
+In the checkpoint list view, clicking on a checkpoint should automatically scroll the conversation view to the last event in the conversation
+
+---
+
+Also, let's add the diff2html view back into the checkpoint view. Files changed can go at the top, collapsed by default. When you click into a specific checkpoint, it should should the relevant file changes at the top.
+
+---
+
+In BranchLog.tsx, the filterEventsForEntry function is currently filtering based on timestamp. It's getting log events for the session via fetchLogEvents. Instead of using fetchLogEvents, create a new api route that takes in a sessionId *and* a checkpointId, and fetches log events based on both. It should take the checkpoint id of the currently loaded checkpoint. You should be able to query the CheckpointSessionMetadata table and get the logs from that.
+
+---
+
+Get rid of the scrolling effect when selecting a new checkpoint.
