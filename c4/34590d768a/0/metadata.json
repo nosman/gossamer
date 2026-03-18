@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "c434590d768a",
+  "session_id": "b85afdfc-ba44-4a08-bd97-e70ba119b5f6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-18T04:49:15.36756Z",
+  "branch": "README",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "0a88c06cd993",
+  "checkpoint_transcript_start": 15,
+  "transcript_lines_at_start": 15,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 3113,
+    "cache_read_tokens": 77679,
+    "output_tokens": 798,
+    "api_call_count": 4
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Add a Getting Started section to the Gossamer README with installation and setup instructions referencing the entire.io CLI.",
+    "outcome": "The existing README.md was updated with a three-step Getting Started section covering entire CLI setup, cloning the repo with npm run start, and adding the repo path in the Repos tab.",
+    "learnings": {
+      "repo": [
+        "Gossamer has a combined UI and server that both start via `npm run start`",
+        "Gossamer integrates with the entire.io CLI — repos must be enabled with `entire enable` before use",
+        "Gossamer has a 'Repos' tab where local repo paths are registered"
+      ],
+      "code": [
+        {
+          "path": "README.md",
+          "finding": "README already existed and was edited in-place rather than created from scratch"
+        }
+      ],
+      "workflow": []
+    },
+    "friction": [],
+    "open_items": [
+      "The entire.io CLI project link was mentioned but not confirmed — the README should include the actual URL once known"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-18T04:49:07.718304Z",
+    "agent_lines": 0,
+    "human_added": 137,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 137,
+    "agent_percentage": 0
+  }
+}

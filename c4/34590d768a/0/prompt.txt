@@ -1,0 +1,1 @@
+Create a README with simple installation instructions. Say that you first have to install the entire.io cli (link to the project), call `entire enable` in your repo. Then to run the app, just clone the repo, and call npm run start to run both the UI and the server. Finally, add the repo's local path on your machine to the "repos" tab in gossamer
