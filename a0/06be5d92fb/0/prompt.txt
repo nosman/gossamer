@@ -1,0 +1,1 @@
+If a checkpoint has no events, don't display it

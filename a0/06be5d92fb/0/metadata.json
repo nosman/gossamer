@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "a006be5d92fb",
+  "session_id": "a47a4b47-67d1-4180-aae3-80bbe0d564b6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-18T04:41:58.788356Z",
+  "branch": "ParsingEntireLog",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "78ec7a1ed12b",
+  "checkpoint_transcript_start": 345,
+  "transcript_lines_at_start": 345,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 74870,
+    "cache_read_tokens": 480296,
+    "output_tokens": 2600,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Hide checkpoints that have no associated events from the UI, so users only see meaningful checkpoints.",
+    "outcome": "Checkpoints with no events are filtered in two places: the SessionDetail sidebar (client-side using already-loaded event data) and the BranchLog server endpoint (server-side via a database existence check before sending data to the client).",
+    "learnings": {
+      "repo": [
+        "Checkpoint event data is pre-grouped in SessionDetail using a `groups` map keyed by checkpointId, making client-side filtering cheap.",
+        "The BranchLog endpoint in src/server.ts constructs entries via a sessionLink → checkpointMetadata join, allowing a findFirst existence check to gate inclusion.",
+        "Filtering is applied at both the server and client layers for this feature — server skips entries before sending, client filters the sidebar display."
+      ],
+      "code": [
+        {
+          "path": "app/src/renderer/src/screens/SessionDetail.tsx",
+          "finding": "Sidebar checkpoints filtered with `groups.get(cp.checkpointId)?.length \u003e 0` using the pre-loaded groups map — no extra data fetching needed."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "BranchLog endpoint uses a Prisma findFirst with a sessionLink → checkpointMetadata join to check for linked log events before pushing each entry."
+        }
+      ],
+      "workflow": [
+        "When filtering can be done client-side using already-loaded data, prefer that over adding server round-trips.",
+        "For list endpoints, server-side filtering before serialization is cleaner than relying solely on client filtering."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-18T04:41:48.263132Z",
+    "agent_lines": 11,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 11,
+    "agent_percentage": 100
+  }
+}
