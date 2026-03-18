@@ -433,6 +433,74 @@ function BulletList({ items, color }: { items: string[]; color?: string }) {
   );
 }
 
+export function FilesChangedPanel({ checkpointId, localPath, filesTouched }: { checkpointId: string; localPath: string | null; filesTouched: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const [diffPatch, setDiffPatch] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (expanded && diffPatch === null) {
+      fetchCheckpointDiff(checkpointId, localPath)
+        .then((d) => setDiffPatch(d ?? ""))
+        .catch(() => setDiffPatch(""));
+    }
+  }, [expanded, checkpointId, localPath, diffPatch]);
+
+  const fileCount = filesTouched.length;
+
+  return (
+    <Box style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))" }}>
+      <UnstyledButton
+        onClick={() => setExpanded((v) => !v)}
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 20px",
+          backgroundColor: expanded
+            ? "light-dark(var(--mantine-color-gray-1), var(--mantine-color-dark-6))"
+            : "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+        }}
+      >
+        <Text size="xs" c={expanded ? undefined : "dimmed"} fw={500} style={{ flex: 1 }}>
+          Files changed{fileCount > 0 ? ` (${fileCount})` : ""}
+        </Text>
+        <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>
+      </UnstyledButton>
+      <Collapse in={expanded}>
+        <Box style={{ padding: "0 20px 16px", backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))" }}>
+          {diffPatch === null ? (
+            <Text size="xs" c="dimmed" pt={12}>Loading…</Text>
+          ) : diffPatch === "" ? (
+            fileCount > 0 ? (
+              <Box pt={12} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {filesTouched.map((path) => (
+                  <Text key={path} size="xs" ff="monospace" c="dimmed">{path}</Text>
+                ))}
+              </Box>
+            ) : (
+              <Text size="xs" c="dimmed" pt={12}>No diff available</Text>
+            )
+          ) : (
+            <Box
+              className="d2h-wrapper"
+              style={{ fontSize: 12, overflowX: "auto", paddingTop: 12 }}
+              dangerouslySetInnerHTML={{
+                __html: diff2htmlHtml(diffPatch, {
+                  drawFileList: true,
+                  matching: "lines",
+                  outputFormat: "line-by-line",
+                  colorScheme: "light",
+                }),
+              }}
+            />
+          )}
+        </Box>
+      </Collapse>
+    </Box>
+  );
+}
+
 export function CheckpointRow({ checkpoint, localPath, onPress }: { checkpoint: SessionCheckpoint; localPath: string | null; onPress: () => void }) {
   const [expanded, setExpanded] = useState(false);
   // null = not yet fetched, "" = fetched but empty / unavailable, string = raw unified diff
@@ -602,6 +670,44 @@ function getItemSourceIds(item: RenderItem): number[] {
   return [];
 }
 
+function buildCheckpointGroups(
+  logEvs: LogEventItem[],
+  checkpoints: SessionCheckpoint[],
+): Map<string, RenderItem[]> {
+  const sorted = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+  const buckets = new Map<string, LogEventItem[]>();
+  for (const cp of sorted) buckets.set(cp.checkpointId, []);
+  buckets.set("shadow", []);
+
+  for (const ev of logEvs) {
+    const evTime = ev.timestamp ?? "";
+    let placed = false;
+    for (const cp of sorted) {
+      if (evTime <= (cp.createdAt ?? "")) {
+        buckets.get(cp.checkpointId)!.push(ev);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) buckets.get("shadow")!.push(ev);
+  }
+
+  const result = new Map<string, RenderItem[]>();
+  for (const [key, evs] of buckets) {
+    result.set(key, groupClaudeTurns(groupEvents(logEventsToEvents(evs))));
+  }
+  return result;
+}
+
+function findGroupForLogEvent(groups: Map<string, RenderItem[]>, logEventId: number): string | null {
+  for (const [key, items] of groups) {
+    for (const item of items) {
+      if (getItemSourceIds(item).includes(logEventId)) return key;
+    }
+  }
+  return null;
+}
+
 export function SessionDetail() {
   const navigate = useNavigate();
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -615,8 +721,10 @@ export function SessionDetail() {
   const viewportRef = useRef<HTMLDivElement>(null);
   const logEventsRef = useRef<LogEventItem[]>([]);
   const [session, setSession] = useState<Session | null>(null);
+  const [checkpoints, setCheckpoints] = useState<SessionCheckpoint[]>([]);
+  const [groups, setGroups] = useState<Map<string, RenderItem[]>>(new Map([["shadow", []]]));
+  const [selectedId, setSelectedId] = useState<string>("shadow");
   const [latestCheckpoint, setLatestCheckpoint] = useState<SessionCheckpoint | null>(null);
-  const [items, setItems] = useState<RenderItem[]>([]);
   const [userInfo, setUserInfo] = useState<UserInfo | undefined>(undefined);
   const [openItems, setOpenItems] = useState<OpenItem[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set());
@@ -627,30 +735,23 @@ export function SessionDetail() {
   const id = sessionId!;
   const { setCrumbs } = useBreadcrumb();
 
-  function applyCheckpoints(logEvs: LogEventItem[], checkpoints: SessionCheckpoint[]) {
-    const grouped = groupEvents(logEventsToEvents(logEvs));
-    const merged: DisplayItem[] = [];
-    let cpIdx = 0;
-    const sortedCps = [...checkpoints].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
-    const latest = sortedCps[sortedCps.length - 1] ?? null;
+  function applyData(logEvs: LogEventItem[], cps: SessionCheckpoint[], autoSelect = false) {
+    const sorted = [...cps].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
+    const latest = sorted[sorted.length - 1] ?? null;
     setLatestCheckpoint(latest);
     setOpenItems(latest?.summary?.openItems ?? []);
-
-    for (const item of grouped) {
-      const itemTime = item.kind === "event" ? item.event.timestamp : item.kind === "toolGroup" ? item.tools[0]?.pre.timestamp ?? "" : "";
-      while (cpIdx < sortedCps.length && (sortedCps[cpIdx].createdAt ?? "") <= itemTime) {
-        merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-      }
-      merged.push(item);
+    setCheckpoints(sorted);
+    const newGroups = buildCheckpointGroups(logEvs, cps);
+    setGroups(newGroups);
+    if (autoSelect && targetLogEventId !== null) {
+      const targetGroup = findGroupForLogEvent(newGroups, targetLogEventId);
+      if (targetGroup) setSelectedId(targetGroup);
     }
-    while (cpIdx < sortedCps.length) merged.push({ kind: "checkpoint", checkpoint: sortedCps[cpIdx++] });
-    setItems(groupClaudeTurns(merged));
   }
 
-  // Initial load
   useEffect(() => {
     Promise.all([fetchSession(id), fetchLogEvents(id), fetchSessionCheckpoints(id)])
-      .then(([s, logEvs, checkpoints]) => {
+      .then(([s, logEvs, cps]) => {
         logEventsRef.current = logEvs;
         setSession(s);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
@@ -667,40 +768,39 @@ export function SessionDetail() {
           ...(repo ? [{ label: repo, path: "/" }] : []),
           { label: shortId },
         ]);
-        applyCheckpoints(logEvs, checkpoints);
+        applyData(logEvs, cps, true);
         setError(null);
       })
       .catch((err: unknown) => setError(String(err)))
       .finally(() => setLoading(false));
   }, [id]);
 
-  // Live updates: re-fetch checkpoints and log events when the server broadcasts a change
   useEffect(() => {
     return subscribeToUpdates(() => {
       Promise.all([fetchLogEvents(id), fetchSessionCheckpoints(id)])
-        .then(([logEvs, checkpoints]) => applyCheckpoints(logEvs, checkpoints))
+        .then(([logEvs, cps]) => {
+          logEventsRef.current = logEvs;
+          applyData(logEvs, cps);
+        })
         .catch(() => undefined);
     });
   }, [id]);
 
-  // Step 1: activate highlight once items are loaded (triggers Collapse expand + mark rendering)
   useEffect(() => {
-    if (targetLogEventId === null || items.length === 0 || scrolledRef.current) return;
+    if (targetLogEventId === null || groups.size === 0 || scrolledRef.current) return;
     const t = setTimeout(() => {
       setHighlightActive(true);
       scrolledRef.current = true;
       setTimeout(() => setHighlightActive(false), 10000);
     }, 150);
     return () => clearTimeout(t);
-  }, [items, targetLogEventId]);
+  }, [groups, targetLogEventId]);
 
-  // Step 2: once highlightActive is true (marks rendered, Collapses expanding), scroll to first <mark>
+
   useEffect(() => {
     if (!highlightActive || targetLogEventId === null) return;
-    // Wait for Collapse animations (~200ms) to reach their final layout before measuring
     const t = setTimeout(() => {
       requestAnimationFrame(() => {
-        // Resolve UUID for the target logEventId, then find the most precise element
         const uuid = logEventsRef.current.find((le) => le.id === targetLogEventId)?.uuid ?? null;
         const el = (
           (uuid ? document.getElementById(uuid) : null)
@@ -721,182 +821,239 @@ export function SessionDetail() {
   if (loading) return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
   if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
-  return (
-    <ScrollArea style={{ flex: 1 }} viewportRef={viewportRef}>
-      <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
-      {session?.parentSessionId && (
-        <UnstyledButton
-          onClick={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}
-          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-blue-2)", padding: "8px 14px" }}
-        >
-          <Text size="xs" c="blue">↑ Continuation of</Text>
-          <Text size="xs" c="blue" ff="monospace" fw={600} td="underline">{session.parentSessionId.slice(0, 8)}…</Text>
-        </UnstyledButton>
-      )}
-      {session?.childSessionIds?.map((childId) => (
-        <UnstyledButton
-          key={childId}
-          onClick={() => navigate(`/sessions/${childId}`, { state: { title: childId.slice(0, 8) + "…" } })}
-          style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-green-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-green-2)", padding: "8px 14px" }}
-        >
-          <Text size="xs" c="green">↓ Continued as</Text>
-          <Text size="xs" c="green" ff="monospace" fw={600} td="underline">{childId.slice(0, 8)}…</Text>
-        </UnstyledButton>
-      ))}
+  const items = groups.get(selectedId) ?? [];
+  const sidebarCheckpoints = [...checkpoints]
+    .filter((cp) => (groups.get(cp.checkpointId)?.length ?? 0) > 0)
+    .sort((a, b) => (a.createdAt ?? "") > (b.createdAt ?? "") ? -1 : 1);
 
-      {latestCheckpoint?.summary && (
-        <Box style={{
-          borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
-          padding: "16px 20px",
-          backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
-        }}>
-          <Text size="sm" fw={600} lh={1.5} mb={latestCheckpoint.summary.openItems?.length ? 12 : 0}>
-            {latestCheckpoint.summary.intent}
-          </Text>
-          {openItems.length > 0 && (
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={8} style={{ letterSpacing: 0.5 }}>
-                Open items
+  return (
+    <Box style={{ flex: 1, display: "flex", overflow: "hidden" }}>
+
+      {/* ── Left: checkpoint list (1/3) ──────────────────────────────── */}
+      <Box style={{
+        width: "33%",
+        minWidth: 220,
+        maxWidth: 340,
+        borderRight: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
+        overflowY: "auto",
+        flexShrink: 0,
+      }}>
+        {/* Shadow / current changes */}
+        <UnstyledButton
+          onClick={() => setSelectedId("shadow")}
+          style={{
+            width: "100%",
+            padding: "12px 14px",
+            borderBottom: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))",
+            backgroundColor: selectedId === "shadow"
+              ? "light-dark(var(--mantine-color-indigo-0), var(--mantine-color-dark-5))"
+              : undefined,
+          }}
+        >
+          <Group gap={6} mb={session?.prompt ? 4 : 0}>
+            {session?.isLive && (
+              <Box style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "var(--mantine-color-teal-5)", flexShrink: 0 }} />
+            )}
+            <Text size="xs" fw={600} c={session?.isLive ? "teal" : "dimmed"}>
+              {session?.isLive ? "In progress" : "Uncommitted changes"}
+            </Text>
+          </Group>
+          {session?.prompt && (
+            <Text size="xs" c="dimmed" lineClamp={2}>{session.prompt}</Text>
+          )}
+        </UnstyledButton>
+
+        {/* Real checkpoints, newest-first */}
+        {sidebarCheckpoints.map((cp) => {
+          const label = cp.summary?.intent ?? cp.commitMessage ?? null;
+          const isSelected = selectedId === cp.checkpointId;
+          return (
+            <UnstyledButton
+              key={cp.checkpointId}
+              onClick={() => setSelectedId(cp.checkpointId)}
+              style={{
+                width: "100%",
+                padding: "10px 14px",
+                borderBottom: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-5))",
+                backgroundColor: isSelected
+                  ? "light-dark(var(--mantine-color-teal-0), var(--mantine-color-dark-5))"
+                  : undefined,
+              }}
+            >
+              {label && (
+                <Text size="xs" c="dimmed" lineClamp={2} mb={4}>{label}</Text>
+              )}
+              <Group gap={6} wrap="nowrap">
+                <Text size="xs" ff="monospace" c="teal" style={{ flexShrink: 0 }}>{cp.checkpointId}</Text>
+                {cp.commitHash && (
+                  <Text size="xs" ff="monospace" c="dimmed" style={{ flexShrink: 0 }}>{cp.commitHash.slice(0, 7)}</Text>
+                )}
+                {cp.branch && <Badge variant="light" color="teal" size="xs" style={{ flexShrink: 0 }}>{cp.branch}</Badge>}
+              </Group>
+              {cp.createdAt && (
+                <Text size="xs" c="dimmed" mt={2}><TimeAgo iso={cp.createdAt} /></Text>
+              )}
+            </UnstyledButton>
+          );
+        })}
+      </Box>
+
+      {/* ── Right: chat panel (2/3) ───────────────────────────────────── */}
+      <ScrollArea style={{ flex: 1 }} viewportRef={viewportRef}>
+        <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
+
+          {session?.parentSessionId && (
+            <UnstyledButton
+              onClick={() => navigate(`/sessions/${session.parentSessionId}`, { state: { title: session.parentSessionId!.slice(0, 8) + "…" } })}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-blue-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-blue-2)", padding: "8px 14px" }}
+            >
+              <Text size="xs" c="blue">↑ Continuation of</Text>
+              <Text size="xs" c="blue" ff="monospace" fw={600} td="underline">{session.parentSessionId.slice(0, 8)}…</Text>
+            </UnstyledButton>
+          )}
+          {session?.childSessionIds?.map((childId) => (
+            <UnstyledButton
+              key={childId}
+              onClick={() => navigate(`/sessions/${childId}`, { state: { title: childId.slice(0, 8) + "…" } })}
+              style={{ width: "100%", display: "flex", alignItems: "center", gap: 6, backgroundColor: "light-dark(var(--mantine-color-green-0), var(--mantine-color-dark-6))", borderBottom: "1px solid var(--mantine-color-green-2)", padding: "8px 14px" }}
+            >
+              <Text size="xs" c="green">↓ Continued as</Text>
+              <Text size="xs" c="green" ff="monospace" fw={600} td="underline">{childId.slice(0, 8)}…</Text>
+            </UnstyledButton>
+          ))}
+
+          {selectedId !== "shadow" && (() => {
+            const cp = checkpoints.find((c) => c.checkpointId === selectedId);
+            return cp ? (
+              <FilesChangedPanel
+                key={selectedId}
+                checkpointId={cp.checkpointId}
+                localPath={session?.cwd ?? null}
+                filesTouched={cp.filesTouched}
+              />
+            ) : null;
+          })()}
+
+          {latestCheckpoint?.summary && (
+            <Box style={{
+              borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
+              padding: "16px 20px",
+              backgroundColor: "light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-7))",
+            }}>
+              <Text size="sm" fw={600} lh={1.5} mb={latestCheckpoint.summary.openItems?.length ? 12 : 0}>
+                {latestCheckpoint.summary.intent}
               </Text>
-              {openItems.map((item, i) => {
-                const selectable = item.status === "open";
-                const statusColor = item.status === "complete" ? "teal" : item.status === "in_progress" ? "orange" : item.status === "na" ? "gray" : "blue";
-                const statusLabel = item.status === "in_progress" ? "in progress" : item.status === "na" ? "n/a" : item.status;
-                return (
-                  <Group key={item.id} gap={10} align="flex-start" mb={6} wrap="nowrap">
-                    {selectable ? (
-                      <Checkbox
-                        size="xs"
-                        radius="xl"
-                        checked={selectedItems.has(i)}
-                        onChange={(e) => {
-                          setSelectedItems((prev) => {
-                            const next = new Set(prev);
-                            e.currentTarget.checked ? next.add(i) : next.delete(i);
-                            return next;
-                          });
-                        }}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ marginTop: 2, flexShrink: 0 }}
-                      />
-                    ) : (
-                      <Box style={{ width: 16, flexShrink: 0 }} />
-                    )}
-                    <Menu withinPortal position="bottom-start" shadow="sm">
-                      <Menu.Target>
-                        <Badge
-                          color={statusColor}
-                          size="xs"
-                          variant="light"
-                          style={{ cursor: "pointer", flexShrink: 0, marginTop: 2, textTransform: "none" }}
-                        >
-                          {statusLabel}
-                        </Badge>
-                      </Menu.Target>
-                      <Menu.Dropdown>
-                        {(["open", "in_progress", "complete", "na"] as const).map((s) => (
-                          <Menu.Item
-                            key={s}
-                            fw={item.status === s ? 700 : undefined}
-                            onClick={async () => {
-                              await updateOpenItemStatus(item.id, s).catch(() => undefined);
-                              setOpenItems((prev) => prev.map((it) => it.id === item.id ? { ...it, status: s } : it));
-                              if (s !== "open") setSelectedItems((prev) => { const n = new Set(prev); n.delete(i); return n; });
-                            }}
-                          >
-                            {s === "in_progress" ? "in progress" : s === "na" ? "n/a" : s}
-                          </Menu.Item>
-                        ))}
-                      </Menu.Dropdown>
-                    </Menu>
-                    <Text size="xs" lh={1.5} c={selectable ? undefined : "dimmed"} style={{ cursor: "default" }}>{item.text}</Text>
-                  </Group>
-                );
-              })}
-              {selectedItems.size > 0 && (
-                <Group gap={8} mt={10}>
-                  <Text size="xs" c="dimmed">Work on selection in new session?</Text>
-                  <Tooltip label={spawning ? "Starting…" : "Start new Claude session"} withArrow>
-                    <ActionIcon
-                      size="sm"
-                      variant="light"
-                      color="indigo"
-                      loading={spawning}
-                      onClick={async () => {
-                        if (!session?.cwd) return;
-                        const selected = openItems.filter((_, i) => selectedItems.has(i));
-                        const lines = selected.map((item) => `- ${item.text}`).join("\n");
-                        const prompt = `Please work on the following open items:\n${lines}`;
-                        setSpawning(true);
-                        try {
-                          await spawnSession(prompt, session.cwd, selected.map((it) => it.id), session.sessionId);
-                          const selectedIds = new Set(selected.map((it) => it.id));
-                          setOpenItems((prev) => prev.map((it) => selectedIds.has(it.id) ? { ...it, status: "in_progress" as const } : it));
-                          setSelectedItems(new Set());
-                        } finally {
-                          setSpawning(false);
-                        }
-                      }}
-                    >
-                      →
-                    </ActionIcon>
-                  </Tooltip>
-                </Group>
+              {openItems.length > 0 && (
+                <Box>
+                  <Text size="xs" fw={700} c="dimmed" tt="uppercase" mb={8} style={{ letterSpacing: 0.5 }}>Open items</Text>
+                  {openItems.map((item, i) => {
+                    const selectable = item.status === "open";
+                    const statusColor = item.status === "complete" ? "teal" : item.status === "in_progress" ? "orange" : item.status === "na" ? "gray" : "blue";
+                    const statusLabel = item.status === "in_progress" ? "in progress" : item.status === "na" ? "n/a" : item.status;
+                    return (
+                      <Group key={item.id} gap={10} align="flex-start" mb={6} wrap="nowrap">
+                        {selectable ? (
+                          <Checkbox size="xs" radius="xl" checked={selectedItems.has(i)}
+                            onChange={(e) => { setSelectedItems((prev) => { const next = new Set(prev); e.currentTarget.checked ? next.add(i) : next.delete(i); return next; }); }}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ marginTop: 2, flexShrink: 0 }}
+                          />
+                        ) : (
+                          <Box style={{ width: 16, flexShrink: 0 }} />
+                        )}
+                        <Menu withinPortal position="bottom-start" shadow="sm">
+                          <Menu.Target>
+                            <Badge color={statusColor} size="xs" variant="light"
+                              style={{ cursor: "pointer", flexShrink: 0, marginTop: 2, textTransform: "none" }}>
+                              {statusLabel}
+                            </Badge>
+                          </Menu.Target>
+                          <Menu.Dropdown>
+                            {(["open", "in_progress", "complete", "na"] as const).map((s) => (
+                              <Menu.Item key={s} fw={item.status === s ? 700 : undefined}
+                                onClick={async () => {
+                                  await updateOpenItemStatus(item.id, s).catch(() => undefined);
+                                  setOpenItems((prev) => prev.map((it) => it.id === item.id ? { ...it, status: s } : it));
+                                  if (s !== "open") setSelectedItems((prev) => { const n = new Set(prev); n.delete(i); return n; });
+                                }}>
+                                {s === "in_progress" ? "in progress" : s === "na" ? "n/a" : s}
+                              </Menu.Item>
+                            ))}
+                          </Menu.Dropdown>
+                        </Menu>
+                        <Text size="xs" lh={1.5} c={selectable ? undefined : "dimmed"} style={{ cursor: "default" }}>{item.text}</Text>
+                      </Group>
+                    );
+                  })}
+                  {selectedItems.size > 0 && (
+                    <Group gap={8} mt={10}>
+                      <Text size="xs" c="dimmed">Work on selection in new session?</Text>
+                      <Tooltip label={spawning ? "Starting…" : "Start new Claude session"} withArrow>
+                        <ActionIcon size="sm" variant="light" color="indigo" loading={spawning}
+                          onClick={async () => {
+                            if (!session?.cwd) return;
+                            const selected = openItems.filter((_, i) => selectedItems.has(i));
+                            const lines = selected.map((item) => `- ${item.text}`).join("\n");
+                            setSpawning(true);
+                            try {
+                              await spawnSession(`Please work on the following open items:\n${lines}`, session.cwd, selected.map((it) => it.id), session.sessionId);
+                              const selectedIds = new Set(selected.map((it) => it.id));
+                              setOpenItems((prev) => prev.map((it) => selectedIds.has(it.id) ? { ...it, status: "in_progress" as const } : it));
+                              setSelectedItems(new Set());
+                            } finally { setSpawning(false); }
+                          }}>→</ActionIcon>
+                      </Tooltip>
+                    </Group>
+                  )}
+                </Box>
               )}
             </Box>
           )}
-        </Box>
-      )}
 
-      {items.length === 0 ? (
-        <Center p="xl"><Text c="dimmed" size="sm">No events for this session.</Text></Center>
-      ) : (<>
-        <style>{`
-          @keyframes search-highlight-fade {
-            0%   { background-color: rgba(255, 210, 0, 0.25); box-shadow: 0 0 0 2px rgba(255, 210, 0, 0.6); border-radius: 8px; }
-            100% { background-color: rgba(255, 210, 0, 0);    box-shadow: 0 0 0 2px rgba(255, 210, 0, 0);   border-radius: 8px; }
-          }
-          .search-target-highlight { animation: search-highlight-fade 10s ease-out forwards; border-radius: 8px; }
-        `}</style>
-        {items.map((item, idx) => {
-          const sourceIds = getItemSourceIds(item);
-          const isTarget = targetLogEventId !== null && sourceIds.includes(targetLogEventId);
-          const matchTerms = isTarget && highlightActive && searchSnippet ? extractMatchTerms(searchSnippet) : undefined;
-          const key = item.kind === "claudeTurn" ? `turn-${idx}`
-            : item.kind === "checkpoint" ? `cp-${item.checkpoint.checkpointId}`
-            : `evt-${item.event.id}`;
-          return (
-            <div
-              key={key}
-              data-log-event-id={isTarget ? targetLogEventId! : (sourceIds[0] ?? undefined)}
-              className={isTarget && highlightActive ? "search-target-highlight" : undefined}
-            >
-              {item.kind === "claudeTurn" ? (
-                <ClaudeTurnCard
-                  toolGroups={item.toolGroups}
-                  stop={item.stop}
-                  isTarget={isTarget}
-                  matchTerms={matchTerms}
-                  expandTools={isTarget && (searchContentType === "tool_use" || searchContentType === "tool_result")}
-                  expandThinking={isTarget && searchContentType === "thinking"}
-                  targetLogEventId={targetLogEventId}
-                />
-              ) : item.kind === "checkpoint" ? (
-                <CheckpointRow
-                  checkpoint={item.checkpoint}
-                  localPath={session?.repoRoot ?? null}
-                  onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
-                    state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId, localPath: session?.repoRoot ?? null },
-                  })}
-                />
-              ) : (
-                <EventItem event={item.event} user={userInfo} matchTerms={matchTerms} />
-              )}
-            </div>
-          );
-        })}
-      </>)}
-      </Box>
-    </ScrollArea>
+          {items.length === 0 ? (
+            <Center p="xl"><Text c="dimmed" size="sm">No events for this period.</Text></Center>
+          ) : (<>
+            <style>{`
+              @keyframes search-highlight-fade {
+                0%   { background-color: rgba(255, 210, 0, 0.25); box-shadow: 0 0 0 2px rgba(255, 210, 0, 0.6); border-radius: 8px; }
+                100% { background-color: rgba(255, 210, 0, 0);    box-shadow: 0 0 0 2px rgba(255, 210, 0, 0);   border-radius: 8px; }
+              }
+              .search-target-highlight { animation: search-highlight-fade 10s ease-out forwards; border-radius: 8px; }
+            `}</style>
+            {items.map((item, idx) => {
+              const sourceIds = getItemSourceIds(item);
+              const isTarget = targetLogEventId !== null && sourceIds.includes(targetLogEventId);
+              const matchTerms = isTarget && highlightActive && searchSnippet ? extractMatchTerms(searchSnippet) : undefined;
+              const key = item.kind === "claudeTurn" ? `turn-${idx}`
+                : item.kind === "checkpoint" ? `cp-${item.checkpoint.checkpointId}`
+                : `evt-${item.event.id}`;
+              return (
+                <div key={key}
+                  data-log-event-id={isTarget ? targetLogEventId! : (sourceIds[0] ?? undefined)}
+                  className={isTarget && highlightActive ? "search-target-highlight" : undefined}
+                >
+                  {item.kind === "claudeTurn" ? (
+                    <ClaudeTurnCard toolGroups={item.toolGroups} stop={item.stop} isTarget={isTarget}
+                      matchTerms={matchTerms}
+                      expandTools={isTarget && (searchContentType === "tool_use" || searchContentType === "tool_result")}
+                      expandThinking={isTarget && searchContentType === "thinking"}
+                      targetLogEventId={targetLogEventId}
+                    />
+                  ) : item.kind === "checkpoint" ? (
+                    <CheckpointRow checkpoint={item.checkpoint} localPath={session?.repoRoot ?? null}
+                      onPress={() => navigate(`/checkpoints/${item.checkpoint.checkpointId}`, {
+                        state: { title: item.checkpoint.branch ? `${item.checkpoint.branch} · ${item.checkpoint.checkpointId}` : item.checkpoint.checkpointId, localPath: session?.repoRoot ?? null },
+                      })}
+                    />
+                  ) : (
+                    <EventItem event={item.event} user={userInfo} matchTerms={matchTerms} />
+                  )}
+                </div>
+              );
+            })}
+          </>)}
+        </Box>
+      </ScrollArea>
+    </Box>
   );
 }

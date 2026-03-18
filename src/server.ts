@@ -351,6 +351,77 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
+  // GET /api/v2/sessions/:sessionId/checkpoints/:checkpointId/log-events
+  app.get("/api/v2/sessions/:sessionId/checkpoints/:checkpointId/log-events", async (req, res) => {
+    try {
+      const { sessionId, checkpointId } = req.params;
+      const events = await db.logEvent.findMany({
+        where: {
+          sessionId,
+          sessionLink: {
+            checkpointMetadata: { checkpointId },
+          },
+        },
+        orderBy: { timestamp: "asc" },
+        include: {
+          contents:    { orderBy: { contentIndex: "asc" } },
+          usage:       true,
+          hookProgress: true,
+          systemData:  true,
+        },
+      });
+      res.json(events.map((e) => ({
+        id:              e.id,
+        uuid:            e.uuid,
+        sessionId:       e.sessionId,
+        parentUuid:      e.parentUuid,
+        type:            e.type,
+        timestamp:       e.timestamp?.toISOString() ?? null,
+        cwd:             e.cwd,
+        gitBranch:       e.gitBranch,
+        slug:            e.slug,
+        isSidechain:     e.isSidechain,
+        toolUseId:       e.toolUseId,
+        parentToolUseId: e.parentToolUseId,
+        contents: e.contents.map((c) => ({
+          contentType:       c.contentType,
+          contentIndex:      c.contentIndex,
+          text:              c.text,
+          thinking:          c.thinking,
+          toolUseId:         c.toolUseId,
+          toolName:          c.toolName,
+          toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
+          toolResultContent: c.toolResultContent,
+          isError:           c.isError,
+        })),
+        usage: e.usage ? {
+          model:                    e.usage.model,
+          stopReason:               e.usage.stopReason,
+          inputTokens:              e.usage.inputTokens,
+          outputTokens:             e.usage.outputTokens,
+          cacheCreationInputTokens: e.usage.cacheCreationInputTokens,
+          cacheReadInputTokens:     e.usage.cacheReadInputTokens,
+        } : null,
+        hookProgress: e.hookProgress ? {
+          type:      e.hookProgress.type,
+          hookEvent: e.hookProgress.hookEvent,
+          hookName:  e.hookProgress.hookName,
+          command:   e.hookProgress.command,
+        } : null,
+        systemData: e.systemData ? {
+          subtype:               e.systemData.subtype,
+          hookCount:             e.systemData.hookCount,
+          stopReason:            e.systemData.stopReason,
+          preventedContinuation: e.systemData.preventedContinuation,
+          level:                 e.systemData.level,
+          durationMs:            e.systemData.durationMs,
+        } : null,
+      })));
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   // ─── V2 helpers ─────────────────────────────────────────────────────────────
 
   type V2Session = {
@@ -648,6 +719,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           }),
         ]);
         for (const s of sessions) {
+          const hasEvents = await repoDb.logEvent.findFirst({
+            where: {
+              sessionId: s.sessionId,
+              sessionLink: { checkpointMetadata: { checkpointId: s.checkpointId } },
+            },
+            select: { id: true },
+          });
+          if (!hasEvents) continue;
           result.push({
             checkpointId:  s.checkpointId,
             sessionId:     s.sessionId,
@@ -670,7 +749,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         }
       }
 
-      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE });
+      // Find the live (shadow) session on this branch, if any
+      const liveShadow = await repoDb.shadowSession.findFirst({
+        where: { gitBranch: branch },
+        orderBy: { id: "desc" },
+        select: { sessionId: true, prompt: true },
+      });
+      const liveSession = liveShadow
+        ? { sessionId: liveShadow.sessionId, prompt: liveShadow.prompt ?? null }
+        : null;
+
+      res.json({ entries: result, hasMore: orderedIds.length === PAGE_SIZE, liveSession });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -757,7 +846,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   // GET /api/search?q=TEXT[&limit=N]
   app.get("/api/search", async (req, res) => {
-    const q     = typeof req.query.q     === "string" ? req.query.q.trim()         : "";
+    const q     = typeof req.query.q     === "string" ? decodeURIComponent(req.query.q.trim()) : "";
     const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit)  : 50;
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {

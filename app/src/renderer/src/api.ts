@@ -308,16 +308,27 @@ export interface BranchLogEntry {
   commitHash: string | null;
 }
 
-export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean }> {
+export interface BranchLiveSession {
+  sessionId: string;
+  prompt: string | null;
+}
+
+export async function fetchBranchLog(localPath: string, branch: string, page = 0): Promise<{ entries: BranchLogEntry[]; hasMore: boolean; liveSession: BranchLiveSession | null }> {
   const res = await fetch(
     `${API_BASE}/branch-log?localPath=${encodeURIComponent(localPath)}&branch=${encodeURIComponent(branch)}&page=${page}`,
   );
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean }>;
+  return res.json() as Promise<{ entries: BranchLogEntry[]; hasMore: boolean; liveSession: BranchLiveSession | null }>;
 }
 
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
   const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(id)}/log-events`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LogEventItem[]>;
+}
+
+export async function fetchCheckpointLogEvents(sessionId: string, checkpointId: string): Promise<LogEventItem[]> {
+  const res = await fetch(`${API_BASE}/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints/${encodeURIComponent(checkpointId)}/log-events`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<LogEventItem[]>;
 }
