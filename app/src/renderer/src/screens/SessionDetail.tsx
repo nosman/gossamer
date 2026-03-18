@@ -822,7 +822,9 @@ export function SessionDetail() {
   if (error) return <Center style={{ flex: 1 }}><Text c="red">{error}</Text></Center>;
 
   const items = groups.get(selectedId) ?? [];
-  const sidebarCheckpoints = [...checkpoints].sort((a, b) => (a.createdAt ?? "") > (b.createdAt ?? "") ? -1 : 1);
+  const sidebarCheckpoints = [...checkpoints]
+    .filter((cp) => (groups.get(cp.checkpointId)?.length ?? 0) > 0)
+    .sort((a, b) => (a.createdAt ?? "") > (b.createdAt ?? "") ? -1 : 1);
 
   return (
     <Box style={{ flex: 1, display: "flex", overflow: "hidden" }}>

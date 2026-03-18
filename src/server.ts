@@ -719,6 +719,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           }),
         ]);
         for (const s of sessions) {
+          const hasEvents = await repoDb.logEvent.findFirst({
+            where: {
+              sessionId: s.sessionId,
+              sessionLink: { checkpointMetadata: { checkpointId: s.checkpointId } },
+            },
+            select: { id: true },
+          });
+          if (!hasEvents) continue;
           result.push({
             checkpointId:  s.checkpointId,
             sessionId:     s.sessionId,
