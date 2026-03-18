@@ -22,7 +22,7 @@ And because Gossamer integrates with **[Entire.io](https://entire.io)**, your AI
 ## Requirements
 
 - [Node.js](https://nodejs.org) v18+
-- [Entire CLI](https://entire.io) installed and authenticated
+- [Entire CLI](https://entire.io) installed
 - Claude Code installed and configured
 
 > **Homebrew installs coming soon.** For now, clone and run locally.
@@ -87,7 +87,7 @@ Make sure the Entire CLI is installed and you're logged in before starting Gossa
 
 Gossamer is built on a simple principle: your AI sessions are yours. No telemetry, no cloud sync, no third-party storage. Everything stays local by default.
 
-- **Search index and database** are stored in a single SQLite file at `~/.claude/hook-handler.db` — on your machine, readable with any SQLite tool, deletable whenever you want.
+- **Search index and database** are stored in a single SQLite file per repo at `~/.gossamer/<YOUR_REPO>.db` — on your machine, readable with any SQLite tool, deletable whenever you want.
 - **Session history** is stored in your local Git repository. Push it to your own remote to back it up or share it across machines — on your terms, using infrastructure you already control.
 - **The server is local.** Gossamer's backend runs on `localhost` and never opens an external connection. The Electron app talks only to that local server.
 
