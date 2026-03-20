@@ -1,9 +1,9 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
 import { Center, Loader, Alert, Text, Table, Box, SegmentedControl, Group, Anchor } from "@mantine/core";
 import { fetchSessions, fetchRepoStatuses, subscribeToUpdates, type Session, type RepoStatus } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { useBreadcrumb } from "../BreadcrumbContext";
+import { useTabs } from "../TabsContext";
 
 const SESSION_COLUMNS: { label: string; width: number }[] = [
   { label: "Session ID",  width: COL_WIDTHS.sessionId      },
@@ -21,7 +21,7 @@ const REPO_COLUMNS = ["Repo", "User", "Branch"] as const;
 const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
 export function ActiveSessions() {
-  const navigate = useNavigate();
+  const { openSessionTab, openBranchLogTab } = useTabs();
   const [view, setView] = useState<"sessions" | "repos">("sessions");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [repoStatuses, setRepoStatuses] = useState<RepoStatus[]>([]);
@@ -107,9 +107,10 @@ export function ActiveSessions() {
                       key={item.sessionId}
                       session={item}
                       onPress={() =>
-                        navigate(`/sessions/${item.sessionId}`, {
-                          state: { title: item.summary ?? item.sessionId.slice(0, 8) + "…" },
-                        })
+                        openSessionTab(
+                          item.sessionId,
+                          item.summary ?? item.intent ?? item.sessionId.slice(0, 8) + "…",
+                        )
                       }
                     />
                   ))}
@@ -142,9 +143,9 @@ export function ActiveSessions() {
                           <Anchor
                             size="sm"
                             fw={500}
-                            onClick={() => navigate(
-                              `/branch-log?localPath=${encodeURIComponent(repo.localPath)}&branch=${encodeURIComponent(repo.currentBranch!)}&repoName=${encodeURIComponent(repo.name)}`,
-                            )}
+                            onClick={() =>
+                              openBranchLogTab(repo.localPath, repo.currentBranch!, repo.name)
+                            }
                             style={{ cursor: "pointer" }}
                             underline="never"
                           >

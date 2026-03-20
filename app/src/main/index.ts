@@ -1,8 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "path";
-import { spawn } from "child_process";
 
-function createWindow(): void {
+function createWindow(tabParam?: string): void {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -13,15 +12,25 @@ function createWindow(): void {
     },
   });
 
+  const tabQuery = tabParam ? `?tab=${encodeURIComponent(tabParam)}` : "";
+
   if (process.env.ELECTRON_RENDERER_URL) {
-    win.loadURL(process.env.ELECTRON_RENDERER_URL);
+    win.loadURL(`${process.env.ELECTRON_RENDERER_URL}${tabQuery}`);
     win.webContents.openDevTools();
   } else {
-    win.loadFile(join(__dirname, "../renderer/index.html"));
+    win.loadFile(join(__dirname, "../renderer/index.html"), {
+      query: tabParam ? { tab: tabParam } : undefined,
+    });
   }
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  ipcMain.handle("open-window", (_event, tabParam: string) => {
+    createWindow(tabParam);
+  });
+
+  createWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
