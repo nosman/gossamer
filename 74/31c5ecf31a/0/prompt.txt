@@ -1,0 +1,5 @@
+resume
+
+---
+
+Let's add a button in the main sessions screen that lets us create a new session from the app. It should be right above the sessions table, or even the top row of the sessions table.
