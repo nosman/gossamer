@@ -22,6 +22,7 @@ import { Repos } from "./screens/Repos";
 // Tab-content screens
 import { SessionDetail } from "./screens/SessionDetail";
 import { BranchLog } from "./screens/BranchLog";
+import { LauncherScreen } from "./screens/LauncherScreen";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -176,6 +177,7 @@ function TabContent({ tab }: { tab: Tab }) {
   if (tab.type === "branchLog") {
     return <BranchLogTab localPath={tab.localPath} branch={tab.branch} repoName={tab.repoName} />;
   }
+  if (tab.type === "launcher") return <LauncherScreen cwd={tab.cwd} command={tab.command} />;
   return null;
 }
 

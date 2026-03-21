@@ -3,7 +3,8 @@ import React, { createContext, useCallback, useContext, useRef, useState } from 
 export type Tab =
   | { id: "home"; type: "home"; title: string }
   | { id: string; type: "session"; sessionId: string; title: string; initialSearch?: string; initialState?: unknown }
-  | { id: string; type: "branchLog"; localPath: string; branch: string; repoName: string | null; title: string };
+  | { id: string; type: "branchLog"; localPath: string; branch: string; repoName: string | null; title: string }
+  | { id: string; type: "launcher"; cwd: string; command: string; title: string };
 
 type NavigateFn = (to: string | number) => void;
 
@@ -13,8 +14,10 @@ interface TabsContextValue {
   homePathname: string;
   openSessionTab: (sessionId: string, title: string, initialSearch?: string, initialState?: unknown) => void;
   openBranchLogTab: (localPath: string, branch: string, repoName: string | null) => void;
+  openLauncherTab: (cwd: string, command: string, title: string) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
+  updateTabTitle: (id: string, title: string) => void;
   /** Navigate the home tab (and activate it). Accepts a path string or -1 for back. */
   navigateHome: (to: string | number) => void;
   /** Called by HomeTabRoutes to register its navigate function. */
@@ -84,6 +87,16 @@ export function TabsProvider({
     [],
   );
 
+  const openLauncherTab = useCallback((cwd: string, command: string, title: string) => {
+    const id = `launcher:${Date.now()}`;
+    setTabs((prev) => [...prev, { id, type: "launcher", cwd, command, title }]);
+    setActiveTabId(id);
+  }, []);
+
+  const updateTabTitle = useCallback((id: string, title: string) => {
+    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+  }, []);
+
   const closeTab = useCallback((id: string) => {
     if (id === "home") return;
     setTabs((prev) => {
@@ -134,8 +147,10 @@ export function TabsProvider({
         homePathname,
         openSessionTab,
         openBranchLogTab,
+        openLauncherTab,
         closeTab,
         setActiveTab: setActiveTabId,
+        updateTabTitle,
         navigateHome,
         registerHomeNavigate,
         updateHomePathname,

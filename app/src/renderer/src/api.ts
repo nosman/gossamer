@@ -106,10 +106,26 @@ export async function deleteRepo(localPath: string): Promise<void> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
-export async function fetchSessions(): Promise<Session[]> {
-  const res = await fetch(`${API_BASE}/sessions`);
+export async function fetchSessions(includeArchived = false): Promise<Session[]> {
+  const qs = includeArchived ? "?archived=1" : "";
+  const res = await fetch(`${API_BASE}/sessions${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Session[]>;
+}
+
+export async function archiveSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function unarchiveSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+export async function syncSessions(): Promise<void> {
+  const res = await fetch(`${API_BASE}/sessions/sync`, { method: "POST" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export async function fetchSession(id: string): Promise<Session> {

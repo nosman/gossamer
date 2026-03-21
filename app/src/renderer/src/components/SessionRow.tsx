@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import { Table, Text, Anchor, ActionIcon, Tooltip, Badge } from "@mantine/core";
 import type { Session } from "../api";
-import { resumeSession } from "../api";
 import { relativeTime, absoluteTime } from "./TimeAgo";
 
 interface Props {
   session: Session;
   onPress: () => void;
+  onResume?: (session: Session) => void;
+  onArchive?: (sessionId: string) => void;
+  isArchived?: boolean;
 }
 
 export const COL_WIDTHS = {
@@ -18,6 +20,7 @@ export const COL_WIDTHS = {
   parentSessionId: 120,
   started:         110,
   updated:         110,
+  actions:          56,
 } as const;
 
 
@@ -76,12 +79,12 @@ function CopyCell({ copyValue, width, children, prefix }: CopyCellProps) {
   );
 }
 
-export function SessionRow({ session, onPress }: Props) {
+export function SessionRow({ session, onPress, onResume, onArchive, isArchived }: Props) {
   const dot = activityDot(session.updatedAt);
   const intent = session.intent ?? session.summary ?? session.prompt?.slice(0, 160) ?? "—";
   const shortId = session.sessionId.slice(0, 8) + "…";
   const shortParent = session.parentSessionId ? session.parentSessionId.slice(0, 8) + "…" : null;
-  const [resuming, setResuming] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   return (
     <>
@@ -99,23 +102,22 @@ export function SessionRow({ session, onPress }: Props) {
             <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
               {shortId}
             </Text>
-            <Tooltip label="Resume in terminal" withArrow position="top" openDelay={300}>
-              <ActionIcon
-                size="sm"
-                variant="light"
-                color="indigo"
-                loading={resuming}
-                style={{ flexShrink: 0 }}
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  setResuming(true);
-                  try { await resumeSession(session.sessionId, session.cwd); }
-                  finally { setResuming(false); }
-                }}
-              >
-                →
-              </ActionIcon>
-            </Tooltip>
+            {onResume && (
+              <Tooltip label="Resume in tab" withArrow position="top" openDelay={300}>
+                <ActionIcon
+                  size="sm"
+                  variant="light"
+                  color="indigo"
+                  style={{ flexShrink: 0 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onResume(session);
+                  }}
+                >
+                  →
+                </ActionIcon>
+              </Tooltip>
+            )}
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live
@@ -171,6 +173,27 @@ export function SessionRow({ session, onPress }: Props) {
         <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
           <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
         </CopyCell>
+
+        <Table.Td style={{ width: COL_WIDTHS.actions }} onClick={(e) => e.stopPropagation()}>
+          {onArchive && (
+            <Tooltip label={isArchived ? "Unarchive" : "Archive"} withArrow position="left" openDelay={300}>
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color={isArchived ? "blue" : "gray"}
+                loading={archiving}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setArchiving(true);
+                  try { await onArchive(session.sessionId); }
+                  finally { setArchiving(false); }
+                }}
+              >
+                {isArchived ? "↩" : "⊗"}
+              </ActionIcon>
+            </Tooltip>
+          )}
+        </Table.Td>
       </Table.Tr>
     </>
   );

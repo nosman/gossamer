@@ -187,6 +187,11 @@ model CheckpointIdGitOidJoin {
   @@index([checkpointId])
 }
 
+model ArchivedSession {
+  sessionId  String   @id
+  archivedAt DateTime @default(now())
+}
+
 // ─── Full JSONL log tables ─────────────────────────────────────────────────────
 // One row per line in full.jsonl, with normalized sub-tables for content blocks,
 // token usage, progress events, and system events.

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Center, Loader, Alert, Text, Table, Box, SegmentedControl, Group, Anchor } from "@mantine/core";
-import { fetchSessions, fetchRepoStatuses, subscribeToUpdates, type Session, type RepoStatus } from "../api";
+import { Center, Loader, Alert, Text, Table, Box, SegmentedControl, Group, Anchor, Button, Modal, Textarea, Select, Switch, Tooltip } from "@mantine/core";
+import { fetchSessions, fetchRepoStatuses, spawnSession, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, type Session, type RepoStatus } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { useTabs } from "../TabsContext";
@@ -14,6 +14,7 @@ const SESSION_COLUMNS: { label: string; width: number }[] = [
   { label: "Parent",      width: COL_WIDTHS.parentSessionId },
   { label: "Started",     width: COL_WIDTHS.started         },
   { label: "Updated",     width: COL_WIDTHS.updated         },
+  { label: "",            width: COL_WIDTHS.actions         },
 ];
 
 const REPO_COLUMNS = ["Repo", "User", "Branch"] as const;
@@ -21,7 +22,7 @@ const REPO_COLUMNS = ["Repo", "User", "Branch"] as const;
 const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
 export function ActiveSessions() {
-  const { openSessionTab, openBranchLogTab } = useTabs();
+  const { openSessionTab, openBranchLogTab, openLauncherTab } = useTabs();
   const [view, setView] = useState<"sessions" | "repos">("sessions");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [repoStatuses, setRepoStatuses] = useState<RepoStatus[]>([]);
@@ -29,10 +30,24 @@ export function ActiveSessions() {
   const [error, setError] = useState<string | null>(null);
   const { setCrumbs } = useBreadcrumb();
 
-  const load = useCallback(async () => {
+  const [newSessionOpen, setNewSessionOpen] = useState(false);
+  const [newPrompt, setNewPrompt] = useState("");
+  const [newCwd, setNewCwd] = useState("");
+  const [spawning, setSpawning] = useState(false);
+  const [spawnError, setSpawnError] = useState<string | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
+
+  const load = useCallback(async (archived = false) => {
     try {
-      const [data, statuses] = await Promise.all([fetchSessions(), fetchRepoStatuses()]);
-      setSessions(data);
+      const [data, archivedData, statuses] = await Promise.all([
+        fetchSessions(false),
+        fetchSessions(true),
+        fetchRepoStatuses(),
+      ]);
+      setSessions(archived ? archivedData : data);
+      setArchivedIds(new Set(archivedData.map((s) => s.sessionId)));
       setRepoStatuses(statuses);
       setError(null);
       return data;
@@ -43,15 +58,52 @@ export function ActiveSessions() {
   }, []);
 
   useEffect(() => {
-    load().then((data) => {
+    load(showArchived).then((data) => {
       const first = data[0];
       const user = first?.gitUserName ?? first?.gitUserEmail ?? null;
       setCrumbs([
         ...(user ? [{ label: user }] : []),
       ]);
     }).finally(() => setLoading(false));
-    return subscribeToUpdates(() => { load().catch(() => undefined); });
-  }, [load]);
+    return subscribeToUpdates(() => { load(showArchived).catch(() => undefined); });
+  }, [load, showArchived]);
+
+  async function handleArchive(sessionId: string) {
+    const isCurrentlyArchived = archivedIds.has(sessionId);
+    try {
+      if (isCurrentlyArchived) {
+        await unarchiveSession(sessionId);
+      } else {
+        await archiveSession(sessionId);
+      }
+      await load(showArchived);
+    } catch { /* ignore */ }
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    try {
+      await syncSessions();
+      await load(showArchived);
+    } catch { /* ignore */ } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function handleSpawn() {
+    if (!newPrompt.trim()) return;
+    setSpawning(true);
+    setSpawnError(null);
+    try {
+      await spawnSession(newPrompt.trim(), newCwd || (repoStatuses[0]?.localPath ?? process.env.HOME ?? "/"));
+      setNewSessionOpen(false);
+      setNewPrompt("");
+    } catch (err) {
+      setSpawnError(String(err));
+    } finally {
+      setSpawning(false);
+    }
+  }
 
   if (loading) {
     return <Center style={{ flex: 1 }}><Loader size="md" color="indigo" /></Center>;
@@ -71,18 +123,80 @@ export function ActiveSessions() {
     );
   }
 
+  const cwdOptions = repoStatuses.map((r) => ({ value: r.localPath, label: r.name ?? r.localPath }));
+
   return (
     <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-      <Group px={12} py={8} style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))", flexShrink: 0 }}>
-        <SegmentedControl
-          size="xs"
-          value={view}
-          onChange={(v) => setView(v as "sessions" | "repos")}
-          data={[
-            { label: "Sessions", value: "sessions" },
-            { label: "Repos",    value: "repos"    },
-          ]}
+      <Modal
+        opened={newSessionOpen}
+        onClose={() => { setNewSessionOpen(false); setSpawnError(null); }}
+        title="New session"
+        size="md"
+      >
+        {cwdOptions.length > 0 && (
+          <Select
+            label="Working directory"
+            placeholder="Pick a repo…"
+            data={cwdOptions}
+            value={newCwd || null}
+            onChange={(v) => setNewCwd(v ?? "")}
+            mb="sm"
+            clearable
+          />
+        )}
+        <Textarea
+          label="Prompt"
+          placeholder="What should Claude do?"
+          autosize
+          minRows={4}
+          maxRows={12}
+          value={newPrompt}
+          onChange={(e) => setNewPrompt(e.currentTarget.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSpawn(); }}
+          mb="sm"
+          data-autofocus
         />
+        {spawnError && <Text size="xs" c="red" mb="sm">{spawnError}</Text>}
+        <Group justify="flex-end">
+          <Button variant="default" size="xs" onClick={() => setNewSessionOpen(false)}>Cancel</Button>
+          <Button size="xs" color="indigo" loading={spawning} disabled={!newPrompt.trim()} onClick={handleSpawn}>
+            Start session
+          </Button>
+        </Group>
+      </Modal>
+
+      <Group px={12} py={8} justify="space-between" style={{ borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))", flexShrink: 0 }}>
+        <Group gap={8}>
+          <SegmentedControl
+            size="xs"
+            value={view}
+            onChange={(v) => setView(v as "sessions" | "repos")}
+            data={[
+              { label: "Sessions", value: "sessions" },
+              { label: "Repos",    value: "repos"    },
+            ]}
+          />
+          {view === "sessions" && (
+            <Switch
+              size="xs"
+              label="Archived"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.currentTarget.checked)}
+            />
+          )}
+        </Group>
+        <Group gap={8}>
+          {view === "sessions" && (
+            <Tooltip label="Sync active sessions" withArrow>
+              <Button size="xs" variant="default" loading={syncing} onClick={handleSync}>
+                Sync
+              </Button>
+            </Tooltip>
+          )}
+          <Button size="xs" color="indigo" onClick={() => { setNewSessionOpen(true); setSpawnError(null); }}>
+            New session
+          </Button>
+        </Group>
       </Group>
 
       {view === "sessions" ? (
@@ -112,6 +226,15 @@ export function ActiveSessions() {
                           item.summary ?? item.intent ?? item.sessionId.slice(0, 8) + "…",
                         )
                       }
+                      onResume={(s) =>
+                        openLauncherTab(
+                          s.cwd,
+                          `claude resume ${s.sessionId}`,
+                          `resume ${s.sessionId.slice(0, 8)}…`,
+                        )
+                      }
+                      onArchive={handleArchive}
+                      isArchived={archivedIds.has(item.sessionId)}
                     />
                   ))}
                 </Table.Tbody>

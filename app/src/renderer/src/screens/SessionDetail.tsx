@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams, useLocation } from "react-router-dom";
 import { useBreadcrumb } from "../BreadcrumbContext";
+import { useTabs } from "../TabsContext";
 import { Center, Loader, Text, ScrollArea, Box, Badge, Group, UnstyledButton, Collapse, Checkbox, ActionIcon, Tooltip, Menu } from "@mantine/core";
 import {
   fetchSession,
@@ -17,6 +18,7 @@ import {
   type LogEventItem,
 } from "../api";
 import { EventItem, type UserInfo } from "../components/EventItem";
+import { EmbeddedTerminal } from "../components/EmbeddedTerminal";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView, InlineMarkdown } from "../components/MarkdownView";
 import { html as diff2htmlHtml } from "diff2html";
@@ -734,6 +736,7 @@ export function SessionDetail() {
 
   const id = sessionId!;
   const { setCrumbs } = useBreadcrumb();
+  const { updateTabTitle } = useTabs();
 
   function applyData(logEvs: LogEventItem[], cps: SessionCheckpoint[], autoSelect = false) {
     const sorted = [...cps].sort((a, b) => (a.createdAt ?? "") < (b.createdAt ?? "") ? -1 : 1);
@@ -754,6 +757,8 @@ export function SessionDetail() {
       .then(([s, logEvs, cps]) => {
         logEventsRef.current = logEvs;
         setSession(s);
+        const title = s.summary ?? s.intent ?? s.prompt?.slice(0, 80) ?? s.sessionId.slice(0, 8) + "…";
+        updateTabTitle(`session:${s.sessionId}`, title);
         const user = s.gitUserName ?? s.gitUserEmail ?? null;
         const repo = s.repoName ?? null;
         const shortId = s.sessionId.slice(0, 8) + "…";
@@ -896,9 +901,10 @@ export function SessionDetail() {
             </UnstyledButton>
           );
         })}
-      </Box>
+      </Box>{/* end left column */}
 
-      {/* ── Right: chat panel (2/3) ───────────────────────────────────── */}
+      {/* ── Right: conversation + terminal (2/3) ─────────────────────── */}
+      <Box style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <ScrollArea style={{ flex: 1 }} viewportRef={viewportRef}>
         <Box style={{ maxWidth: 860, margin: "0 auto", paddingBottom: 40 }}>
 
@@ -1054,6 +1060,10 @@ export function SessionDetail() {
           </>)}
         </Box>
       </ScrollArea>
+      {(session?.repoRoot ?? session?.cwd) && (
+        <EmbeddedTerminal cwd={session.repoRoot ?? session.cwd} />
+      )}
+      </Box>{/* end right column */}
     </Box>
   );
 }
