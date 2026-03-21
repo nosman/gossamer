@@ -1,1 +1,5 @@
-// No IPC needed — all data comes from localhost:3000 HTTP/WS
+import { contextBridge, ipcRenderer } from "electron";
+
+contextBridge.exposeInMainWorld("electronAPI", {
+  openWindow: (tabParam: string) => ipcRenderer.invoke("open-window", tabParam),
+});
