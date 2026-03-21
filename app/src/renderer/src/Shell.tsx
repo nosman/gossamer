@@ -132,9 +132,9 @@ function HomeTab() {
 // Session tab — its own MemoryRouter
 // ---------------------------------------------------------------------------
 
-function SessionTab({ sessionId }: { sessionId: string }) {
+function SessionTab({ sessionId, initialSearch, initialState }: { sessionId: string; initialSearch?: string; initialState?: unknown }) {
   return (
-    <MemoryRouter initialEntries={[`/sessions/${sessionId}`]}>
+    <MemoryRouter initialEntries={[{ pathname: `/sessions/${sessionId}`, search: initialSearch ?? "", state: initialState }]}>
       <Routes>
         <Route path="/sessions/:sessionId" element={<SessionDetail />} />
         <Route path="/checkpoints/:checkpointId" element={<CheckpointDetail />} />
@@ -172,7 +172,7 @@ function BranchLogTab({
 // ---------------------------------------------------------------------------
 
 function TabContent({ tab }: { tab: Tab }) {
-  if (tab.type === "session") return <SessionTab sessionId={tab.sessionId} />;
+  if (tab.type === "session") return <SessionTab sessionId={tab.sessionId} initialSearch={tab.initialSearch} initialState={tab.initialState} />;
   if (tab.type === "branchLog") {
     return <BranchLogTab localPath={tab.localPath} branch={tab.branch} repoName={tab.repoName} />;
   }

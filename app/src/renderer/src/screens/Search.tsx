@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { ScrollArea, Box, Text, Group, Badge, Center, Loader, UnstyledButton, Avatar, Chip } from "@mantine/core";
+import { useTabs } from "../TabsContext";
 import { fetchSearch, type SearchResult } from "../api";
 import { TimeAgo } from "../components/TimeAgo";
 import { MarkdownView } from "../components/MarkdownView";
@@ -145,7 +146,7 @@ const TYPE_FILTERS: { value: string; label: string; contentType: string | null }
 ];
 
 export function Search() {
-  const navigate = useNavigate();
+  const { openSessionTab } = useTabs();
   const [params] = useSearchParams();
   const query = params.get("q") ?? "";
 
@@ -203,8 +204,12 @@ export function Search() {
                 key={r.logContentId}
                 r={r}
                 onClick={() => {
-                  console.log("[search] clicking result — sessionId:", r.sessionId, "logEventId:", r.logEventId, "logContentId:", r.logContentId, "snippet:", r.snippet);
-                  navigate(`/sessions/${r.sessionId}?logEventId=${r.logEventId}`, { state: { snippet: r.snippet, contentType: r.contentType } });
+                  openSessionTab(
+                    r.sessionId,
+                    r.sessionId.slice(0, 8) + "…",
+                    `?logEventId=${r.logEventId}`,
+                    { snippet: r.snippet, contentType: r.contentType },
+                  );
                 }}
               />
             ))}

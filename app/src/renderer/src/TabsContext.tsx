@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useRef, useState } from 
 
 export type Tab =
   | { id: "home"; type: "home"; title: string }
-  | { id: string; type: "session"; sessionId: string; title: string }
+  | { id: string; type: "session"; sessionId: string; title: string; initialSearch?: string; initialState?: unknown }
   | { id: string; type: "branchLog"; localPath: string; branch: string; repoName: string | null; title: string };
 
 type NavigateFn = (to: string | number) => void;
@@ -11,7 +11,7 @@ interface TabsContextValue {
   tabs: Tab[];
   activeTabId: string;
   homePathname: string;
-  openSessionTab: (sessionId: string, title: string) => void;
+  openSessionTab: (sessionId: string, title: string, initialSearch?: string, initialState?: unknown) => void;
   openBranchLogTab: (localPath: string, branch: string, repoName: string | null) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
@@ -62,11 +62,11 @@ export function TabsProvider({
   const [homePathname, setHomePathname] = useState("/");
   const homeNavigateRef = useRef<NavigateFn | null>(null);
 
-  const openSessionTab = useCallback((sessionId: string, title: string) => {
+  const openSessionTab = useCallback((sessionId: string, title: string, initialSearch?: string, initialState?: unknown) => {
     const id = `session:${sessionId}`;
     setTabs((prev) => {
       if (prev.find((t) => t.id === id)) return prev;
-      return [...prev, { id, type: "session", sessionId, title }];
+      return [...prev, { id, type: "session", sessionId, title, initialSearch, initialState }];
     });
     setActiveTabId(id);
   }, []);
