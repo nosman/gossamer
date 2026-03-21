@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7431c5ecf31a",
+  "session_id": "ad51af30-7c32-4b9e-8c8f-af8208d2f324",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T15:10:53.747801Z",
+  "branch": "README",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "app/package-lock.json",
+    "app/package.json",
+    "app/src/renderer/src/Shell.tsx",
+    "app/src/renderer/src/TabsContext.tsx",
+    "app/src/renderer/src/api.ts",
+    "app/src/renderer/src/components/SessionRow.tsx",
+    "app/src/renderer/src/screens/ActiveSessions.tsx",
+    "app/src/renderer/src/screens/LauncherScreen.tsx",
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "package-lock.json",
+    "package.json",
+    "prisma/schema.prisma",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "b0e705e9403c",
+  "token_usage": {
+    "input_tokens": 61,
+    "cache_creation_tokens": 69836,
+    "cache_read_tokens": 3329037,
+    "output_tokens": 24529,
+    "api_call_count": 57
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Add archive/hide functionality for sessions on the main screen, a sync button to refresh session state from `entire status`, and fix the arrow button to open sessions in a new in-app tab instead of using AppleScript.",
+    "outcome": "All three features were implemented: archive/unarchive buttons per session row, an archived sessions toggle, a sync endpoint, and a new LauncherScreen that opens resumed sessions as in-app tabs via WebSocket terminal.",
+    "learnings": {
+      "repo": [
+        "The gossamer database uses FTS5 virtual tables (SQLite full-text search), which are incompatible with `prisma db push` — schema migrations must be done via raw SQL executed on startup instead.",
+        "Session indexing runs via a shadow branch poller (`runAllShadows`) every 5 seconds; the sync endpoint triggers this immediately rather than waiting for the next poll.",
+        "The app uses a tab system with typed tab kinds (e.g. 'launcher'); new tab types require wiring in both TabsContext.tsx (creation) and Shell.tsx (rendering).",
+        "SessionRow was intentionally kept decoupled from TabsContext — resume behavior is passed in as an `onResume` callback from ActiveSessions rather than imported directly.",
+        "The LauncherScreen connects via WebSocket and uses a 300ms delay before typing the command to allow the shell to initialize."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "finding": "ArchivedSession table is created via raw SQL on server startup because prisma db push fails with FTS5 virtual tables present in the schema. The GET /api/sessions endpoint filters archived sessions by default and accepts ?archived=1 to show only archived ones."
+        },
+        {
+          "path": "prisma/schema.prisma",
+          "finding": "ArchivedSession model was added to the Prisma schema for type generation, but actual table creation bypasses prisma db push due to FTS5 incompatibility."
+        },
+        {
+          "path": "app/src/renderer/src/screens/LauncherScreen.tsx",
+          "finding": "New screen that renders a full-height xterm terminal connecting via WebSocket, typing a provided command after a 300ms initialization delay."
+        },
+        {
+          "path": "app/src/renderer/src/TabsContext.tsx",
+          "finding": "Added openLauncherTab(cwd, command, title) which creates a uniquely-keyed launcher tab each call, enabling multiple simultaneous resume sessions."
+        }
+      ],
+      "workflow": [
+        "When Prisma schema changes conflict with custom SQLite features (like FTS5), bypass prisma db push and use raw SQL migrations executed at application startup.",
+        "Building both the server (tsc) and Electron app separately helps catch TypeScript errors in each layer independently."
+      ]
+    },
+    "friction": [
+      "prisma db push failed due to FTS5 virtual tables in the existing schema, requiring a workaround of creating the ArchivedSession table via direct SQLite raw SQL.",
+      "Multiple iterative edits were needed to SessionRow and ActiveSessions to correctly wire the onResume callback pattern, suggesting the component interfaces weren't immediately obvious.",
+      "The original arrow button used AppleScript for session resumption rather than the in-app tab system, indicating the tab system was added after the initial session resume flow was built."
+    ],
+    "open_items": [
+      "The ArchivedSession table creation bypasses Prisma migrations entirely — future schema changes will need to manually handle this table outside of the normal migration workflow.",
+      "The LauncherScreen uses a hardcoded 300ms delay for shell initialization which may be unreliable on slow systems.",
+      "No unarchive flow is surfaced from the main screen by default — users must toggle the 'Archived' switch to find and restore hidden sessions."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T15:10:35.60223Z",
+    "agent_lines": 474,
+    "human_added": 192,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 667,
+    "agent_percentage": 71.06446776611695
+  }
+}

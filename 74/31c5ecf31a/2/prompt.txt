@@ -1,0 +1,5 @@
+The sessions main screen never gets rid of old sessions since they are always stored in our database. Let's create a delete or archive button on each row that lets us hide the session from the main screen. The session should still exist, just not show up. Also, add a sync button that syncs the state of the active sessions with the output of the command `entire status` which lists active sessions.
+
+---
+
+There is still the issue that clicking the arrow button on the main sessions screen doesn't open a new gossamer tab. Please fix this

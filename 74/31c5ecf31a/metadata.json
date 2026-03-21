@@ -3,15 +3,20 @@
   "checkpoint_id": "7431c5ecf31a",
   "strategy": "manual-commit",
   "branch": "README",
-  "checkpoints_count": 3,
+  "checkpoints_count": 5,
   "files_touched": [
     "app/package-lock.json",
     "app/package.json",
+    "app/src/renderer/src/Shell.tsx",
     "app/src/renderer/src/TabsContext.tsx",
+    "app/src/renderer/src/api.ts",
+    "app/src/renderer/src/components/SessionRow.tsx",
     "app/src/renderer/src/screens/ActiveSessions.tsx",
+    "app/src/renderer/src/screens/LauncherScreen.tsx",
     "app/src/renderer/src/screens/SessionDetail.tsx",
     "package-lock.json",
     "package.json",
+    "prisma/schema.prisma",
     "src/server.ts"
   ],
   "sessions": [
@@ -26,13 +31,19 @@
       "transcript": "/74/31c5ecf31a/1/full.jsonl",
       "content_hash": "/74/31c5ecf31a/1/content_hash.txt",
       "prompt": "/74/31c5ecf31a/1/prompt.txt"
+    },
+    {
+      "metadata": "/74/31c5ecf31a/2/metadata.json",
+      "transcript": "/74/31c5ecf31a/2/full.jsonl",
+      "content_hash": "/74/31c5ecf31a/2/content_hash.txt",
+      "prompt": "/74/31c5ecf31a/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 41,
-    "cache_creation_tokens": 71147,
-    "cache_read_tokens": 1041664,
-    "output_tokens": 9410,
-    "api_call_count": 33
+    "input_tokens": 102,
+    "cache_creation_tokens": 140983,
+    "cache_read_tokens": 4370701,
+    "output_tokens": 33939,
+    "api_call_count": 90
   }
 }
