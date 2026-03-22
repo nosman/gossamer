@@ -1,0 +1,1 @@
+Let's persist open tabs and sessions so that the next time the user opens the app, they pick up where they left off.
