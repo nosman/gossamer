@@ -1,0 +1,95 @@
+The sessions main screen never gets rid of old sessions since they are always stored in our database. Let's create a delete or archive button on each row that lets us hide the session from the main screen. The session should still exist, just not show up. Also, add a sync button that syncs the state of the active sessions with the output of the command `entire status` which lists active sessions.
+
+---
+
+There is still the issue that clicking the arrow button on the main sessions screen doesn't open a new gossamer tab. Please fix this
+
+---
+
+New sessions are also starting a new terminal window. They should only be opening a new tab WITHIN the app and creating a new session object with it! Get rid of the arrow button on the main session rows as well.
+
+---
+
+There shouldn't be a tab with just a terminal window. Create a new spawn session opens a tab, creates a new claude xterm session, then writes a new row to the database with the session details in it. We should see checkpoints appearing as we create them
+
+---
+
+I want to visualize which child claude sessions came from which parent in the main session window. Do you think it makes more sense to show the child sessions in a nested dropdown table under the parent session row, or just show the child sessions as normal rows and populate the "parent" field with the session id of the parent?
+
+---
+
+Yes let's implement the flat approach
+
+---
+
+To understand the SubAgentStart and Stop events, look at the ../cli/CLAUDE.md in the entire project. The basic description of how it handles subagents calls is: 1. Agent-level hook parsing (per-agent lifecycle files)                                                                                     
+                                                                                                                                              
+  Each agent translates its native hooks into normalized SubagentStart/SubagentEnd events:                                                    
+                  
+  - Claude Code (cmd/entire/cli/agent/claudecode/lifecycle.go:153-185): maps PreTask → SubagentStart and PostTask → SubagentEnd. The PostTask 
+  payload includes a tool_response.agentId field that becomes event.SubagentID — this is the spawned session's ID.
+  - Cursor (cmd/entire/cli/agent/cursor/lifecycle.go:154-183): maps subagent-start/subagent-stop hooks.                                       
+  - Factory AI Droid (cmd/entire/cli/agent/factoryaidroid/lifecycle.go:229-260): same pattern.                                                
+  - Copilot CLI (cmd/entire/cli/agent/copilotcli/lifecycle.go:134): emits SubagentEnd on its subagentStop hook.                               
+                                                                                                                                              
+  The key linking field is event.ToolUseID — the tool_use_id from the parent's Task tool call, which ties the subagent's transcript to the    
+  parent session.                                                                                                                             
+                                                                                                                                              
+  2. Normalized event dispatch (cmd/entire/cli/lifecycle.go:51-54)                                                                            
+  
+  case agent.SubagentStart:                                                                                                                   
+      return handleLifecycleSubagentStart(...)                                                                                                
+  case agent.SubagentEnd:
+      return handleLifecycleSubagentEnd(...)                                                                                                  
+                                                                                                                                              
+  3. SubagentStart (lifecycle.go:631-647)
+                                                                                                                                              
+  Captures a pre-task filesystem snapshot keyed by ToolUseID via CapturePreTaskState. This baseline is used later to detect what the subagent 
+  actually changed.
+                                                                                                                                              
+  4. SubagentEnd (lifecycle.go:649-779)                                                                                                       
+  
+  - Resolves the subagent's transcript path: <transcriptDir>/agent-<SubagentID>.jsonl                                                         
+  - Extracts modified files from the subagent transcript (via TranscriptAnalyzer)
+  - Diffs filesystem against the pre-task state                                                                                               
+  - Calls strat.SaveTaskStep() which writes a checkpoint to the shadow branch at tasks/<tool_use_id>/ — the same path structure documented in
+  CLAUDE.md
+
+---
+
+To understand the SubAgentStart and Stop events, look at the ../cli/CLAUDE.md in the entire project. The basic description of how it handles subagents calls is: 1. Agent-level hook parsing (per-agent lifecycle files)                                                                                     
+                                                                                                                                              
+  Each agent translates its native hooks into normalized SubagentStart/SubagentEnd events:                                                    
+                  
+  - Claude Code (cmd/entire/cli/agent/claudecode/lifecycle.go:153-185): maps PreTask → SubagentStart and PostTask → SubagentEnd. The PostTask 
+  payload includes a tool_response.agentId field that becomes event.SubagentID — this is the spawned session's ID.
+  - Cursor (cmd/entire/cli/agent/cursor/lifecycle.go:154-183): maps subagent-start/subagent-stop hooks.                                       
+  - Factory AI Droid (cmd/entire/cli/agent/factoryaidroid/lifecycle.go:229-260): same pattern.                                                
+  - Copilot CLI (cmd/entire/cli/agent/copilotcli/lifecycle.go:134): emits SubagentEnd on its subagentStop hook.                               
+                                                                                                                                              
+  The key linking field is event.ToolUseID — the tool_use_id from the parent's Task tool call, which ties the subagent's transcript to the    
+  parent session.                                                                                                                             
+                                                                                                                                              
+  2. Normalized event dispatch (cmd/entire/cli/lifecycle.go:51-54)                                                                            
+  
+  case agent.SubagentStart:                                                                                                                   
+      return handleLifecycleSubagentStart(...)                                                                                                
+  case agent.SubagentEnd:
+      return handleLifecycleSubagentEnd(...)                                                                                                  
+                                                                                                                                              
+  3. SubagentStart (lifecycle.go:631-647)
+                                                                                                                                              
+  Captures a pre-task filesystem snapshot keyed by ToolUseID via CapturePreTaskState. This baseline is used later to detect what the subagent 
+  actually changed.
+                                                                                                                                              
+  4. SubagentEnd (lifecycle.go:649-779)                                                                                                       
+  
+  - Resolves the subagent's transcript path: <transcriptDir>/agent-<SubagentID>.jsonl                                                         
+  - Extracts modified files from the subagent transcript (via TranscriptAnalyzer)
+  - Diffs filesystem against the pre-task state                                                                                               
+  - Calls strat.SaveTaskStep() which writes a checkpoint to the shadow branch at tasks/<tool_use_id>/ — the same path structure documented in
+  CLAUDE.md
+
+---
+
+@"ts-code-reviewer (agent)" check the state of the project. We are creating raw sql tables which is an anti-pattern.
