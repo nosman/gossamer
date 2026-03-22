@@ -1,0 +1,9 @@
+Test new session workflow
+
+---
+
+I am seeing delays with events from the xterm session not appearing in the SessionDetail conversation UI right above it
+
+---
+
+Shouldn't the websocket already be handling this tho? Why am i not getting events from the web socket?
