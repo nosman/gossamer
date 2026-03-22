@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f464324f083a",
+  "session_id": "3693a81d-438c-4d21-ace4-6b95ab818f0a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T16:54:19.610085Z",
+  "branch": "README",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "app/src/renderer/src/Shell.tsx",
+    "app/src/renderer/src/TabsContext.tsx",
+    "app/src/renderer/src/components/EmbeddedTerminal.tsx",
+    "app/src/renderer/src/components/SessionRow.tsx",
+    "app/src/renderer/src/screens/ActiveSessions.tsx",
+    "app/src/renderer/src/screens/LauncherScreen.tsx",
+    "app/src/renderer/src/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "109f104d5e13",
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 44271,
+    "cache_read_tokens": 651737,
+    "output_tokens": 6277,
+    "api_call_count": 17
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Persist open tabs across app restarts so users see the same tabs when they reopen the Electron app.",
+    "outcome": "Tab state persistence was implemented using localStorage in the renderer, with spawn tabs excluded on restore (their PTY is gone) and dedicated windows unaffected.",
+    "learnings": {
+      "repo": [
+        "Tab state lives entirely in TabsContext.tsx — the single source of truth for tab management in the renderer.",
+        "Dedicated terminal windows use a ?tab= URL param to identify their tab; the main window does not, enabling selective persistence logic.",
+        "Spawn tabs (SpawnSessionScreen) have ephemeral PTY state that cannot be restored after app restart.",
+        "SessionDetail.tsx accepts a hideTerminal flag via location.state to prevent double-rendering the terminal when spawned from SpawnSessionScreen.",
+        "Live sessions use a 500ms polling loop in SessionDetail.tsx rather than relying solely on the server's 2s broadcast interval."
+      ],
+      "code": [],
+      "workflow": [
+        "localStorage is sufficient for tab persistence in Electron — no need to involve the main process or preload scripts.",
+        "Resuming a session starts by reading modified files and git diff to reconstruct context before proceeding."
+      ]
+    },
+    "friction": [
+      "Session had to be resumed from scratch, requiring multiple file reads and a git diff to reconstruct prior context before proceeding."
+    ],
+    "open_items": [
+      "SpawnSessionScreen.tsx was untracked/uncommitted at resume time along with several other supporting files — these changes may not yet be committed.",
+      "Spawn tabs are intentionally not restored; if PTY resurrection across restarts becomes desirable, that would require a more complex solution.",
+      "The 500ms polling loop for live sessions in SessionDetail.tsx is a workaround for the server's 2s broadcast cadence — a push-based update mechanism could replace this."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T16:54:07.937903Z",
+    "agent_lines": 138,
+    "human_added": 142,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 280,
+    "agent_percentage": 49.28571428571429
+  }
+}
