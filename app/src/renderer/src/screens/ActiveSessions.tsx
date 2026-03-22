@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from "react";
 import { Center, Loader, Alert, Text, Table, Box, SegmentedControl, Group, Anchor, Button, Modal, Textarea, Select, Switch, Tooltip } from "@mantine/core";
-import { fetchSessions, fetchRepoStatuses, spawnSession, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, type Session, type RepoStatus } from "../api";
+import { fetchSessions, fetchRepoStatuses, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, type Session, type RepoStatus } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { useBreadcrumb } from "../BreadcrumbContext";
 import { useTabs } from "../TabsContext";
@@ -22,7 +22,7 @@ const REPO_COLUMNS = ["Repo", "User", "Branch"] as const;
 const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
 export function ActiveSessions() {
-  const { openSessionTab, openBranchLogTab, openLauncherTab } = useTabs();
+  const { openSessionTab, openBranchLogTab, openSpawnTab } = useTabs();
   const [view, setView] = useState<"sessions" | "repos">("sessions");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [repoStatuses, setRepoStatuses] = useState<RepoStatus[]>([]);
@@ -33,8 +33,6 @@ export function ActiveSessions() {
   const [newSessionOpen, setNewSessionOpen] = useState(false);
   const [newPrompt, setNewPrompt] = useState("");
   const [newCwd, setNewCwd] = useState("");
-  const [spawning, setSpawning] = useState(false);
-  const [spawnError, setSpawnError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
@@ -90,19 +88,14 @@ export function ActiveSessions() {
     }
   }
 
-  async function handleSpawn() {
-    if (!newPrompt.trim()) return;
-    setSpawning(true);
-    setSpawnError(null);
-    try {
-      await spawnSession(newPrompt.trim(), newCwd || (repoStatuses[0]?.localPath ?? process.env.HOME ?? "/"));
-      setNewSessionOpen(false);
-      setNewPrompt("");
-    } catch (err) {
-      setSpawnError(String(err));
-    } finally {
-      setSpawning(false);
-    }
+  function handleSpawn() {
+    const prompt = newPrompt.trim();
+    if (!prompt) return;
+    const cwd = newCwd || (repoStatuses[0]?.localPath ?? process.env.HOME ?? "/");
+    const escaped = prompt.replace(/'/g, "'\\''");
+    setNewSessionOpen(false);
+    setNewPrompt("");
+    openSpawnTab(cwd, `claude '${escaped}'`, prompt.slice(0, 40) + (prompt.length > 40 ? "…" : ""));
   }
 
   if (loading) {
@@ -129,7 +122,7 @@ export function ActiveSessions() {
     <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
       <Modal
         opened={newSessionOpen}
-        onClose={() => { setNewSessionOpen(false); setSpawnError(null); }}
+        onClose={() => setNewSessionOpen(false)}
         title="New session"
         size="md"
       >
@@ -156,10 +149,9 @@ export function ActiveSessions() {
           mb="sm"
           data-autofocus
         />
-        {spawnError && <Text size="xs" c="red" mb="sm">{spawnError}</Text>}
         <Group justify="flex-end">
           <Button variant="default" size="xs" onClick={() => setNewSessionOpen(false)}>Cancel</Button>
-          <Button size="xs" color="indigo" loading={spawning} disabled={!newPrompt.trim()} onClick={handleSpawn}>
+          <Button size="xs" color="indigo" disabled={!newPrompt.trim()} onClick={handleSpawn}>
             Start session
           </Button>
         </Group>
@@ -193,7 +185,7 @@ export function ActiveSessions() {
               </Button>
             </Tooltip>
           )}
-          <Button size="xs" color="indigo" onClick={() => { setNewSessionOpen(true); setSpawnError(null); }}>
+          <Button size="xs" color="indigo" onClick={() => setNewSessionOpen(true)}>
             New session
           </Button>
         </Group>
@@ -226,15 +218,15 @@ export function ActiveSessions() {
                           item.summary ?? item.intent ?? item.sessionId.slice(0, 8) + "…",
                         )
                       }
-                      onResume={(s) =>
-                        openLauncherTab(
-                          s.cwd,
-                          `claude resume ${s.sessionId}`,
-                          `resume ${s.sessionId.slice(0, 8)}…`,
-                        )
-                      }
                       onArchive={handleArchive}
                       isArchived={archivedIds.has(item.sessionId)}
+                      onParentPress={(parentId) => {
+                        const parent = sessions.find((s) => s.sessionId === parentId);
+                        openSessionTab(
+                          parentId,
+                          parent?.summary ?? parent?.intent ?? parentId.slice(0, 8) + "…",
+                        );
+                      }}
                     />
                   ))}
                 </Table.Tbody>

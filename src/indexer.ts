@@ -832,6 +832,9 @@ export async function indexAllShadowBranches(
       process.stderr.write(`shadow indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from ${branch}\n`);
       totalSessions++;
     }
+
+    // Also index task checkpoint files to build parent-child session relationships.
+    await indexTaskRelationships(db, repoPath, branch);
   }
 
   if (totalSessions > 0) {
@@ -840,4 +843,57 @@ export async function indexAllShadowBranches(
   }
 
   return { sessions: totalSessions };
+}
+
+/**
+ * Read task checkpoint files from a shadow branch and store parent→child session
+ * relationships in the SessionParent table.
+ *
+ * Task checkpoint files live at:
+ *   .entire/metadata/<parentSessionId>/tasks/<toolUseId>/checkpoint.json
+ *
+ * The child session is identified by finding the LogEvent whose parentToolUseId
+ * matches the task's toolUseId (set on the child's first progress event).
+ */
+async function indexTaskRelationships(
+  db: PrismaClient,
+  repoPath: string,
+  branch: string,
+): Promise<void> {
+  let output: string;
+  try {
+    output = gitExec(`ls-tree -r ${branch} -- .entire/metadata/`, repoPath);
+  } catch { return; }
+
+  for (const line of output.split("\n")) {
+    const m = line.match(
+      /^100644 blob ([0-9a-f]+)\s+\.entire\/metadata\/([^/]+)\/tasks\/([^/]+)\/checkpoint\.json$/,
+    );
+    if (!m) continue;
+    const [, blobSha, parentSessionId, toolUseId] = m;
+
+    try {
+      const content = readBlobContent(repoPath, blobSha);
+      JSON.parse(content); // validate it's parseable; we don't need fields yet
+
+      // Find the child session that references this toolUseId as its parentToolUseId.
+      const childEvent = await db.logEvent.findFirst({
+        where: {
+          parentToolUseId: toolUseId,
+          type: "progress",
+          sessionId: { not: null },
+        },
+        select: { sessionId: true },
+      });
+
+      const childSessionId = childEvent?.sessionId;
+      if (!childSessionId || childSessionId === parentSessionId) continue;
+
+      await db.sessionParent.upsert({
+        where:  { childSessionId },
+        create: { childSessionId, parentSessionId, toolUseId },
+        update: {},
+      });
+    } catch { /* skip malformed checkpoint */ }
+  }
 }

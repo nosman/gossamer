@@ -8,12 +8,14 @@ interface Props {
   cwd: string;
   /** Initial height in px for the terminal panel (excluding header). */
   defaultHeight?: number;
+  /** Command to type into the shell after connection is established. */
+  command?: string;
 }
 
 const MIN_HEIGHT = 80;
 const HEADER_H = 28;
 
-export function EmbeddedTerminal({ cwd, defaultHeight = 220 }: Props) {
+export function EmbeddedTerminal({ cwd, defaultHeight = 220, command }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -71,6 +73,11 @@ export function EmbeddedTerminal({ cwd, defaultHeight = 220 }: Props) {
     ws.onopen = () => {
       const { cols, rows } = term;
       ws.send(JSON.stringify({ type: "resize", cols, rows }));
+      if (command) {
+        setTimeout(() => {
+          ws.send(JSON.stringify({ type: "data", data: command + "\n" }));
+        }, 300);
+      }
     };
 
     ws.onmessage = (e) => {

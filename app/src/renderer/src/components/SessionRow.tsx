@@ -6,9 +6,9 @@ import { relativeTime, absoluteTime } from "./TimeAgo";
 interface Props {
   session: Session;
   onPress: () => void;
-  onResume?: (session: Session) => void;
   onArchive?: (sessionId: string) => void;
   isArchived?: boolean;
+  onParentPress?: (sessionId: string) => void;
 }
 
 export const COL_WIDTHS = {
@@ -79,7 +79,7 @@ function CopyCell({ copyValue, width, children, prefix }: CopyCellProps) {
   );
 }
 
-export function SessionRow({ session, onPress, onResume, onArchive, isArchived }: Props) {
+export function SessionRow({ session, onPress, onArchive, isArchived, onParentPress }: Props) {
   const dot = activityDot(session.updatedAt);
   const intent = session.intent ?? session.summary ?? session.prompt?.slice(0, 160) ?? "—";
   const shortId = session.sessionId.slice(0, 8) + "…";
@@ -87,8 +87,7 @@ export function SessionRow({ session, onPress, onResume, onArchive, isArchived }
   const [archiving, setArchiving] = useState(false);
 
   return (
-    <>
-      <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
+    <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
         <CopyCell
           copyValue={session.sessionId}
           width={COL_WIDTHS.sessionId}
@@ -102,22 +101,6 @@ export function SessionRow({ session, onPress, onResume, onArchive, isArchived }
             <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
               {shortId}
             </Text>
-            {onResume && (
-              <Tooltip label="Resume in tab" withArrow position="top" openDelay={300}>
-                <ActionIcon
-                  size="sm"
-                  variant="light"
-                  color="indigo"
-                  style={{ flexShrink: 0 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onResume(session);
-                  }}
-                >
-                  →
-                </ActionIcon>
-              </Tooltip>
-            )}
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live
@@ -159,7 +142,17 @@ export function SessionRow({ session, onPress, onResume, onArchive, isArchived }
         </CopyCell>
 
         <CopyCell copyValue={session.parentSessionId ?? ""} width={COL_WIDTHS.parentSessionId}>
-          {shortParent ? (
+          {session.parentSessionId && onParentPress ? (
+            <Anchor
+              ff="monospace"
+              size="sm"
+              onClick={(e) => { e.stopPropagation(); onParentPress(session.parentSessionId as string); }}
+              underline="never"
+              style={{ cursor: "pointer" }}
+            >
+              {shortParent}
+            </Anchor>
+          ) : shortParent ? (
             <Text ff="monospace" size="sm" c="blue">{shortParent}</Text>
           ) : (
             <Text size="sm" c="dimmed">—</Text>
@@ -194,7 +187,6 @@ export function SessionRow({ session, onPress, onResume, onArchive, isArchived }
             </Tooltip>
           )}
         </Table.Td>
-      </Table.Tr>
-    </>
+    </Table.Tr>
   );
 }

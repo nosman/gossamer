@@ -716,8 +716,9 @@ export function SessionDetail() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
   const targetLogEventId = searchParams.get("logEventId") ? parseInt(searchParams.get("logEventId")!) : null;
-  const searchSnippet = (location.state as { snippet?: string; contentType?: string } | null)?.snippet ?? null;
-  const searchContentType = (location.state as { snippet?: string; contentType?: string } | null)?.contentType ?? null;
+  const searchSnippet = (location.state as { snippet?: string; contentType?: string; hideTerminal?: boolean } | null)?.snippet ?? null;
+  const searchContentType = (location.state as { snippet?: string; contentType?: string; hideTerminal?: boolean } | null)?.contentType ?? null;
+  const hideTerminal = (location.state as { hideTerminal?: boolean } | null)?.hideTerminal ?? false;
   const [highlightActive, setHighlightActive] = useState(false);
   const scrolledRef = useRef(false);
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -790,6 +791,21 @@ export function SessionDetail() {
         .catch(() => undefined);
     });
   }, [id]);
+
+  // When the session is live (actively running), poll at 500ms so the UI
+  // stays current without waiting for the server's 2s broadcast cycle.
+  useEffect(() => {
+    if (!session?.isLive) return;
+    const timer = setInterval(() => {
+      Promise.all([fetchLogEvents(id), fetchSessionCheckpoints(id)])
+        .then(([logEvs, cps]) => {
+          logEventsRef.current = logEvs;
+          applyData(logEvs, cps);
+        })
+        .catch(() => undefined);
+    }, 500);
+    return () => clearInterval(timer);
+  }, [id, session?.isLive]);
 
   useEffect(() => {
     if (targetLogEventId === null || groups.size === 0 || scrolledRef.current) return;
@@ -1060,7 +1076,7 @@ export function SessionDetail() {
           </>)}
         </Box>
       </ScrollArea>
-      {(session?.repoRoot ?? session?.cwd) && (
+      {!hideTerminal && (session?.repoRoot ?? session?.cwd) && (
         <EmbeddedTerminal cwd={session.repoRoot ?? session.cwd} />
       )}
       </Box>{/* end right column */}

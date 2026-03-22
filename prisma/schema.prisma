@@ -192,6 +192,14 @@ model ArchivedSession {
   archivedAt DateTime @default(now())
 }
 
+model SessionParent {
+  childSessionId  String  @id
+  parentSessionId String
+  toolUseId       String?
+
+  @@index([parentSessionId])
+}
+
 // ─── Full JSONL log tables ─────────────────────────────────────────────────────
 // One row per line in full.jsonl, with normalized sub-tables for content blocks,
 // token usage, progress events, and system events.
