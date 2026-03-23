@@ -17,6 +17,13 @@ jobs:
         with:
           node-version: '20'
 
+      # Sync app/package.json version to the git tag so DMG filenames match the release tag
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version --prefix app
+
       # Build the server (TypeScript → dist/)
       - name: Install root dependencies
         run: npm ci
@@ -77,30 +84,26 @@ jobs:
           cd /tmp/homebrew-gossamer
 
           cat > Casks/gossamer.rb <<CASK
-          cask "gossamer" do
-            version "${VERSION}"
+cask "gossamer" do
+  version "${VERSION}"
 
-            on_arm do
-              sha256 "${ARM_SHA}"
-              url "https://github.com/nosman/gossamer/releases/download/v#{version}/${ARM_FILE}"
-            end
+  on_arm do
+    sha256 "${ARM_SHA}"
+    url "https://github.com/nosman/gossamer/releases/download/v#{version}/Gossamer-#{version}-arm64.dmg"
+  end
 
-            on_intel do
-              sha256 "${X64_SHA}"
-              url "https://github.com/nosman/gossamer/releases/download/v#{version}/${X64_FILE}"
-            end
+  on_intel do
+    sha256 "${X64_SHA}"
+    url "https://github.com/nosman/gossamer/releases/download/v#{version}/Gossamer-#{version}.dmg"
+  end
 
-            name "Gossamer"
-            desc "Browse and search your Claude Code sessions locally"
-            homepage "https://github.com/nosman/gossamer"
+  name "Gossamer"
+  desc "Browse and search your Claude Code sessions locally"
+  homepage "https://github.com/nosman/gossamer"
 
-            app "Gossamer.app"
-
-            postflight do
-              puts "Gossamer is ready. Open it from your Applications folder."
-            end
-          end
-          CASK
+  app "Gossamer.app"
+end
+CASK
 
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
