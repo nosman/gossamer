@@ -88,19 +88,12 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
 
   return (
     <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
-        <CopyCell
-          copyValue={session.sessionId}
-          width={COL_WIDTHS.sessionId}
-          prefix={
+        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
             <Tooltip label={dot.label} withArrow position="left" openDelay={300}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: dot.color, flexShrink: 0 }} />
             </Tooltip>
-          }
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
-            <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
-              {shortId}
-            </Text>
+            <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{intent}</Text>
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live
@@ -109,26 +102,12 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
           </div>
         </CopyCell>
 
-        <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>
-          {session.gitUserEmail ? (
-            <Anchor
-              size="sm"
-              href={`mailto:${session.gitUserEmail}`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {session.gitUserName ?? session.gitUserEmail}
-            </Anchor>
-          ) : (
-            <Text size="sm" c={session.gitUserName ? undefined : "dimmed"}>
-              {session.gitUserName ?? "—"}
-            </Text>
-          )}
+        <CopyCell copyValue={session.sessionId} width={COL_WIDTHS.sessionId}>
+          <Text ff="monospace" size="sm" c="indigo">{shortId}</Text>
         </CopyCell>
 
-        <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
-          <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
-            {session.repoName ?? "—"}
-          </Text>
+        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
+          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
         </CopyCell>
 
         <CopyCell copyValue={session.branch ?? ""} width={COL_WIDTHS.branch}>
@@ -137,8 +116,10 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
           </Text>
         </CopyCell>
 
-        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
-          <Text size="sm">{intent}</Text>
+        <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
+          <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
+            {session.repoName ?? "—"}
+          </Text>
         </CopyCell>
 
         <CopyCell copyValue={session.parentSessionId ?? ""} width={COL_WIDTHS.parentSessionId}>
@@ -159,12 +140,24 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
           )}
         </CopyCell>
 
-        <CopyCell copyValue={absoluteTime(session.startedAt)} width={COL_WIDTHS.started}>
-          <Text size="sm" c="dimmed">{relativeTime(session.startedAt)}</Text>
+        <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>
+          {session.gitUserEmail ? (
+            <Anchor
+              size="sm"
+              href={`mailto:${session.gitUserEmail}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {session.gitUserName ?? session.gitUserEmail}
+            </Anchor>
+          ) : (
+            <Text size="sm" c={session.gitUserName ? undefined : "dimmed"}>
+              {session.gitUserName ?? "—"}
+            </Text>
+          )}
         </CopyCell>
 
-        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
-          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
+        <CopyCell copyValue={absoluteTime(session.startedAt)} width={COL_WIDTHS.started}>
+          <Text size="sm" c="dimmed">{relativeTime(session.startedAt)}</Text>
         </CopyCell>
 
         <Table.Td style={{ width: COL_WIDTHS.actions }} onClick={(e) => e.stopPropagation()}>

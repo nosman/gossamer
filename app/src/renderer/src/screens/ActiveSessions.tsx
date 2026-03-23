@@ -6,14 +6,14 @@ import { useBreadcrumb } from "../BreadcrumbContext";
 import { useTabs } from "../TabsContext";
 
 const SESSION_COLUMNS: { label: string; width: number }[] = [
-  { label: "Session ID",  width: COL_WIDTHS.sessionId      },
-  { label: "User",        width: COL_WIDTHS.user            },
-  { label: "Repo",        width: COL_WIDTHS.repo            },
-  { label: "Branch",      width: COL_WIDTHS.branch          },
   { label: "Intent",      width: COL_WIDTHS.intent          },
-  { label: "Parent",      width: COL_WIDTHS.parentSessionId },
-  { label: "Started",     width: COL_WIDTHS.started         },
+  { label: "Session ID",  width: COL_WIDTHS.sessionId       },
   { label: "Updated",     width: COL_WIDTHS.updated         },
+  { label: "Branch",      width: COL_WIDTHS.branch          },
+  { label: "Repo",        width: COL_WIDTHS.repo            },
+  { label: "Parent",      width: COL_WIDTHS.parentSessionId },
+  { label: "User",        width: COL_WIDTHS.user            },
+  { label: "Started",     width: COL_WIDTHS.started         },
   { label: "",            width: COL_WIDTHS.actions         },
 ];
 
