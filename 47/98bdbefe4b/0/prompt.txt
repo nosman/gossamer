@@ -75,3 +75,7 @@ Update the README to include commands on how to install gossamer from brew
 ---
 
 Change the trigger back to pushing a new tag
+
+---
+
+The network is back
