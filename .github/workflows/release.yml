@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - README
 
 jobs:
   build-macos:
@@ -36,15 +36,15 @@ jobs:
       - name: Prune root devDependencies
         run: npm prune --production
 
-      # Build the Electron app and package it as a DMG
+      # Build the Electron app and package it as a DMG (electron-builder handles upload separately)
       - name: Package Electron app (macOS)
         working-directory: app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist:mac
+        run: npm run dist:mac -- --publish never
 
       - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -53,3 +53,55 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew cask
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Find the built DMG files dynamically
+          ARM_DMG=$(find app/release -name "*arm64.dmg" | head -1)
+          X64_DMG=$(find app/release -name "*.dmg" ! -name "*arm64*" | head -1)
+
+          ARM_SHA=$(shasum -a 256 "$ARM_DMG" | awk '{print $1}')
+          X64_SHA=$(shasum -a 256 "$X64_DMG" | awk '{print $1}')
+
+          ARM_FILE=$(basename "$ARM_DMG")
+          X64_FILE=$(basename "$X64_DMG")
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nosman/homebrew-gossamer.git" /tmp/homebrew-gossamer
+          cd /tmp/homebrew-gossamer
+
+          cat > Casks/gossamer.rb <<CASK
+          cask "gossamer" do
+            version "${VERSION}"
+
+            on_arm do
+              sha256 "${ARM_SHA}"
+              url "https://github.com/nosman/gossamer/releases/download/v#{version}/${ARM_FILE}"
+            end
+
+            on_intel do
+              sha256 "${X64_SHA}"
+              url "https://github.com/nosman/gossamer/releases/download/v#{version}/${X64_FILE}"
+            end
+
+            name "Gossamer"
+            desc "Browse and search your Claude Code sessions locally"
+            homepage "https://github.com/nosman/gossamer"
+
+            app "Gossamer.app"
+
+            postflight do
+              puts "Gossamer is ready. Open it from your Applications folder."
+            end
+          end
+          CASK
+
+          git config user.email "github-actions@github.com"
+          git config user.name "GitHub Actions"
+          git add Casks/gossamer.rb
+          git commit -m "Update Gossamer to v${VERSION}"
+          git push
