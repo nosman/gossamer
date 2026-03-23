@@ -20,6 +20,14 @@
     "files": [
       "out/**"
     ],
+    "extraResources": [
+      { "from": "../dist",              "to": "server/dist" },
+      { "from": "../node_modules",      "to": "server/node_modules" },
+      { "from": "../prisma/schema.prisma", "to": "server/prisma/schema.prisma" },
+      { "from": "../prisma/generated",  "to": "server/prisma/generated" },
+      { "from": "../package.json",      "to": "server/package.json" },
+      { "from": "resources/server-launcher.cjs", "to": "server/server-launcher.cjs" }
+    ],
     "mac": {
       "category": "public.app-category.developertools",
       "target": [

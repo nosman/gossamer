@@ -15,11 +15,29 @@ jobs:
         with:
           node-version: '20'
 
+      # Build the server (TypeScript → dist/)
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build server
+        run: npm run build
+
+      # Install app deps so @electron/rebuild can find the Electron version
       - name: Install app dependencies
         working-directory: app
         run: npm ci
 
-      - name: Build and package Electron app (macOS)
+      # Recompile native modules (better-sqlite3, node-pty) against Electron's Node.js ABI
+      - name: Rebuild native modules for Electron
+        working-directory: app
+        run: npx @electron/rebuild --module-dir ../ --only better-sqlite3,node-pty
+
+      # Remove devDependencies from the root node_modules that get bundled into the app
+      - name: Prune root devDependencies
+        run: npm prune --production
+
+      # Build the Electron app and package it as a DMG
+      - name: Package Electron app (macOS)
         working-directory: app
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false

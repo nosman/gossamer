@@ -24,6 +24,7 @@
     "express": "^4.18.2",
     "gitlog": "^5.1.0",
     "node-pty": "^1.1.0",
+    "prisma": "^7.4.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -33,7 +34,6 @@
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.13",
     "concurrently": "^9.2.1",
-    "prisma": "^7.4.2",
     "typescript": "^5.0.0"
   }
 }
