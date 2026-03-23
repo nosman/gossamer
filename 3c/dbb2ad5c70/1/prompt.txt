@@ -1,0 +1,25 @@
+Package this project so that i can install it view brew. Make whatever configuration files you need in the repo, and also tell me the process for making it available to others.
+
+---
+
+git status
+
+---
+
+Add the relevant new files to a new commit with a descriptive but short message. Then push to the remote branch.
+
+---
+
+why is  the installation process done from the app directory and not the top-level directory? the server-side code is in the top-level directory
+
+---
+
+option A, bundle the server inside the app
+
+---
+
+Does it still make sense to have the app and server code in separate folders?
+
+---
+
+no, let's keep it as-is for now. I created a new repo for the homebrew packages at ../homebrew-gossamer. Please copy the necessary files into that repo so that i package the app.
