@@ -79,3 +79,7 @@ Change the trigger back to pushing a new tag
 ---
 
 The network is back
+
+---
+
+my github token does not have the permissions to create a relase: Skip retry — your GitHub token/PAT does not have the required permission to create a release. Look online and tell me exactly which permissions i need
