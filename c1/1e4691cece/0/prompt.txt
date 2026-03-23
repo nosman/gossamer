@@ -3,3 +3,7 @@ Package this project so that i can install it view brew. Make whatever configura
 ---
 
 git status
+
+---
+
+Add the relevant new files to a new commit with a descriptive but short message. Then push to the remote branch.
