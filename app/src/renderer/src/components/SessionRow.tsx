@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import { Table, Text, Anchor, ActionIcon, Tooltip, Badge } from "@mantine/core";
 import type { Session } from "../api";
-import { resumeSession } from "../api";
 import { relativeTime, absoluteTime } from "./TimeAgo";
 
 interface Props {
   session: Session;
   onPress: () => void;
+  onArchive?: (sessionId: string) => void;
+  isArchived?: boolean;
+  onParentPress?: (sessionId: string) => void;
 }
 
 export const COL_WIDTHS = {
@@ -18,6 +20,7 @@ export const COL_WIDTHS = {
   parentSessionId: 120,
   started:         110,
   updated:         110,
+  actions:          56,
 } as const;
 
 
@@ -76,52 +79,65 @@ function CopyCell({ copyValue, width, children, prefix }: CopyCellProps) {
   );
 }
 
-export function SessionRow({ session, onPress }: Props) {
+export function SessionRow({ session, onPress, onArchive, isArchived, onParentPress }: Props) {
   const dot = activityDot(session.updatedAt);
   const intent = session.intent ?? session.summary ?? session.prompt?.slice(0, 160) ?? "—";
   const shortId = session.sessionId.slice(0, 8) + "…";
   const shortParent = session.parentSessionId ? session.parentSessionId.slice(0, 8) + "…" : null;
-  const [resuming, setResuming] = useState(false);
+  const [archiving, setArchiving] = useState(false);
 
   return (
-    <>
-      <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
-        <CopyCell
-          copyValue={session.sessionId}
-          width={COL_WIDTHS.sessionId}
-          prefix={
+    <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
+        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
             <Tooltip label={dot.label} withArrow position="left" openDelay={300}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: dot.color, flexShrink: 0 }} />
             </Tooltip>
-          }
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
-            <Text ff="monospace" size="sm" c="indigo" style={{ flexShrink: 0 }}>
-              {shortId}
-            </Text>
-            <Tooltip label="Resume in terminal" withArrow position="top" openDelay={300}>
-              <ActionIcon
-                size="sm"
-                variant="light"
-                color="indigo"
-                loading={resuming}
-                style={{ flexShrink: 0 }}
-                onClick={async (e) => {
-                  e.stopPropagation();
-                  setResuming(true);
-                  try { await resumeSession(session.sessionId, session.cwd); }
-                  finally { setResuming(false); }
-                }}
-              >
-                →
-              </ActionIcon>
-            </Tooltip>
+            <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{intent}</Text>
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live
               </Badge>
             )}
           </div>
+        </CopyCell>
+
+        <CopyCell copyValue={session.sessionId} width={COL_WIDTHS.sessionId}>
+          <Text ff="monospace" size="sm" c="indigo">{shortId}</Text>
+        </CopyCell>
+
+        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
+          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
+        </CopyCell>
+
+        <CopyCell copyValue={session.branch ?? ""} width={COL_WIDTHS.branch}>
+          <Text size="sm" ff="monospace" c={session.branch ? "teal" : "dimmed"}>
+            {session.branch ?? "—"}
+          </Text>
+        </CopyCell>
+
+        <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
+          <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
+            {session.repoName ?? "—"}
+          </Text>
+        </CopyCell>
+
+        <CopyCell copyValue={session.parentSessionId ?? ""} width={COL_WIDTHS.parentSessionId}>
+          {session.parentSessionId && onParentPress ? (
+            <Anchor
+              ff="monospace"
+              size="sm"
+              onClick={(e) => { e.stopPropagation(); onParentPress(session.parentSessionId as string); }}
+              underline="never"
+              style={{ cursor: "pointer" }}
+            >
+              {shortParent}
+            </Anchor>
+          ) : shortParent ? (
+            <Text ff="monospace" size="sm" c="blue">{shortParent}</Text>
+          ) : (
+            <Text size="sm" c="dimmed">—</Text>
+          )}
         </CopyCell>
 
         <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>
@@ -140,38 +156,30 @@ export function SessionRow({ session, onPress }: Props) {
           )}
         </CopyCell>
 
-        <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
-          <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
-            {session.repoName ?? "—"}
-          </Text>
-        </CopyCell>
-
-        <CopyCell copyValue={session.branch ?? ""} width={COL_WIDTHS.branch}>
-          <Text size="sm" ff="monospace" c={session.branch ? "teal" : "dimmed"}>
-            {session.branch ?? "—"}
-          </Text>
-        </CopyCell>
-
-        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
-          <Text size="sm">{intent}</Text>
-        </CopyCell>
-
-        <CopyCell copyValue={session.parentSessionId ?? ""} width={COL_WIDTHS.parentSessionId}>
-          {shortParent ? (
-            <Text ff="monospace" size="sm" c="blue">{shortParent}</Text>
-          ) : (
-            <Text size="sm" c="dimmed">—</Text>
-          )}
-        </CopyCell>
-
         <CopyCell copyValue={absoluteTime(session.startedAt)} width={COL_WIDTHS.started}>
           <Text size="sm" c="dimmed">{relativeTime(session.startedAt)}</Text>
         </CopyCell>
 
-        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
-          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
-        </CopyCell>
-      </Table.Tr>
-    </>
+        <Table.Td style={{ width: COL_WIDTHS.actions }} onClick={(e) => e.stopPropagation()}>
+          {onArchive && (
+            <Tooltip label={isArchived ? "Unarchive" : "Archive"} withArrow position="left" openDelay={300}>
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color={isArchived ? "blue" : "gray"}
+                loading={archiving}
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  setArchiving(true);
+                  try { await onArchive(session.sessionId); }
+                  finally { setArchiving(false); }
+                }}
+              >
+                {isArchived ? "↩" : "⊗"}
+              </ActionIcon>
+            </Tooltip>
+          )}
+        </Table.Td>
+    </Table.Tr>
   );
 }

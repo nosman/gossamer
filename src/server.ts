@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
+import pty from "node-pty";
 import { execSync, exec as execCb } from "child_process";
 import { promisify } from "util";
 
@@ -103,6 +104,12 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   const db = await getDb(dbPath);
 
+  // Ensure ArchivedSession table exists (can't use prisma db push due to FTS5 table conflicts)
+  await db.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS "ArchivedSession" (sessionId TEXT PRIMARY KEY, archivedAt DATETIME NOT NULL DEFAULT (datetime('now')))`
+  );
+
+
   // Ensure FTS table exists and is up-to-date on startup
   await setupLogContentFts(db);
   await syncLogContentFts(db);
@@ -146,7 +153,23 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const shadows = await db.shadowSession.findMany();
       const shadowMap = new Map(shadows.map((s) => [s.sessionId, s]));
 
-      const allIds = [...new Set([...cpMap.keys(), ...shadows.map((s) => s.sessionId)])];
+      const showArchived = _req.query.archived === "1";
+      const archivedRows = await db.archivedSession.findMany({ select: { sessionId: true } });
+      const archivedSet = new Set(archivedRows.map((r) => r.sessionId));
+
+      // Also include sessions visible only from LogEvent (hook-written, not yet indexed)
+      const knownIds = new Set([...cpMap.keys(), ...shadows.map((s) => s.sessionId)]);
+      const logEventSessionRows = await db.logEvent.findMany({
+        distinct: ["sessionId"],
+        where: { sessionId: { not: null } },
+        select: { sessionId: true },
+      });
+      for (const r of logEventSessionRows) {
+        if (r.sessionId && !knownIds.has(r.sessionId)) knownIds.add(r.sessionId);
+      }
+
+      const allIds = [...knownIds]
+        .filter((id) => showArchived ? archivedSet.has(id) : !archivedSet.has(id));
       if (allIds.length === 0) {
         res.json([]);
         return;
@@ -172,6 +195,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
 
+      // Parent-child relationships from task checkpoints
+      const allParentRows = await db.sessionParent.findMany({
+        select: { childSessionId: true, parentSessionId: true },
+      });
+      const parentMap = new Map(allParentRows.map((r) => [r.childSessionId, r.parentSessionId]));
+      const childMap = new Map<string, string[]>();
+      for (const r of allParentRows) {
+        if (!childMap.has(r.parentSessionId)) childMap.set(r.parentSessionId, []);
+        childMap.get(r.parentSessionId)!.push(r.childSessionId);
+      }
+
       const result: SessionResponse[] = allIds.map((sessionId) => {
         const cp     = cpMap.get(sessionId) ?? null;
         const shadow = shadowMap.get(sessionId) ?? null;
@@ -186,8 +220,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
           repoRoot:        repoDir ?? null,
           repoName:        repoName,
-          parentSessionId: null,
-          childSessionIds: [],
+          parentSessionId: parentMap.get(sessionId) ?? null,
+          childSessionIds: childMap.get(sessionId) ?? [],
           gitUserName:     cpUser?.gitUserName ?? gitUser.name,
           gitUserEmail:    cpUser?.gitUserEmail ?? gitUser.email,
           prompt:          shadow?.prompt ?? null,
@@ -825,6 +859,30 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   });
 
   // POST /api/sessions/:id/resume
+  // POST /api/sessions/:id/archive — hide session from main listing
+  app.post("/api/sessions/:id/archive", async (req, res) => {
+    try {
+      await db.archivedSession.upsert({
+        where: { sessionId: req.params.id },
+        create: { sessionId: req.params.id },
+        update: {},
+      });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // DELETE /api/sessions/:id/archive — un-hide session
+  app.delete("/api/sessions/:id/archive", async (req, res) => {
+    try {
+      await db.archivedSession.deleteMany({ where: { sessionId: req.params.id } });
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   app.post("/api/sessions/:id/resume", (req, res) => {
     const sessionId = req.params.id;
     const { cwd } = req.body as { cwd?: string };
@@ -1032,6 +1090,46 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer });
 
+  // ── Terminal WebSocket connections ────────────────────────────────────────
+  wss.on("connection", (ws, req) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.searchParams.get("type") !== "terminal") return;
+
+    const rawCwd = url.searchParams.get("cwd") ?? "";
+    const cwd = rawCwd && existsSync(rawCwd) ? rawCwd : (process.env.HOME ?? "/");
+    const shell = process.env.SHELL ?? "/bin/bash";
+
+    // node-pty requires a clean env with no undefined values
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) env[k] = v;
+    }
+    // Ensure TERM is set so ncurses apps work
+    env.TERM = "xterm-256color";
+
+    const term = pty.spawn(shell, [], {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd,
+      env,
+    });
+
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "data", data }));
+    });
+
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
+        if (msg.type === "data" && msg.data) term.write(msg.data);
+        if (msg.type === "resize" && msg.cols && msg.rows) term.resize(msg.cols, msg.rows);
+      } catch { /* ignore malformed */ }
+    });
+
+    ws.on("close", () => { try { term.kill(); } catch { /* already dead */ } });
+  });
+
   const broadcast = () => {
     const message = JSON.stringify({ type: "sessions_updated" });
     for (const client of wss.clients) {
@@ -1073,7 +1171,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       } catch { /* non-fatal — db may not exist yet */ }
     }));
     if (changed) broadcast();
-  }, 2000);
+  }, 500);
 
   // ── Per-repo indexer helpers ───────────────────────────────────────────────
 
@@ -1157,6 +1255,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   void runAllShadows();
   const shadowPoller = setInterval(runAllShadows, 5_000);
+
+  // POST /api/sessions/sync — force immediate re-index of all shadow branches
+  app.post("/api/sessions/sync", async (_req, res) => {
+    try {
+      await runAllShadows();
+      broadcast();
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
   process.stderr.write(`shadow indexer: polling every 5s across ${readConfig().repos.length} repo(s)\n`);
 
   // Graceful shutdown

@@ -1,9 +1,32 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 export type Tab =
   | { id: "home"; type: "home"; title: string }
   | { id: string; type: "session"; sessionId: string; title: string; initialSearch?: string; initialState?: unknown }
+  | { id: string; type: "branchLog"; localPath: string; branch: string; repoName: string | null; title: string }
+  | { id: string; type: "spawn"; cwd: string; command: string; title: string; spawnedAt: number };
+
+// ── Tab persistence ────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "gossamer-tabs-v1";
+
+type PersistedTab =
+  | { id: string; type: "session"; sessionId: string; title: string }
   | { id: string; type: "branchLog"; localPath: string; branch: string; repoName: string | null; title: string };
+
+function loadPersistedState(): { tabs: Tab[]; activeTabId: string } | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const { tabs, activeTabId } = JSON.parse(raw) as { tabs: PersistedTab[]; activeTabId: string };
+    if (!Array.isArray(tabs) || typeof activeTabId !== "string") return null;
+    const valid = tabs.filter((t) => t.type === "session" || t.type === "branchLog");
+    const restoredActiveId = valid.find((t) => t.id === activeTabId) ? activeTabId : "home";
+    return { tabs: [HOME_TAB, ...valid] as Tab[], activeTabId: restoredActiveId };
+  } catch {
+    return null;
+  }
+}
 
 type NavigateFn = (to: string | number) => void;
 
@@ -13,8 +36,10 @@ interface TabsContextValue {
   homePathname: string;
   openSessionTab: (sessionId: string, title: string, initialSearch?: string, initialState?: unknown) => void;
   openBranchLogTab: (localPath: string, branch: string, repoName: string | null) => void;
+  openSpawnTab: (cwd: string, command: string, title: string) => void;
   closeTab: (id: string) => void;
   setActiveTab: (id: string) => void;
+  updateTabTitle: (id: string, title: string) => void;
   /** Navigate the home tab (and activate it). Accepts a path string or -1 for back. */
   navigateHome: (to: string | number) => void;
   /** Called by HomeTabRoutes to register its navigate function. */
@@ -54,11 +79,24 @@ export function TabsProvider({
   children: React.ReactNode;
   initialTab?: Tab | null;
 }) {
-  const startTabs: Tab[] = initialTab ? [HOME_TAB, initialTab] : [HOME_TAB];
-  const startActiveId = initialTab ? initialTab.id : "home";
+  const persisted = initialTab ? null : loadPersistedState();
+  const startTabs: Tab[] = initialTab ? [HOME_TAB, initialTab] : (persisted?.tabs ?? [HOME_TAB]);
+  const startActiveId = initialTab ? initialTab.id : (persisted?.activeTabId ?? "home");
 
   const [tabs, setTabs] = useState<Tab[]>(startTabs);
   const [activeTabId, setActiveTabId] = useState<string>(startActiveId);
+
+  // Persist session/branchLog tabs on every change
+  useEffect(() => {
+    const toSave = tabs.filter((t) => t.type === "session" || t.type === "branchLog");
+    const activeIsHome = !toSave.find((t) => t.id === activeTabId);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        tabs: toSave,
+        activeTabId: activeIsHome ? "home" : activeTabId,
+      }));
+    } catch { /* quota exceeded, ignore */ }
+  }, [tabs, activeTabId]);
   const [homePathname, setHomePathname] = useState("/");
   const homeNavigateRef = useRef<NavigateFn | null>(null);
 
@@ -83,6 +121,17 @@ export function TabsProvider({
     },
     [],
   );
+
+  const openSpawnTab = useCallback((cwd: string, command: string, title: string) => {
+    const spawnedAt = Date.now();
+    const id = `spawn:${spawnedAt}`;
+    setTabs((prev) => [...prev, { id, type: "spawn", cwd, command, title, spawnedAt }]);
+    setActiveTabId(id);
+  }, []);
+
+  const updateTabTitle = useCallback((id: string, title: string) => {
+    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
+  }, []);
 
   const closeTab = useCallback((id: string) => {
     if (id === "home") return;
@@ -134,8 +183,10 @@ export function TabsProvider({
         homePathname,
         openSessionTab,
         openBranchLogTab,
+        openSpawnTab,
         closeTab,
         setActiveTab: setActiveTabId,
+        updateTabTitle,
         navigateHome,
         registerHomeNavigate,
         updateHomePathname,

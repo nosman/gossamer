@@ -22,6 +22,7 @@ import { Repos } from "./screens/Repos";
 // Tab-content screens
 import { SessionDetail } from "./screens/SessionDetail";
 import { BranchLog } from "./screens/BranchLog";
+import { SpawnSessionScreen } from "./screens/SpawnSessionScreen";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -175,6 +176,9 @@ function TabContent({ tab }: { tab: Tab }) {
   if (tab.type === "session") return <SessionTab sessionId={tab.sessionId} initialSearch={tab.initialSearch} initialState={tab.initialState} />;
   if (tab.type === "branchLog") {
     return <BranchLogTab localPath={tab.localPath} branch={tab.branch} repoName={tab.repoName} />;
+  }
+  if (tab.type === "spawn") {
+    return <SpawnSessionScreen tabId={tab.id} cwd={tab.cwd} command={tab.command} spawnedAt={tab.spawnedAt} />;
   }
   return null;
 }
