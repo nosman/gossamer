@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "90ff3411f80d",
+  "session_id": "ed1121a2-5850-413d-a712-a3a291a3baa5",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T04:36:01.95113Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "6bd976cc0615",
+  "token_usage": {
+    "input_tokens": 146,
+    "cache_creation_tokens": 351914,
+    "cache_read_tokens": 7408662,
+    "output_tokens": 61743,
+    "api_call_count": 106
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Package the Gossamer Electron app for distribution via Homebrew, including bundling the server inside the app and setting up automated GitHub Actions CI/CD to build and publish releases.",
+    "outcome": "Created a full release pipeline with GitHub Actions, bundled the Node.js server inside the Electron app via utilityProcess, set up a homebrew-gossamer tap repo, and manually fixed the v1.0.7 cask formula with correct SHA256s after diagnosing a version mismatch issue.",
+    "learnings": {
+      "repo": [
+        "The project has two separate package.json files: root (server/gossamer-serve) and app/ (Electron UI) — they were originally independent programs",
+        "server.ts uses import.meta.url to resolve PROJECT_ROOT, which constrains how the server can be bundled (path structure must be preserved)",
+        "utilityProcess.fork() requires a CJS entry point, necessitating a server-launcher.cjs wrapper to bridge into the ESM server",
+        "prisma was in devDependencies but is needed at runtime for pushSchema — must be in dependencies for production builds",
+        "The git remote is at github.com/nosman/gossamer; homebrew tap is at github.com/nosman/homebrew-gossamer",
+        "All packaging changes live on the README branch, not main"
+      ],
+      "code": [
+        {
+          "path": "app/resources/server-launcher.cjs",
+          "finding": "CJS wrapper that uses dynamic import() to load the ESM server, bridging utilityProcess.fork() (CJS-only) to the ESM server entry"
+        },
+        {
+          "path": "app/src/main/index.ts",
+          "finding": "ELECTRON_RENDERER_URL env var presence gates whether the main process starts the bundled server — dev workflow is unchanged"
+        },
+        {
+          "path": "app/package.json",
+          "finding": "Must include a repository field pointing to github.com/nosman/gossamer or electron-builder cannot detect the repo for publish config"
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "finding": "Must include permissions: contents: write at the job level — GitHub Actions defaults to read-only, blocking release creation"
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "finding": "electron-builder must be run with --publish never; the softprops/action-gh-release step handles uploading, not electron-builder itself"
+        }
+      ],
+      "workflow": [
+        "GitHub Actions built-in GITHUB_TOKEN defaults to read-only permissions; contents: write must be explicitly declared for release creation",
+        "Fine-grained PATs for cross-repo pushes (homebrew tap) need only Contents: Read and write + Metadata: Read on the target repo",
+        "Homebrew Cask files must live in a Casks/ subdirectory of the tap repo",
+        "npm ci fails if package-lock.json is out of sync with package.json — must run npm install locally and commit the updated lock file when adding dependencies",
+        "electron-builder derives DMG filenames from the version field in app/package.json, not the git tag — these must be kept in sync to avoid 404s in the cask formula"
+      ]
+    },
+    "friction": [
+      "package-lock.json was out of sync after adding electron-builder, causing npm ci to fail in CI — required a worktree commit to push to the README branch without switching branches",
+      "electron-builder could not detect the GitHub repo because .git is in the parent of app/, requiring an explicit repository field in app/package.json",
+      "electron-builder was attempting to publish DMGs itself (skipping because not on a tag), conflicting with the softprops upload step — needed --publish never flag",
+      "GitHub Actions GITHUB_TOKEN lacked contents: write permission by default, blocking release creation",
+      "Version mismatch between app/package.json (1.0.0) and git tag (v1.0.7) caused DMG filenames to be Gossamer-1.0.0-*.dmg while the cask formula expected v1.0.7 URLs, resulting in download 404s",
+      "The cask auto-update script in CI pushed correct SHA256s but the local copy diverged, causing a rebase conflict that had to be aborted",
+      "Network outage mid-session caused several push failures, requiring manual pushes once connectivity restored"
+    ],
+    "open_items": [
+      "Workflow version sync fix (bumping app/package.json version to match git tag before building) was written but not confirmed pushed — verify this landed",
+      "App is unsigned (no Apple Developer cert) — users must manually allow via System Settings → Privacy \u0026 Security on first launch; requires $99/yr Apple Developer account to fix",
+      "Considered but deferred: consolidating app/ and root server code into a single package — currently extraResources uses ../ paths to reach server artifacts",
+      "Revert the README branch workflow trigger back to tags-only was done, but should confirm the README branch is fully merged or cleaned up",
+      "The gossamer-serve standalone CLI binary entry could still be preserved in package.json for headless use — not addressed"
+    ]
+  }
+}

@@ -1,0 +1,101 @@
+Package this project so that i can install it view brew. Make whatever configuration files you need in the repo, and also tell me the process for making it available to others.
+
+---
+
+git status
+
+---
+
+Add the relevant new files to a new commit with a descriptive but short message. Then push to the remote branch.
+
+---
+
+why is  the installation process done from the app directory and not the top-level directory? the server-side code is in the top-level directory
+
+---
+
+option A, bundle the server inside the app
+
+---
+
+Does it still make sense to have the app and server code in separate folders?
+
+---
+
+no, let's keep it as-is for now. I created a new repo for the homebrew packages at ../homebrew-gossamer. Please copy the necessary files into that repo so that i package the app.
+
+---
+
+The github ci is failing with: Run npm ci
+npm error code EUSAGE
+npm error
+npm error `npm ci` can only install packages when your package.json and package-lock.json or npm-shrinkwrap.json are in sync. Please update your lock file with `npm install` before continuing.
+npm error
+npm error Missing: electron-builder@25.1.8 from lock file
+npm error Missing: app-builder-lib@25.1.8 from lock file
+npm error Missing: dmg-builder@25.1.8 from lock file
+npm error Missing: electron-builder-squirrel-windows@25.1.8 from lock file
+npm error Missing: builder-util@25.1.7 from lock file
+
+---
+
+yes change the trigger in the github file
+
+---
+
+Moving forward- now it's failing with: Cannot detect repository by .git/config. Please specify "repository" in the package.json (https://docs.npmjs.com/files/package.json#repository).
+Please see https://electron.build/publish  failedTask=build stackTrace=Error: Cannot detect repository by .git/config. Please specify "repository" in the package.json (https://docs.npmjs.com/files/package.json#repository).
+Please see https://electron.build/publish
+    at getInfo (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:550:13)
+    at getResolvedPublishConfig (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:559:18)
+    at resolvePublishConfigurations (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:442:16)
+    at getPublishConfigs (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:416:10)
+    at getAppUpdatePublishConfiguration (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:248:73)
+    at /Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/publish/PublishManager.ts:118:29
+    at Packager.afterPack (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/packager.ts:560:7)
+    at MacPackager.doPack (/Users/runner/work/gossamer/gossamer/app/node_modules/app-builder-lib/src/platformPackager.ts:322:5)
+
+---
+
+More progress. Now it doesn't publish the dmg files: skipped publishing  file=Gossamer-1.0.0-arm64.dmg.blockmap reason=release doesn't exist and not created because "publish" is not "always" and build is not on tag tag=v1.0.0 version=1.0.0
+  • skipped publishing  file=Gossamer-1.0.0-arm64.dmg reason=release doesn't exist and not created because "publish" is not "always" and build is not on tag tag=v1.0.0 version=1.0.0
+  • uploading       file=Gossamer-1.0.0.dmg.blockmap provider=github
+  • skipped publishing  file=Gossamer-1.0.0.dmg.blockmap reason=release doesn't exist and not created because "publish" is not "always" and build is not on tag tag=v1.0.0 version=1.0.0
+  • uploading       file=Gossamer-1.0.0.dmg provider=github
+  • skipped publishing  file=Gossamer-1.0.0.dmg reason=release doesn't exist and not created because "publish" is not "always" and build is not on tag tag=v1.0.0 version=1.0.0. is it possible to write a script to detect and update the names of these files?
+
+---
+
+What permissions do i need? I'm using the fine-grained tokens, not the classic ones
+
+---
+
+Update the README to include commands on how to install gossamer from brew
+
+---
+
+Change the trigger back to pushing a new tag
+
+---
+
+The network is back
+
+---
+
+my github token does not have the permissions to create a relase: Skip retry — your GitHub token/PAT does not have the required permission to create a release. Look online and tell me exactly which permissions i need
+
+---
+
+Do we also have to edit the homebrew-gossamer repo?
+
+---
+
+Now the build fails, but the homebrew download fails with the message: Download failed: https://github.com/nosman/gossamer/releases/download/v1.0.0/Gossamer-1.0.0-arm64.dmg
+
+---
+
+The CI is not failing anywhere. You can see that the release is available here: https://github.com/nosman/gossamer/releases/tag/v1.0.7
+
+---
+
+Is the homebrew-gossamer repo looking in the right place?
