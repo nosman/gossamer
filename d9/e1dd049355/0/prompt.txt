@@ -11,3 +11,7 @@ Add the relevant new files to a new commit with a descriptive but short message.
 ---
 
 why is  the installation process done from the app directory and not the top-level directory? the server-side code is in the top-level directory
+
+---
+
+option A, bundle the server inside the app
