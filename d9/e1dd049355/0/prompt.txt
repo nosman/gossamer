@@ -1,0 +1,13 @@
+Package this project so that i can install it view brew. Make whatever configuration files you need in the repo, and also tell me the process for making it available to others.
+
+---
+
+git status
+
+---
+
+Add the relevant new files to a new commit with a descriptive but short message. Then push to the remote branch.
+
+---
+
+why is  the installation process done from the app directory and not the top-level directory? the server-side code is in the top-level directory
