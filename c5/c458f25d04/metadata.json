@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c5c458f25d04",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "homebrew/gossamer.rb"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c5/c458f25d04/0/metadata.json",
+      "transcript": "/c5/c458f25d04/0/full.jsonl",
+      "content_hash": "/c5/c458f25d04/0/content_hash.txt",
+      "prompt": "/c5/c458f25d04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 360617,
+    "cache_read_tokens": 8071019,
+    "output_tokens": 67927,
+    "api_call_count": 112
+  }
+}
