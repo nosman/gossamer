@@ -1,0 +1,5 @@
+Package this project so that i can install it view brew. Make whatever configuration files you need in the repo, and also tell me the process for making it available to others.
+
+---
+
+git status
