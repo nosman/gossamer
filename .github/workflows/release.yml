@@ -81,30 +81,14 @@ jobs:
           X64_FILE=$(basename "$X64_DMG")
 
           git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/nosman/homebrew-gossamer.git" /tmp/homebrew-gossamer
+
+          sed \
+            -e "s/GOSSAMER_VERSION/${VERSION}/" \
+            -e "s/GOSSAMER_ARM64_SHA256/${ARM_SHA}/" \
+            -e "s/GOSSAMER_X64_SHA256/${X64_SHA}/" \
+            homebrew/gossamer.rb > /tmp/homebrew-gossamer/Casks/gossamer.rb
+
           cd /tmp/homebrew-gossamer
-
-          cat > Casks/gossamer.rb <<CASK
-cask "gossamer" do
-  version "${VERSION}"
-
-  on_arm do
-    sha256 "${ARM_SHA}"
-    url "https://github.com/nosman/gossamer/releases/download/v#{version}/Gossamer-#{version}-arm64.dmg"
-  end
-
-  on_intel do
-    sha256 "${X64_SHA}"
-    url "https://github.com/nosman/gossamer/releases/download/v#{version}/Gossamer-#{version}.dmg"
-  end
-
-  name "Gossamer"
-  desc "Browse and search your Claude Code sessions locally"
-  homepage "https://github.com/nosman/gossamer"
-
-  app "Gossamer.app"
-end
-CASK
-
           git config user.email "github-actions@github.com"
           git config user.name "GitHub Actions"
           git add Casks/gossamer.rb
