@@ -25,7 +25,16 @@ And because Gossamer integrates with **[Entire.io](https://entire.io)**, your AI
 - [Entire CLI](https://entire.io) installed
 - Claude Code installed and configured
 
-> **Homebrew installs coming soon.** For now, clone and run locally.
+---
+
+## Installation
+
+```bash
+brew tap nosman/gossamer
+brew install --cask gossamer
+```
+
+Then open **Gossamer.app** from your Applications folder.
 
 ---
 
@@ -41,15 +50,9 @@ entire enable
 
 This hooks into your Git workflow so Gossamer can link AI sessions to commits.
 
-### 2. Clone Gossamer and start it
+### 2. Open Gossamer
 
-```bash
-git clone https://github.com/your-org/gossamer.git
-cd gossamer
-npm run start
-```
-
-`npm run start` installs dependencies, builds, and launches both the backend server and the Electron desktop app together.
+Launch **Gossamer.app** from your Applications folder. The app starts its own backend server automatically.
 
 ### 3. Add your repo in the Repos tab
 
@@ -117,7 +120,6 @@ npm run db:studio
 
 ## Coming soon
 
-- `brew install gossamer` — one-line install, no Node required
 - Team sharing — share session history with your whole org
 
 ---
