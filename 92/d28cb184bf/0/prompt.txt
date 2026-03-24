@@ -111,3 +111,7 @@ Almost worked. Now when i open the downloaded app, it says "Gossamer is damaged 
 ---
 
 Add the caveat to the README as well
+
+---
+
+Another problem: the server does not start on app startup. Is it standard practice for an electron app to start up its own server?
