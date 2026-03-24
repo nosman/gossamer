@@ -36,6 +36,8 @@ brew install --cask gossamer
 
 Then open **Gossamer.app** from your Applications folder.
 
+> **If macOS says the app is damaged**, run `xattr -cr /Applications/Gossamer.app` and try again. This is a Gatekeeper restriction on unsigned apps.
+
 ---
 
 ## Getting started

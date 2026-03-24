@@ -16,4 +16,10 @@ cask "gossamer" do
   homepage "https://github.com/nosman/gossamer"
 
   app "Gossamer.app"
+
+  caveats <<~EOS
+    Gossamer is not code-signed. If macOS says the app is damaged, run:
+      xattr -cr /Applications/Gossamer.app
+    Then try opening it again.
+  EOS
 end
