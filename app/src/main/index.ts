@@ -1,14 +1,26 @@
-import { app, BrowserWindow, ipcMain, utilityProcess } from "electron";
-import type { UtilityProcess } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "path";
+import { spawn } from "child_process";
+import type { ChildProcess } from "child_process";
 
-let serverProc: UtilityProcess | null = null;
+let serverProc: ChildProcess | null = null;
 
 function startServer(): void {
   const launcherPath = join(process.resourcesPath, "server", "server-launcher.cjs");
-  serverProc = utilityProcess.fork(launcherPath, [], { stdio: "pipe" });
-  serverProc.stdout?.on("data", (data: Buffer) => process.stdout.write(`[server] ${data}`));
-  serverProc.stderr?.on("data", (data: Buffer) => process.stderr.write(`[server] ${data}`));
+
+  // Run the Electron binary as a plain Node.js process (ELECTRON_RUN_AS_NODE=1).
+  // This gives the server full Node.js access with the same ABI as the main
+  // process, so native modules rebuilt for Electron work without a separate node binary.
+  serverProc = spawn(process.execPath, [launcherPath], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  serverProc.stdout?.on("data", (d: Buffer) => process.stdout.write(`[server] ${d}`));
+  serverProc.stderr?.on("data", (d: Buffer) => process.stderr.write(`[server] ${d}`));
+  serverProc.on("exit", (code, signal) =>
+    console.error(`[server] exited code=${code} signal=${signal}`)
+  );
 }
 
 function createWindow(tabParam?: string): void {
@@ -48,12 +60,12 @@ app.whenReady().then(() => {
 });
 
 app.on("window-all-closed", () => {
-  serverProc?.kill();
+  serverProc?.kill("SIGTERM");
   if (process.platform !== "darwin") app.quit();
 });
 
 app.on("will-quit", () => {
-  serverProc?.kill();
+  serverProc?.kill("SIGTERM");
 });
 
 app.on("activate", () => {
