@@ -103,3 +103,11 @@ Is the homebrew-gossamer repo looking in the right place?
 ---
 
 You made an error in the yaml syntax on the release.yml file and now the pipeline is broken
+
+---
+
+Almost worked. Now when i open the downloaded app, it says "Gossamer is damaged and can't be opened"
+
+---
+
+Add the caveat to the README as well
