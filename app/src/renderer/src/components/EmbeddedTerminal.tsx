@@ -83,7 +83,7 @@ export function EmbeddedTerminal({ cwd, defaultHeight = 220, command }: Props) {
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data as string) as { type: string; data?: string };
-        if (msg.type === "data" && msg.data) term.write(msg.data);
+        if (msg.type === "data" && msg.data) term.write(msg.data, () => term.scrollToBottom());
       } catch { /* ignore */ }
     };
 
@@ -107,7 +107,7 @@ export function EmbeddedTerminal({ cwd, defaultHeight = 220, command }: Props) {
   // ── Refit when height changes or terminal is restored ───────────────────
   useEffect(() => {
     if (minimized) return;
-    const t = setTimeout(() => fitRef.current?.fit(), 16);
+    const t = setTimeout(() => { fitRef.current?.fit(); termRef.current?.scrollToBottom(); }, 16);
     return () => clearTimeout(t);
   }, [height, minimized]);
 
