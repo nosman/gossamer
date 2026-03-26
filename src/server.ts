@@ -10,10 +10,8 @@ const exec = promisify(execCb);
 import { existsSync, mkdirSync } from "fs";
 import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { getDb } from "./db.js";
-import type { PrismaClient } from "../prisma/generated/client/index.js";
-import { indexAllCheckpointsV2, indexAllShadowBranches } from "./indexer.js";
-import { setupLogContentFts, syncLogContentFts, searchLogContent } from "./search.js";
+import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
+import type { PrismaClient } from "@gossamer/core";
 import { readConfig, addRepo, removeRepo, findRepo, defaultDbPath, type RepoConfig } from "./config.js";
 
 // ─── Schema push ──────────────────────────────────────────────────────────────

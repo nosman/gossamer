@@ -1,34 +1,32 @@
 {
-  "name": "claude-hooks-listener",
+  "name": "gossamer",
   "version": "1.0.0",
   "description": "Gossamer: indexes Entire CLI logs and serves them via HTTP + WebSocket",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "app"
+  ],
   "bin": {
     "gossamer-serve": "./dist/serve.js"
   },
   "scripts": {
     "postinstall": "node -e \"if(process.platform!=='win32'){require('fs').chmodSync('node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper',0o755)}\" 2>/dev/null || true",
-    "build": "prisma generate && tsc",
+    "build": "npm run build -w packages/core && tsc",
     "serve": "node dist/serve.js",
     "start": "concurrently --names \"serve,app\" -c \"blue,green\" \"npm run serve\" \"cd app && npm run dev\"",
-    "db:push": "DATABASE_URL=\"file:$HOME/.claude/hook-handler.db\" prisma db push",
-    "db:studio": "prisma studio"
+    "db:push": "npm run db:push -w packages/core"
   },
   "dependencies": {
-    "@prisma/adapter-better-sqlite3": "^7.4.2",
-    "@prisma/client": "^7.4.2",
+    "@gossamer/core": "*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "better-sqlite3": "^12.6.2",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "gitlog": "^5.1.0",
     "node-pty": "^1.1.0",
-    "prisma": "^7.4.2",
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.0.0",

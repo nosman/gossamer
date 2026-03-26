@@ -3,6 +3,8 @@ import React, { createContext, useContext, useState } from "react";
 export interface Crumb {
   label: string;
   path?: string;
+  /** If set, clicking the crumb copies this value to clipboard. */
+  copyValue?: string;
 }
 
 interface BreadcrumbCtx {

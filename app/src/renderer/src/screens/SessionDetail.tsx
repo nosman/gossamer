@@ -772,7 +772,7 @@ export function SessionDetail() {
         setCrumbs([
           ...(user ? [{ label: user, path: "/" }] : []),
           ...(repo ? [{ label: repo, path: "/" }] : []),
-          { label: shortId },
+          { label: shortId, copyValue: s.sessionId },
         ]);
         applyData(logEvs, cps, true);
         setError(null);
@@ -1077,7 +1077,7 @@ export function SessionDetail() {
         </Box>
       </ScrollArea>
       {!hideTerminal && (session?.repoRoot ?? session?.cwd) && (
-        <EmbeddedTerminal cwd={session.repoRoot ?? session.cwd} />
+        <EmbeddedTerminal cwd={session.repoRoot ?? session.cwd} command={`claude --resume ${session.sessionId}`} />
       )}
       </Box>{/* end right column */}
     </Box>

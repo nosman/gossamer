@@ -1,0 +1,26 @@
+{
+  "name": "@gossamer/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "prisma generate && tsc",
+    "db:push": "DATABASE_URL=\"file:$HOME/.claude/hook-handler.db\" prisma db push"
+  },
+  "dependencies": {
+    "@prisma/adapter-better-sqlite3": "^7.4.2",
+    "@prisma/client": "^7.4.2",
+    "better-sqlite3": "^12.6.2",
+    "gitlog": "^5.1.0",
+    "prisma": "^7.4.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -1,0 +1,191 @@
+import * as vscode from "vscode";
+import { spawn, ChildProcess } from "child_process";
+import { watch, FSWatcher, existsSync } from "fs";
+import { join, resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+import { createServer } from "net";
+import { get as httpGet } from "http";
+import { execFileSync } from "child_process";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Path to the gossamer server entry point (dist/serve.js at the repo root)
+const SERVE_SCRIPT = resolve(__dirname, "../../../dist/serve.js");
+
+// Use the system node, not VS Code's bundled Electron node
+function getSystemNode(): string {
+  try {
+    return execFileSync("which", ["node"], { encoding: "utf8" }).trim();
+  } catch {
+    return "node"; // fall back to PATH lookup
+  }
+}
+
+/** Probe the server once; resolves true if it responds, false otherwise. */
+function probeServer(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpGet(`http://localhost:${port}/api/sessions`, (res) => {
+      res.destroy();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.setTimeout(500, () => { req.destroy(); resolve(false); });
+  });
+}
+
+/** Poll until the server responds or we time out (default 30s). */
+async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await probeServer(port)) return;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error("Gossamer server did not start within 30s");
+}
+
+function getFreePort(): Promise<number> {
+  return new Promise((res) => {
+    const srv = createServer();
+    srv.listen(0, () => {
+      const port = (srv.address() as { port: number }).port;
+      srv.close(() => res(port));
+    });
+  });
+}
+
+export class GossamerPanel {
+  private static instance: GossamerPanel | undefined;
+
+  private readonly panel: vscode.WebviewPanel;
+  private readonly repoPath: string;
+  private readonly port: number;
+  private server: ChildProcess | undefined;
+  private watcher: FSWatcher | undefined;
+  private disposables: vscode.Disposable[] = [];
+
+  static async createOrShow(context: vscode.ExtensionContext, repoPath: string) {
+    if (GossamerPanel.instance) {
+      GossamerPanel.instance.panel.reveal();
+      return;
+    }
+    const port = await getFreePort();
+    GossamerPanel.instance = new GossamerPanel(context, repoPath, port);
+  }
+
+  static dispose() {
+    GossamerPanel.instance?.cleanup();
+    GossamerPanel.instance = undefined;
+  }
+
+  private constructor(context: vscode.ExtensionContext, repoPath: string, port: number) {
+    this.repoPath = repoPath;
+    this.port     = port;
+
+    this.panel = vscode.window.createWebviewPanel(
+      "gossamer",
+      "Gossamer",
+      vscode.ViewColumn.Two,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [
+          vscode.Uri.joinPath(context.extensionUri, "dist", "webview"),
+        ],
+      },
+    );
+
+    this.spawnServer();
+    this.panel.webview.html = this.getWebviewHtml(context);
+    this.panel.onDidDispose(() => this.cleanup(), undefined, this.disposables);
+    this.watchGitBranch();
+
+    // Signal the webview once the server is accepting requests
+    waitForServer(this.port)
+      .then(() => this.panel.webview.postMessage({ type: "server_ready" }))
+      .catch((err) => this.panel.webview.postMessage({ type: "server_error", error: String(err) }));
+  }
+
+  private spawnServer() {
+    if (!existsSync(SERVE_SCRIPT)) {
+      const msg = `Gossamer server script not found at ${SERVE_SCRIPT}. Run \`npm run build\` in the gossamer repo root first.`;
+      console.error("[Gossamer]", msg);
+      vscode.window.showErrorMessage(msg);
+      return;
+    }
+
+    const nodeExec = getSystemNode();
+    console.log(`[Gossamer] spawning: ${nodeExec} ${SERVE_SCRIPT} --repo-dir ${this.repoPath} --port ${this.port}`);
+
+    this.server = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", this.repoPath, "--port", String(this.port)], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, FORCE_COLOR: "0" },
+    });
+
+    this.server.stdout?.on("data", (d: Buffer) => {
+      console.log("[Gossamer server stdout]", d.toString().trim());
+    });
+    this.server.stderr?.on("data", (d: Buffer) => {
+      console.error("[Gossamer server stderr]", d.toString().trim());
+    });
+    this.server.on("error", (err) => {
+      console.error("[Gossamer] failed to spawn server:", err.message);
+      vscode.window.showErrorMessage(`Gossamer: failed to start server — ${err.message}`);
+    });
+    this.server.on("exit", (code, signal) => {
+      console.log(`[Gossamer server] exited code=${code} signal=${signal}`);
+    });
+  }
+
+  private watchGitBranch() {
+    const gitDir = join(this.repoPath, ".git");
+    try {
+      this.watcher = watch(gitDir, { recursive: false }, (_event, filename) => {
+        // The server polls shadows every 5s already; this is just a hint for future use
+        if (filename === "packed-refs" || (filename ?? "").startsWith("refs/")) {
+          // Server handles re-indexing internally
+        }
+      });
+    } catch { /* git dir unavailable */ }
+  }
+
+  private getWebviewHtml(context: vscode.ExtensionContext): string {
+    const webview   = this.panel.webview;
+    const distUri   = vscode.Uri.joinPath(context.extensionUri, "dist", "webview");
+    const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distUri, "assets", "index.js"));
+    const styleUri  = webview.asWebviewUri(vscode.Uri.joinPath(distUri, "assets", "index.css"));
+    const nonce     = getNonce();
+    const port      = this.port;
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src http://localhost:${port} ws://localhost:${port};" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="${styleUri}" rel="stylesheet" />
+  <title>Gossamer</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script nonce="${nonce}">window.__GOSSAMER_PORT__ = ${port};</script>
+  <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  private cleanup() {
+    this.server?.kill();
+    this.watcher?.close();
+    this.disposables.forEach((d) => d.dispose());
+    this.disposables = [];
+    GossamerPanel.instance = undefined;
+  }
+}
+
+function getNonce(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  return Array.from({ length: 32 }, () =>
+    chars[Math.floor(Math.random() * chars.length)],
+  ).join("");
+}

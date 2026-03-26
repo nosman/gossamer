@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { MemoryRouter, Routes, Route, useNavigate, useLocation, Outlet } from "react-router-dom";
 import {
   AppShell, Box, Text, NavLink, ActionIcon, Tooltip, Group, Anchor, TextInput, Select,
@@ -37,6 +37,29 @@ const NAV_ITEMS = [
 ] as const;
 
 const TOP_LEVEL = new Set(["/", "/session-tree", "/checkpoints", "/checkpoints/timeline", "/repos"]);
+
+function CopyableCrumb({ label, copyValue }: { label: string; copyValue: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(copyValue).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => undefined);
+  }, [copyValue]);
+  return (
+    <Tooltip label={copied ? "Copied!" : copyValue} withArrow position="bottom">
+      <Text
+        size="sm"
+        fw={500}
+        c="dimmed"
+        style={{ cursor: "pointer", userSelect: "none" }}
+        onClick={handleCopy}
+      >
+        {label}
+      </Text>
+    </Tooltip>
+  );
+}
 
 function getActiveNav(pathname: string): string {
   if (pathname === "/" || pathname.startsWith("/sessions/")) return "/";
@@ -249,6 +272,8 @@ export function Shell() {
                     >
                       {crumb.label}
                     </Anchor>
+                  ) : crumb.copyValue ? (
+                    <CopyableCrumb label={crumb.label} copyValue={crumb.copyValue} />
                   ) : (
                     <Text size="sm" fw={500} c="dimmed">{crumb.label}</Text>
                   )}
