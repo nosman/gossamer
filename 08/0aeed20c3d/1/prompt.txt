@@ -1,0 +1,5 @@
+some ui fixes now: the xterm window in the individual session page doesn't stay anchored to the bottom. THe content of the window rescrolls sometimes when new content appears.
+
+---
+
+When i click from the main sessions page into an individual session, the terminal window should automatically call "claude --resume <sessionId>". The session id in the top breadcrumb should also be copyable to clipboard.
