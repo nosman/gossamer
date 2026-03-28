@@ -50,6 +50,56 @@ export async function syncSessions(): Promise<void> {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export interface LogContentBlock {
+  contentType: string;
+  contentIndex: number;
+  text: string | null;
+  thinking: string | null;
+  toolUseId: string | null;
+  toolName: string | null;
+  toolInput: unknown | null;
+  toolResultContent: string | null;
+  isError: boolean | null;
+}
+
+export interface LogEventItem {
+  id: number;
+  uuid: string | null;
+  sessionId: string | null;
+  parentUuid: string | null;
+  type: string;
+  timestamp: string | null;
+  cwd: string | null;
+  gitBranch: string | null;
+  slug: string | null;
+  isSidechain: boolean | null;
+  toolUseId: string | null;
+  parentToolUseId: string | null;
+  contents: LogContentBlock[];
+  usage: {
+    model: string | null;
+    stopReason: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationInputTokens: number;
+    cacheReadInputTokens: number;
+  } | null;
+  hookProgress: { type: string | null; hookEvent: string | null; hookName: string | null; command: string | null; } | null;
+  systemData: { subtype: string | null; hookCount: number | null; stopReason: string | null; preventedContinuation: boolean | null; level: string | null; durationMs: number | null; } | null;
+}
+
+export async function fetchSession(id: string): Promise<Session> {
+  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<Session>;
+}
+
+export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
+  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(id)}/log-events`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<LogEventItem[]>;
+}
+
 export function subscribeToUpdates(onUpdate: () => void): () => void {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;

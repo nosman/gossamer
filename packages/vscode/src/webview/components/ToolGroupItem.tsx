@@ -1,0 +1,82 @@
+import React, { useEffect, useState } from "react";
+import { Box, Badge, Group, Text, Collapse } from "@mantine/core";
+import type { Event } from "../api";
+import { ToolUseItem } from "./ToolUseItem";
+import { relativeTime } from "./TimeAgo";
+
+export interface ToolUseData {
+  pre: Event;
+  post?: Event;
+  failed: boolean;
+}
+
+function toolName(pre: Event): string {
+  const d = pre.data as Record<string, unknown>;
+  return typeof d.tool_name === "string" ? d.tool_name : "?";
+}
+
+export function ToolGroupItem({ tools, autoExpand, matchTerms, targetLogEventId }: {
+  tools: ToolUseData[];
+  autoExpand?: boolean;
+  matchTerms?: string[];
+  targetLogEventId?: number | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (autoExpand) setExpanded(true);
+  }, [autoExpand]);
+
+  const names = tools.map((t) => toolName(t.pre));
+  const counts = new Map<string, number>();
+  for (const n of names) counts.set(n, (counts.get(n) ?? 0) + 1);
+  const summary = [...counts.entries()].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(", ");
+
+  const anyFailed  = tools.some((t) => t.failed);
+  const anyPending = tools.some((t) => !t.post);
+  const anyBlocked = tools.some((t) => t.pre.blocked);
+
+  const statusColor = anyFailed ? "red" : anyPending ? "blue" : "teal";
+  const statusLabel = anyFailed ? "failed" : anyPending ? "running" : "done";
+
+  const timeStart = relativeTime(tools[0].pre.timestamp);
+  const lastPost  = [...tools].reverse().find((t) => t.post)?.post;
+  const timeEnd   = lastPost ? relativeTime(lastPost.timestamp) : undefined;
+  const showRange = timeEnd && timeEnd !== timeStart;
+
+  return (
+    <Box style={{
+      border: "1px solid var(--vscode-panel-border)",
+      borderRadius: 8,
+      overflow: "hidden",
+      backgroundColor: "var(--vscode-editorWidget-background)",
+    }}>
+        <Group
+          gap={8}
+          px={12}
+          py={7}
+          onClick={() => setExpanded((v) => !v)}
+          style={{ cursor: "pointer" }}
+        >
+          <Badge size="xs" variant="light" color={statusColor}>{statusLabel}</Badge>
+          <Text size="xs" c="dimmed" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {tools.length} tool {tools.length === 1 ? "use" : "uses"} — {summary}
+          </Text>
+          {anyBlocked && <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>}
+          <Text size="xs" c="dimmed">{timeStart}{showRange ? ` → ${timeEnd}` : ""}</Text>
+          <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>
+        </Group>
+        <Collapse in={expanded}>
+          <Box style={{ borderTop: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))" }}>
+            {tools.map((t, i) => {
+              const isMatch = targetLogEventId != null && (
+                t.pre._sourceLogEventId === targetLogEventId ||
+                t.post?._sourceLogEventId === targetLogEventId
+              );
+              return <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} autoExpand={isMatch} matchTerms={isMatch ? matchTerms : undefined} />;
+            })}
+          </Box>
+        </Collapse>
+    </Box>
+  );
+}

@@ -24,7 +24,11 @@ const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0)
 
 type StartupState = "starting" | "ready" | "error";
 
-export function ActiveSessions() {
+interface ActiveSessionsProps {
+  onSessionPress: (sessionId: string, title: string) => void;
+}
+
+export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   const [startup, setStartup]       = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<string | null>(null);
   const [sessions, setSessions]     = useState<Session[]>([]);
@@ -125,7 +129,7 @@ export function ActiveSessions() {
         py={8}
         justify="space-between"
         style={{
-          borderBottom: "1px solid light-dark(var(--mantine-color-gray-3), var(--mantine-color-dark-4))",
+          borderBottom: "1px solid var(--vscode-panel-border)",
           flexShrink: 0,
         }}
       >
@@ -167,7 +171,7 @@ export function ActiveSessions() {
                   <SessionRow
                     key={item.sessionId}
                     session={item}
-                    onPress={() => { /* TODO: open session detail */ }}
+                    onPress={() => onSessionPress(item.sessionId, item.intent ?? item.summary ?? `${item.sessionId.slice(0, 8)}…`)}
                     onArchive={handleArchive}
                     isArchived={archivedIds.has(item.sessionId)}
                   />

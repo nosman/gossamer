@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { createServer } from "net";
 import { get as httpGet } from "http";
 import { execFileSync } from "child_process";
+import { SessionDetailPanel } from "./SessionDetailPanel.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -57,11 +58,13 @@ export class GossamerPanel {
   private static instance: GossamerPanel | undefined;
 
   private readonly panel: vscode.WebviewPanel;
+  private readonly context: vscode.ExtensionContext;
   private readonly repoPath: string;
   private readonly port: number;
   private server: ChildProcess | undefined;
   private watcher: FSWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
+  private serverReady = false;
 
   static async createOrShow(context: vscode.ExtensionContext, repoPath: string) {
     if (GossamerPanel.instance) {
@@ -78,6 +81,7 @@ export class GossamerPanel {
   }
 
   private constructor(context: vscode.ExtensionContext, repoPath: string, port: number) {
+    this.context  = context;
     this.repoPath = repoPath;
     this.port     = port;
 
@@ -97,11 +101,26 @@ export class GossamerPanel {
     this.spawnServer();
     this.panel.webview.html = this.getWebviewHtml(context);
     this.panel.onDidDispose(() => this.cleanup(), undefined, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (msg: { type: string; sessionId?: string; title?: string }) => {
+        if (msg.type === "open_session" && msg.sessionId) {
+          SessionDetailPanel.createOrShow(this.context, msg.sessionId, msg.title ?? msg.sessionId.slice(0, 8), this.port);
+        }
+      },
+      undefined,
+      this.disposables,
+    );
     this.watchGitBranch();
 
-    // Signal the webview once the server is accepting requests
+    // Signal the webview once the server is accepting requests.
+    // Also re-signal on visibility changes (e.g. tab moved to a new window causes a reload).
+    this.panel.onDidChangeViewState(
+      (e) => { if (e.webviewPanel.visible && this.serverReady) this.panel.webview.postMessage({ type: "server_ready" }); },
+      undefined,
+      this.disposables,
+    );
     waitForServer(this.port)
-      .then(() => this.panel.webview.postMessage({ type: "server_ready" }))
+      .then(() => { this.serverReady = true; return this.panel.webview.postMessage({ type: "server_ready" }); })
       .catch((err) => this.panel.webview.postMessage({ type: "server_error", error: String(err) }));
   }
 
