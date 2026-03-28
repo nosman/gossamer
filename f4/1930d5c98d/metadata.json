@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f41930d5c98d",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 13,
+  "files_touched": [
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/webview/App.tsx",
+    "packages/vscode/src/webview/api.ts",
+    "packages/vscode/src/webview/components/EventItem.tsx",
+    "packages/vscode/src/webview/components/MarkdownView.tsx",
+    "packages/vscode/src/webview/components/ToolGroupItem.tsx",
+    "packages/vscode/src/webview/components/ToolUseItem.tsx",
+    "packages/vscode/src/webview/global.css",
+    "packages/vscode/src/webview/main.tsx",
+    "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "packages/vscode/src/webview/vscodeApi.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f4/1930d5c98d/0/metadata.json",
+      "transcript": "/f4/1930d5c98d/0/full.jsonl",
+      "content_hash": "/f4/1930d5c98d/0/content_hash.txt",
+      "prompt": "/f4/1930d5c98d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4176,
+    "cache_creation_tokens": 471932,
+    "cache_read_tokens": 13319862,
+    "output_tokens": 123840,
+    "api_call_count": 169
+  }
+}
