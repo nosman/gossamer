@@ -118,3 +118,7 @@ The sessionDetails still scrolls to the bottom when i try and scroll up. Maybe a
 ---
 
 It's still doing it. It happens automatically after a couple seconds when i scroll up
+
+---
+
+commit and push the changes
