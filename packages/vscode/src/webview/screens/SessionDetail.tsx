@@ -6,6 +6,7 @@ import {
   fetchSession, fetchLogEvents, subscribeToUpdates,
   type Session, type LogEventItem,
 } from "../api";
+import { postToExtension } from "../vscodeApi";
 import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
@@ -297,10 +298,10 @@ interface Props {
 }
 
 export function SessionDetail({ sessionId, title, onBack }: Props) {
-  const [session, setSession]     = useState<Session | null>(null);
+  const [session, setSession]         = useState<Session | null>(null);
   const [renderItems, setRenderItems] = useState<RenderItem[]>([]);
-  const [loading, setLoading]     = useState(true);
-  const [error, setError]         = useState<string | null>(null);
+  const [loading, setLoading]         = useState(true);
+  const [error, setError]             = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const initialLoadDone = useRef(false);
 
@@ -325,19 +326,17 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     load().finally(() => { setLoading(false); initialLoadDone.current = true; });
   }, [sessionId]);
 
-  // Live update: re-fetch when server broadcasts changes
   useEffect(() => {
     return subscribeToUpdates(() => { load().catch(() => undefined); });
   }, [sessionId]);
 
-  // Auto-scroll only when new content arrives on a live session and user is already near the bottom
+  // Auto-scroll only when new content arrives on a live session and user is already near bottom
   useEffect(() => {
     if (!initialLoadDone.current) return;
     if (!session?.isLive) return;
     const el = viewport.current;
     if (!el) return;
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distFromBottom < 80) {
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) {
       el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }
   }, [renderItems]);
@@ -355,27 +354,32 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   return (
     <Box style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
       {/* Header */}
-      <Group
-        px={12}
-        py={8}
-        gap={8}
-        style={{ borderBottom: "1px solid var(--vscode-panel-border)", flexShrink: 0 }}
-      >
-        {onBack && (
-          <ActionIcon variant="subtle" size="sm" onClick={onBack} title="Back to sessions">
-            ←
-          </ActionIcon>
+      <Box style={{ borderBottom: "1px solid var(--vscode-panel-border)", flexShrink: 0 }}>
+        <Group px={12} py={6} gap={8}>
+          {onBack && (
+            <ActionIcon variant="subtle" size="sm" onClick={onBack} title="Back to sessions">←</ActionIcon>
+          )}
+          <Text size="sm" fw={600} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {session?.intent ?? session?.summary ?? title}
+          </Text>
+          {session?.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
+          {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
+        </Group>
+        {session && (
+          <Group px={12} pb={5} gap={16}>
+            {session.cwd && (
+              <Text size="xs" c="dimmed" ff="monospace" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}>
+                {session.cwd}
+              </Text>
+            )}
+            {session.gitUserName && <Text size="xs" c="dimmed">{session.gitUserName}</Text>}
+            <Text size="xs" c="dimmed">started <TimeAgo iso={session.startedAt} /></Text>
+            <Text size="xs" c="dimmed">updated <TimeAgo iso={session.updatedAt} /></Text>
+          </Group>
         )}
-        <Text size="sm" fw={500} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {title}
-        </Text>
-        {session?.branch && (
-          <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>
-        )}
-        {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
-      </Group>
+      </Box>
 
-      {/* Events */}
+      {/* Body: events */}
       <ScrollArea style={{ flex: 1 }} viewportRef={viewport}>
         <Box pb={32}>
           {renderItems.map((item, i) => {
@@ -389,3 +393,4 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     </Box>
   );
 }
+

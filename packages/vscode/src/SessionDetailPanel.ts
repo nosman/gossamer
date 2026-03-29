@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
+import { openCheckpointDiff } from "./diffUtils.js";
+import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -12,14 +14,16 @@ export class SessionDetailPanel {
     sessionId: string,
     title: string,
     port: number,
+    checkpointProvider: CheckpointTreeProvider,
   ): void {
     const existing = SessionDetailPanel.panels.get(sessionId);
     if (existing) {
       existing.panel.reveal();
+      checkpointProvider.setSession(sessionId, port).catch(console.error);
       return;
     }
     const shortTitle = title.length > 40 ? title.slice(0, 39) + "…" : title;
-    new SessionDetailPanel(context, sessionId, shortTitle, port);
+    new SessionDetailPanel(context, sessionId, shortTitle, port, checkpointProvider);
   }
 
   private readonly panel: vscode.WebviewPanel;
@@ -29,6 +33,7 @@ export class SessionDetailPanel {
     sessionId: string,
     title: string,
     port: number,
+    checkpointProvider: CheckpointTreeProvider,
   ) {
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
@@ -44,6 +49,14 @@ export class SessionDetailPanel {
     );
 
     this.panel.webview.html = this.getHtml(context, sessionId, title, port);
+    checkpointProvider.setSession(sessionId, port).catch(console.error);
+    this.panel.webview.onDidReceiveMessage(
+      (msg: { type: string; checkpointId?: string; filePath?: string }) => {
+        if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
+          openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
+        }
+      },
+    );
     this.panel.onDidDispose(() => SessionDetailPanel.panels.delete(sessionId));
     SessionDetailPanel.panels.set(sessionId, this);
   }

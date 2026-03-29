@@ -7,6 +7,8 @@ import { createServer } from "net";
 import { get as httpGet } from "http";
 import { execFileSync } from "child_process";
 import { SessionDetailPanel } from "./SessionDetailPanel.js";
+import { openCheckpointDiff } from "./diffUtils.js";
+import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -61,18 +63,19 @@ export class GossamerPanel {
   private readonly context: vscode.ExtensionContext;
   private readonly repoPath: string;
   private readonly port: number;
+  private readonly checkpointProvider: CheckpointTreeProvider;
   private server: ChildProcess | undefined;
   private watcher: FSWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
   private serverReady = false;
 
-  static async createOrShow(context: vscode.ExtensionContext, repoPath: string) {
+  static async createOrShow(context: vscode.ExtensionContext, repoPath: string, checkpointProvider: CheckpointTreeProvider) {
     if (GossamerPanel.instance) {
       GossamerPanel.instance.panel.reveal();
       return;
     }
     const port = await getFreePort();
-    GossamerPanel.instance = new GossamerPanel(context, repoPath, port);
+    GossamerPanel.instance = new GossamerPanel(context, repoPath, port, checkpointProvider);
   }
 
   static dispose() {
@@ -80,10 +83,11 @@ export class GossamerPanel {
     GossamerPanel.instance = undefined;
   }
 
-  private constructor(context: vscode.ExtensionContext, repoPath: string, port: number) {
-    this.context  = context;
-    this.repoPath = repoPath;
-    this.port     = port;
+  private constructor(context: vscode.ExtensionContext, repoPath: string, port: number, checkpointProvider: CheckpointTreeProvider) {
+    this.context            = context;
+    this.repoPath           = repoPath;
+    this.port               = port;
+    this.checkpointProvider = checkpointProvider;
 
     this.panel = vscode.window.createWebviewPanel(
       "gossamer",
@@ -102,9 +106,12 @@ export class GossamerPanel {
     this.panel.webview.html = this.getWebviewHtml(context);
     this.panel.onDidDispose(() => this.cleanup(), undefined, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type: string; sessionId?: string; title?: string }) => {
+      (msg: { type: string; sessionId?: string; title?: string; checkpointId?: string; filePath?: string }) => {
         if (msg.type === "open_session" && msg.sessionId) {
-          SessionDetailPanel.createOrShow(this.context, msg.sessionId, msg.title ?? msg.sessionId.slice(0, 8), this.port);
+          SessionDetailPanel.createOrShow(this.context, msg.sessionId, msg.title ?? msg.sessionId.slice(0, 8), this.port, this.checkpointProvider);
+        }
+        if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
+          openCheckpointDiff(this.port, msg.checkpointId, msg.filePath).catch(console.error);
         }
       },
       undefined,

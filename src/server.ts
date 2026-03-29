@@ -3,10 +3,11 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import pty from "node-pty";
-import { execSync, exec as execCb } from "child_process";
+import { execSync, exec as execCb, execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 
-const exec = promisify(execCb);
+const exec     = promisify(execCb);
+const execFile = promisify(execFileCb);
 import { existsSync, mkdirSync } from "fs";
 import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
@@ -647,6 +648,49 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       res.json(stats);
     } catch {
       res.json([]);
+    }
+  });
+
+  // GET /api/v2/checkpoints/:id/file?path=<path>&side=before|after
+  // Returns the raw file content at the commit (after) or its parent (before).
+  app.get("/api/v2/checkpoints/:id/file", async (req, res) => {
+    try {
+      const checkpointId = req.params.id;
+      const filePath = typeof req.query.path === "string" ? req.query.path : null;
+      const side = req.query.side === "before" ? "before" : "after";
+      if (!filePath) { res.status(400).end(); return; }
+      const join = await db.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId },
+        select: { gitOid: true },
+      });
+      if (!join) { res.status(404).end(); return; }
+      // Determine which repo contains this checkpoint's commit.
+      // Look up the session's cwd via CheckpointSessionMetadata → ShadowSession.
+      const sessionLink = await db.checkpointSessionMetadata.findFirst({
+        where: { checkpointId },
+        select: { sessionId: true },
+      });
+      let cpRepoDir = repoDir;
+      if (sessionLink) {
+        const shadow = await db.shadowSession.findUnique({
+          where: { sessionId: sessionLink.sessionId },
+          select: { cwd: true },
+        });
+        if (shadow?.cwd) cpRepoDir = shadow.cwd;
+      }
+      if (!cpRepoDir) { res.status(400).end(); return; }
+      const ref = side === "before" ? `${join.gitOid}^:${filePath}` : `${join.gitOid}:${filePath}`;
+      try {
+        const { stdout } = await execFile("git", ["-C", cpRepoDir, "show", ref]);
+        res.set("Content-Type", "text/plain; charset=utf-8");
+        res.send(stdout);
+      } catch {
+        // File didn't exist at this ref (new file, deleted file, or binary)
+        res.set("Content-Type", "text/plain; charset=utf-8");
+        res.send("");
+      }
+    } catch (err) {
+      res.status(500).end();
     }
   });
 

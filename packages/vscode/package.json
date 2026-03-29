@@ -16,6 +16,10 @@
       {
         "command": "gossamer.openPanel",
         "title": "Gossamer: Open Session Viewer"
+      },
+      {
+        "command": "gossamer.showCheckpointDiff",
+        "title": "Gossamer: Show Checkpoint Diff"
       }
     ],
     "viewsContainers": {
@@ -24,6 +28,14 @@
           "id": "gossamer",
           "title": "Gossamer",
           "icon": "$(history)"
+        }
+      ]
+    },
+    "views": {
+      "gossamer": [
+        {
+          "id": "gossamer.checkpoints",
+          "name": "Checkpoints"
         }
       ]
     }

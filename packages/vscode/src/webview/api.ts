@@ -94,6 +94,26 @@ export async function fetchSession(id: string): Promise<Session> {
   return res.json() as Promise<Session>;
 }
 
+export interface Checkpoint {
+  checkpointId: string;
+  branch: string | null;
+  createdAt: string | null;
+  filesTouched: string[];
+  tokenUsage: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    apiCallCount: number;
+  } | null;
+}
+
+export async function fetchCheckpoints(sessionId: string): Promise<Checkpoint[]> {
+  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json() as Promise<Checkpoint[]>;
+}
+
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
   const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(id)}/log-events`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

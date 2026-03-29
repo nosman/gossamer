@@ -2,12 +2,32 @@ import * as vscode from "vscode";
 import { existsSync } from "fs";
 import { join } from "path";
 import { GossamerPanel } from "./GossamerPanel.js";
+import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
+import { openCheckpointDiff } from "./diffUtils.js";
 
 export function activate(context: vscode.ExtensionContext) {
+  const checkpointProvider = new CheckpointTreeProvider();
+
+  context.subscriptions.push(
+    vscode.window.createTreeView("gossamer.checkpoints", {
+      treeDataProvider: checkpointProvider,
+      showCollapseAll: true,
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "gossamer.showCheckpointDiff",
+      (checkpointId: string, filePath: string, port: number) => {
+        openCheckpointDiff(port, checkpointId, filePath).catch(console.error);
+      },
+    ),
+  );
+
   // Auto-open panel if a workspace folder has Entire enabled
   const entireWorkspace = findEntireWorkspace();
   if (entireWorkspace) {
-    GossamerPanel.createOrShow(context, entireWorkspace).catch(console.error);
+    GossamerPanel.createOrShow(context, entireWorkspace, checkpointProvider).catch(console.error);
   }
 
   // Command to manually open the panel
@@ -16,20 +36,20 @@ export function activate(context: vscode.ExtensionContext) {
       const ws = findEntireWorkspace();
       if (!ws) {
         vscode.window.showErrorMessage(
-          "Gossamer: no workspace folder with .entire/settings.json found."
+          "Gossamer: no workspace folder with .entire/settings.json found.",
         );
         return;
       }
-      GossamerPanel.createOrShow(context, ws).catch(console.error);
-    })
+      GossamerPanel.createOrShow(context, ws, checkpointProvider).catch(console.error);
+    }),
   );
 
   // Watch for new workspace folders being added
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       const ws = findEntireWorkspace();
-      if (ws) GossamerPanel.createOrShow(context, ws).catch(console.error);
-    })
+      if (ws) GossamerPanel.createOrShow(context, ws, checkpointProvider).catch(console.error);
+    }),
   );
 }
 
