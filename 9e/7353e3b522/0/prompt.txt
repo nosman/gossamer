@@ -162,3 +162,7 @@ can you use vscode's native treeview for that? and when the items are clicked op
 ---
 
 how do i open the activity bar sidebar
+
+---
+
+Commit and push these changes.
