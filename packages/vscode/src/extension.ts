@@ -3,10 +3,14 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { GossamerPanel } from "./GossamerPanel.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
-import { openCheckpointDiff } from "./diffUtils.js";
+import { openCheckpointDiff, diffProvider } from "./diffUtils.js";
 
 export function activate(context: vscode.ExtensionContext) {
   const checkpointProvider = new CheckpointTreeProvider();
+
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider("gossamer-diff", diffProvider),
+  );
 
   context.subscriptions.push(
     vscode.window.createTreeView("gossamer.checkpoints", {

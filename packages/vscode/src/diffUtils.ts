@@ -1,8 +1,21 @@
 import * as vscode from "vscode";
 import { get as httpGet } from "http";
-import { mkdirSync, writeFileSync, chmodSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
+
+const SCHEME = "gossamer-diff";
+
+export class GossamerDiffProvider implements vscode.TextDocumentContentProvider {
+  private readonly content = new Map<string, string>();
+
+  set(uri: vscode.Uri, text: string): void {
+    this.content.set(uri.toString(), text);
+  }
+
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    return this.content.get(uri.toString()) ?? "";
+  }
+}
+
+export const diffProvider = new GossamerDiffProvider();
 
 function fetchContent(port: number, checkpointId: string, filePath: string, side: string): Promise<string> {
   return new Promise((resolve) => {
@@ -16,27 +29,24 @@ function fetchContent(port: number, checkpointId: string, filePath: string, side
 }
 
 export async function openCheckpointDiff(port: number, checkpointId: string, filePath: string): Promise<void> {
-  const fileName = filePath.split("/").pop() ?? filePath;
-  const tmpDir = join(tmpdir(), "gossamer-diff");
-  mkdirSync(tmpDir, { recursive: true });
-
   const [before, after] = await Promise.all([
     fetchContent(port, checkpointId, filePath, "before"),
     fetchContent(port, checkpointId, filePath, "after"),
   ]);
 
-  const shortId    = checkpointId.slice(0, 8);
-  const beforePath = join(tmpDir, `${shortId}-before-${fileName}`);
-  const afterPath  = join(tmpDir, `${shortId}-after-${fileName}`);
-  writeFileSync(beforePath, before);
-  chmodSync(beforePath, 0o444);
-  writeFileSync(afterPath, after);
-  chmodSync(afterPath, 0o444);
+  const fileName  = filePath.split("/").pop() ?? filePath;
+  const shortId   = checkpointId.slice(0, 8);
+  // Include filePath in the URI so VS Code infers the language from the extension
+  const beforeUri = vscode.Uri.parse(`${SCHEME}:before-${shortId}/${filePath}`);
+  const afterUri  = vscode.Uri.parse(`${SCHEME}:after-${shortId}/${filePath}`);
+
+  diffProvider.set(beforeUri, before);
+  diffProvider.set(afterUri, after);
 
   await vscode.commands.executeCommand(
     "vscode.diff",
-    vscode.Uri.file(beforePath),
-    vscode.Uri.file(afterPath),
+    beforeUri,
+    afterUri,
     `${fileName} (checkpoint ${shortId})`,
   );
 }
