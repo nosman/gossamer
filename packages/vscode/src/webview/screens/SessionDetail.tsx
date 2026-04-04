@@ -364,6 +364,12 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
           </Text>
           {session?.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
+          <ActionIcon
+            size="sm"
+            variant="subtle"
+            title="Resume session in terminal"
+            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "" })}
+          >▶</ActionIcon>
         </Group>
         {session && (
           <Group px={12} pb={5} gap={16}>

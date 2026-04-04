@@ -7,6 +7,7 @@ import {
   type Session,
 } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
+import { postToExtension } from "../vscodeApi";
 
 const SESSION_COLUMNS: { label: string; width: number }[] = [
   { label: "Intent",     width: COL_WIDTHS.intent          },
@@ -139,11 +140,16 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
           checked={showArchived}
           onChange={(e) => setShowArchived(e.currentTarget.checked)}
         />
-        <Tooltip label="Re-index sessions from git" withArrow>
-          <Button size="xs" variant="default" loading={syncing} onClick={handleSync}>
-            Sync
+        <Group gap={8}>
+          <Button size="xs" variant="filled" onClick={() => postToExtension({ type: "new_session" })}>
+            + New Session
           </Button>
-        </Tooltip>
+          <Tooltip label="Re-index sessions from git" withArrow>
+            <Button size="xs" variant="default" loading={syncing} onClick={handleSync}>
+              Sync
+            </Button>
+          </Tooltip>
+        </Group>
       </Group>
 
       {sessions.length === 0 ? (

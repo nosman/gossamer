@@ -5,10 +5,13 @@ interface Checkpoint {
   checkpointId: string;
   createdAt: string | null;
   filesTouched: string[];
+  summary: { intent: string } | null;
+  commitMessage: string | null;
+  commitHash: string | null;
 }
 
 export type CheckpointTreeItem =
-  | { kind: "checkpoint"; cp: Checkpoint; port: number }
+  | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number }
   | { kind: "dir";        label: string;  fullPath: string; children: CheckpointTreeItem[] }
   | { kind: "file";       name: string;   fullPath: string; checkpointId: string; port: number };
 
@@ -79,12 +82,22 @@ export class CheckpointTreeProvider
 
   getTreeItem(element: CheckpointTreeItem): vscode.TreeItem {
     if (element.kind === "checkpoint") {
-      const shortId = element.cp.checkpointId.slice(0, 8);
-      const item = new vscode.TreeItem(shortId, vscode.TreeItemCollapsibleState.Expanded);
-      item.description = element.cp.createdAt
-        ? new Date(element.cp.createdAt).toLocaleTimeString()
-        : undefined;
-      item.iconPath = new vscode.ThemeIcon("git-commit");
+      const cp      = element.cp;
+      const shortId = cp.checkpointId.slice(0, 8);
+      const msg     = cp.commitMessage;
+      const label   = msg
+        ? (msg.length > 60 ? msg.slice(0, 59) + "…" : msg)
+        : shortId;
+
+      const collapsible = element.index === 0
+        ? vscode.TreeItemCollapsibleState.Expanded
+        : vscode.TreeItemCollapsibleState.Collapsed;
+      const item = new vscode.TreeItem(label, collapsible);
+
+      const commitShort = cp.commitHash ? cp.commitHash.slice(0, 8) : null;
+      item.description  = commitShort ? `${shortId} · ${commitShort}` : shortId;
+      item.tooltip      = msg ?? shortId;
+      item.iconPath     = new vscode.ThemeIcon("git-commit");
       item.contextValue = "checkpoint";
       return item;
     }
@@ -110,7 +123,7 @@ export class CheckpointTreeProvider
   getChildren(element?: CheckpointTreeItem): vscode.ProviderResult<CheckpointTreeItem[]> {
     if (!element) {
       if (!this.currentPort) return [];
-      return this.checkpoints.map((cp) => ({ kind: "checkpoint", cp, port: this.currentPort! }));
+      return this.checkpoints.map((cp, index) => ({ kind: "checkpoint", cp, port: this.currentPort!, index }));
     }
     if (element.kind === "checkpoint") {
       return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port);

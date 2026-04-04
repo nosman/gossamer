@@ -51,9 +51,17 @@ export class SessionDetailPanel {
     this.panel.webview.html = this.getHtml(context, sessionId, title, port);
     checkpointProvider.setSession(sessionId, port).catch(console.error);
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type: string; checkpointId?: string; filePath?: string }) => {
+      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string }) => {
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
           openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
+        }
+        if (msg.type === "resume_session" && msg.sessionId) {
+          const terminal = vscode.window.createTerminal({
+            name: title,
+            cwd: msg.cwd || undefined,
+          });
+          terminal.show();
+          terminal.sendText(`claude --resume ${msg.sessionId}`, true);
         }
       },
     );

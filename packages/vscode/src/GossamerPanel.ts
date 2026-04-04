@@ -1,14 +1,17 @@
 import * as vscode from "vscode";
 import { spawn, ChildProcess } from "child_process";
 import { watch, FSWatcher, existsSync } from "fs";
-import { join, resolve, dirname } from "path";
+import { join, resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { createServer } from "net";
-import { get as httpGet } from "http";
-import { execFileSync } from "child_process";
+import { get as httpGet, request as httpRequest } from "http";
+import { execFileSync, execFile } from "child_process";
+import { promisify } from "util";
 import { SessionDetailPanel } from "./SessionDetailPanel.js";
 import { openCheckpointDiff } from "./diffUtils.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -53,6 +56,45 @@ function getFreePort(): Promise<number> {
       const port = (srv.address() as { port: number }).port;
       srv.close(() => res(port));
     });
+  });
+}
+
+function httpGetJson<T>(url: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const req = httpGet(url, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+function httpPostJson<T>(url: string, body: unknown): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const opts = new URL(url);
+    const req = httpRequest({
+      hostname: opts.hostname,
+      port: opts.port,
+      path: opts.pathname,
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.write(data);
+    req.end();
   });
 }
 
@@ -113,6 +155,9 @@ export class GossamerPanel {
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
           openCheckpointDiff(this.port, msg.checkpointId, msg.filePath).catch(console.error);
         }
+        if (msg.type === "new_session") {
+          this.promptAndSpawnSession().catch(console.error);
+        }
       },
       undefined,
       this.disposables,
@@ -127,6 +172,7 @@ export class GossamerPanel {
       this.disposables,
     );
     waitForServer(this.port)
+      .then(() => this.ensureRepoRegistered())
       .then(() => { this.serverReady = true; return this.panel.webview.postMessage({ type: "server_ready" }); })
       .catch((err) => this.panel.webview.postMessage({ type: "server_error", error: String(err) }));
   }
@@ -159,6 +205,54 @@ export class GossamerPanel {
     });
     this.server.on("exit", (code, signal) => {
       console.log(`[Gossamer server] exited code=${code} signal=${signal}`);
+    });
+  }
+
+  private async promptAndSpawnSession(): Promise<void> {
+    const prompt = await vscode.window.showInputBox({
+      title: "New Claude Session",
+      prompt: "What do you want Claude to do?",
+      placeHolder: "Describe the task…",
+      ignoreFocusOut: true,
+    });
+    if (!prompt) return;
+
+    const name = await vscode.window.showInputBox({
+      title: "Session Name (optional)",
+      prompt: "Give this session a name, or press Enter to skip",
+      placeHolder: "e.g. refactor auth module",
+      ignoreFocusOut: true,
+    });
+
+    const escaped = prompt.replace(/"/g, '\\"');
+    const terminal = vscode.window.createTerminal({
+      name: name || "Claude",
+      cwd: this.repoPath,
+    });
+    terminal.show();
+    terminal.sendText(`claude "${escaped}"`, true);
+    if (name) {
+      // Send /rename after a brief pause to let claude start up
+      setTimeout(() => terminal.sendText(`/rename ${name}`, true), 2000);
+    }
+  }
+
+  private async ensureRepoRegistered(): Promise<void> {
+    const current = await httpGetJson<unknown>(`http://localhost:${this.port}/api/repos/current`);
+    if (current !== null) return; // already registered
+
+    const name = basename(this.repoPath);
+    let remote = "";
+    try {
+      const { stdout } = await execFileAsync("git", ["-C", this.repoPath, "remote", "get-url", "origin"]);
+      remote = stdout.trim();
+    } catch { /* no remote configured */ }
+
+    console.log(`[Gossamer] registering repo: ${name} at ${this.repoPath}`);
+    await httpPostJson(`http://localhost:${this.port}/api/repos`, {
+      name,
+      localPath: this.repoPath,
+      remote,
     });
   }
 

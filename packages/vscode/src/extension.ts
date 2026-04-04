@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { existsSync } from "fs";
 import { join } from "path";
 import { GossamerPanel } from "./GossamerPanel.js";
+import { OnboardingPanel } from "./OnboardingPanel.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
 import { openCheckpointDiff, diffProvider } from "./diffUtils.js";
 
@@ -28,10 +29,14 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
-  // Auto-open panel if a workspace folder has Entire enabled
+  // Auto-open panel if a workspace folder has Entire enabled, otherwise onboard
   const entireWorkspace = findEntireWorkspace();
   if (entireWorkspace) {
     GossamerPanel.createOrShow(context, entireWorkspace, checkpointProvider).catch(console.error);
+  } else if (vscode.workspace.workspaceFolders?.length) {
+    OnboardingPanel.createOrShow(context, (ws) => {
+      GossamerPanel.createOrShow(context, ws, checkpointProvider).catch(console.error);
+    });
   }
 
   // Command to manually open the panel
@@ -59,6 +64,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   GossamerPanel.dispose();
+  OnboardingPanel.dispose();
 }
 
 function findEntireWorkspace(): string | undefined {

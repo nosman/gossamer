@@ -8,7 +8,7 @@
     "vscode": "^1.85.0"
   },
   "categories": ["Other"],
-  "activationEvents": ["workspaceContains:.entire/settings.json"],
+  "activationEvents": ["onStartupFinished"],
   "type": "module",
   "main": "./dist/extension.js",
   "contributes": {

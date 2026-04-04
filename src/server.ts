@@ -218,7 +218,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
           cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
           repoRoot:        repoDir ?? null,
-          repoName:        repoName,
+          repoName:        basename(cwdMap.get(sessionId) ?? shadow?.cwd ?? "") || repoName,
           parentSessionId: parentMap.get(sessionId) ?? null,
           childSessionIds: childMap.get(sessionId) ?? [],
           gitUserName:     cpUser?.gitUserName ?? gitUser.name,
@@ -232,7 +232,12 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         };
       });
 
-      result.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      result.sort((a, b) => {
+        const aLocal = repoDir ? (a.cwd === repoDir || a.cwd.startsWith(repoDir + "/") ? 0 : 1) : 1;
+        const bLocal = repoDir ? (b.cwd === repoDir || b.cwd.startsWith(repoDir + "/") ? 0 : 1) : 1;
+        if (aLocal !== bLocal) return aLocal - bLocal;
+        return b.updatedAt.localeCompare(a.updatedAt);
+      });
       res.json(result);
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -708,6 +713,33 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         },
       });
 
+      const gitOidRows = await db.checkpointIdGitOidJoin.findMany({
+        where: { checkpointId: { in: sessionRows.map((s) => s.checkpointId) } },
+        select: { checkpointId: true, gitOid: true },
+      });
+      const gitOidMap = new Map(gitOidRows.map((r) => [r.checkpointId, r.gitOid]));
+
+      // Look up the repo path for this session so we can read commit messages
+      const shadow = await db.shadowSession.findUnique({
+        where:  { sessionId },
+        select: { cwd: true },
+      });
+      const cpRepoDir = shadow?.cwd ?? repoDir;
+
+      // Fetch commit subject lines in parallel for all checkpoints that have a gitOid
+      const commitMessages = new Map<string, string>();
+      if (cpRepoDir) {
+        await Promise.all(
+          gitOidRows.map(async ({ checkpointId, gitOid }) => {
+            try {
+              const { stdout } = await execFile("git", ["-C", cpRepoDir, "log", "--format=%s", "-1", gitOid]);
+              const msg = stdout.trim();
+              if (msg) commitMessages.set(checkpointId, msg);
+            } catch { /* commit not found or repo unavailable */ }
+          }),
+        );
+      }
+
       res.json(sessionRows.map((s) => ({
         checkpointId:  s.checkpointId,
         cliVersion:    s.cliVersion,
@@ -722,8 +754,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         } : null,
         filesTouched:  s.filesTouched.map((f) => f.filePath.path),
         summary:       s.summary ? mapV2Summary(s.summary) : null,
-        commitMessage: null,
-        commitHash:    null,
+        commitMessage: commitMessages.get(s.checkpointId) ?? null,
+        commitHash:    gitOidMap.get(s.checkpointId) ?? null,
       })));
     } catch (err) {
       res.status(500).json({ error: String(err) });
