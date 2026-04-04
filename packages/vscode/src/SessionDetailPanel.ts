@@ -38,9 +38,10 @@ export class SessionDetailPanel {
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
       title,
-      vscode.ViewColumn.Active,
+      vscode.ViewColumn.Beside,
       {
         enableScripts: true,
+        enableFindWidget: true,
         retainContextWhenHidden: true,
         localResourceRoots: [
           vscode.Uri.joinPath(context.extensionUri, "dist", "webview"),

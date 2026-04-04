@@ -34,7 +34,7 @@ export class OnboardingPanel {
       "gossamer.onboarding",
       "Gossamer",
       vscode.ViewColumn.One,
-      { enableScripts: true },
+      { enableScripts: true, enableFindWidget: true },
     );
 
     this.panel.webview.html = this.getHtml();

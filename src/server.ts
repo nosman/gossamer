@@ -13,7 +13,7 @@ import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
-import { readConfig, addRepo, removeRepo, findRepo, defaultDbPath, type RepoConfig } from "./config.js";
+import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, type RepoConfig } from "./config.js";
 
 // ─── Schema push ──────────────────────────────────────────────────────────────
 
@@ -719,26 +719,31 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       const gitOidMap = new Map(gitOidRows.map((r) => [r.checkpointId, r.gitOid]));
 
-      // Look up the repo path for this session so we can read commit messages
+      // Look up the repo path for this session so we can read commit messages.
+      // Fall back to all configured repos so messages show regardless of current workspace.
       const shadow = await db.shadowSession.findUnique({
         where:  { sessionId },
         select: { cwd: true },
       });
-      const cpRepoDir = shadow?.cwd ?? repoDir;
+      const primaryDir = shadow?.cwd ?? repoDir;
+      const candidateDirs = [
+        primaryDir,
+        ...readConfig().repos.map((r) => r.localPath).filter((p) => p !== primaryDir),
+      ].filter(Boolean) as string[];
 
       // Fetch commit subject lines in parallel for all checkpoints that have a gitOid
       const commitMessages = new Map<string, string>();
-      if (cpRepoDir) {
-        await Promise.all(
-          gitOidRows.map(async ({ checkpointId, gitOid }) => {
+      await Promise.all(
+        gitOidRows.map(async ({ checkpointId, gitOid }) => {
+          for (const dir of candidateDirs) {
             try {
-              const { stdout } = await execFile("git", ["-C", cpRepoDir, "log", "--format=%s", "-1", gitOid]);
+              const { stdout } = await execFile("git", ["-C", dir, "log", "--format=%s", "-1", gitOid]);
               const msg = stdout.trim();
-              if (msg) commitMessages.set(checkpointId, msg);
-            } catch { /* commit not found or repo unavailable */ }
-          }),
-        );
-      }
+              if (msg) { commitMessages.set(checkpointId, msg); return; }
+            } catch { /* try next repo */ }
+          }
+        }),
+      );
 
       res.json(sessionRows.map((s) => ({
         checkpointId:  s.checkpointId,
@@ -777,7 +782,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const page = typeof req.query.page === "string" ? Math.max(0, parseInt(req.query.page, 10) || 0) : 0;
       const PAGE_SIZE = 50;
 
-      const repo = findRepo(localPath);
+      const repo = findRepoForPath(localPath);
       if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }
 
       const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
@@ -789,7 +794,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const seenIds = new Set<string>();
       try {
         const { stdout: gitOut } = await exec(
-          `git -C ${JSON.stringify(localPath)} log --format=%H%x00%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
+          `git -C ${JSON.stringify(repo.localPath)} log --format=%H%x00%B%x1e --max-count=${PAGE_SIZE} --skip=${page * PAGE_SIZE} ${JSON.stringify(branch)}`,
           { timeout: 10_000 },
         );
         for (const record of gitOut.split("\x1e")) {

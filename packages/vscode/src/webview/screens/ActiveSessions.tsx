@@ -144,6 +144,11 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
           <Button size="xs" variant="filled" onClick={() => postToExtension({ type: "new_session" })}>
             + New Session
           </Button>
+          <Tooltip label="Search sessions" withArrow>
+            <Button size="xs" variant="default" onClick={() => postToExtension({ type: "search_sessions" })}>
+              🔍
+            </Button>
+          </Tooltip>
           <Tooltip label="Re-index sessions from git" withArrow>
             <Button size="xs" variant="default" loading={syncing} onClick={handleSync}>
               Sync

@@ -125,6 +125,10 @@ export class GossamerPanel {
     GossamerPanel.instance = undefined;
   }
 
+  static searchSessions() {
+    GossamerPanel.instance?.openSearchQuickPick().catch(console.error);
+  }
+
   private constructor(context: vscode.ExtensionContext, repoPath: string, port: number, checkpointProvider: CheckpointTreeProvider) {
     this.context            = context;
     this.repoPath           = repoPath;
@@ -137,6 +141,7 @@ export class GossamerPanel {
       vscode.ViewColumn.Two,
       {
         enableScripts: true,
+        enableFindWidget: true,
         retainContextWhenHidden: true,
         localResourceRoots: [
           vscode.Uri.joinPath(context.extensionUri, "dist", "webview"),
@@ -157,6 +162,9 @@ export class GossamerPanel {
         }
         if (msg.type === "new_session") {
           this.promptAndSpawnSession().catch(console.error);
+        }
+        if (msg.type === "search_sessions") {
+          this.openSearchQuickPick().catch(console.error);
         }
       },
       undefined,
@@ -206,6 +214,122 @@ export class GossamerPanel {
     this.server.on("exit", (code, signal) => {
       console.log(`[Gossamer server] exited code=${code} signal=${signal}`);
     });
+  }
+
+  private async openSearchQuickPick(): Promise<void> {
+    interface SessionData {
+      sessionId: string;
+      intent: string | null;
+      prompt: string | null;
+      repoName: string | null;
+      cwd: string;
+    }
+    interface ContentResult {
+      sessionId: string;
+      snippet: string;
+      contentType: string;
+    }
+    type QP = vscode.QuickPickItem & { sessionId: string; sessionTitle: string };
+
+    const allSessions = await httpGetJson<SessionData[]>(`http://localhost:${this.port}/api/sessions`);
+
+    const sessionLabel = (s: SessionData) =>
+      s.intent ?? s.prompt?.slice(0, 80) ?? s.sessionId.slice(0, 8);
+
+    const toSessionItem = (s: SessionData): QP => ({
+      sessionId:    s.sessionId,
+      sessionTitle: sessionLabel(s),
+      label:        sessionLabel(s),
+      description:  s.repoName ?? s.cwd.split("/").pop() ?? "",
+      detail:       s.cwd,
+    });
+
+    const buildItems = (query: string, contentResults: ContentResult[]): QP[] => {
+      const q = query.toLowerCase();
+      const sessionMatches = query
+        ? allSessions.filter((s) =>
+            sessionLabel(s).toLowerCase().includes(q) ||
+            (s.repoName ?? "").toLowerCase().includes(q) ||
+            s.cwd.toLowerCase().includes(q),
+          )
+        : allSessions;
+
+      const items: QP[] = [];
+
+      if (sessionMatches.length > 0) {
+        if (contentResults.length > 0) {
+          items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Sessions", sessionId: "", sessionTitle: "" });
+        }
+        items.push(...sessionMatches.map(toSessionItem));
+      }
+
+      if (contentResults.length > 0) {
+        const seenInSessions = new Set(sessionMatches.map((s) => s.sessionId));
+        items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Chat History", sessionId: "", sessionTitle: "" });
+        for (const r of contentResults) {
+          const session = allSessions.find((s) => s.sessionId === r.sessionId);
+          const snippet = r.snippet.replace(/«/g, "").replace(/»/g, "").trim();
+          items.push({
+            sessionId:    r.sessionId,
+            sessionTitle: sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "" }),
+            label:        sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "" }),
+            description:  seenInSessions.has(r.sessionId) ? snippet : `${session?.repoName ?? ""} · ${snippet}`,
+            detail:       session?.cwd ?? "",
+            alwaysShow:   true,
+          });
+        }
+      }
+
+      return items;
+    };
+
+    const qp = vscode.window.createQuickPick<QP>();
+    qp.placeholder = "Search sessions and chat history…";
+    qp.matchOnDescription = false;
+    qp.matchOnDetail = false;
+    qp.items = allSessions.map(toSessionItem);
+
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+
+    qp.onDidChangeValue((query) => {
+      if (debounce) clearTimeout(debounce);
+      if (!query.trim()) {
+        qp.busy = false;
+        qp.items = allSessions.map(toSessionItem);
+        return;
+      }
+      qp.busy = true;
+      debounce = setTimeout(async () => {
+        let contentResults: ContentResult[] = [];
+        try {
+          contentResults = await httpGetJson<ContentResult[]>(
+            `http://localhost:${this.port}/api/search?q=${encodeURIComponent(query)}&limit=20`,
+          );
+        } catch { /* FTS syntax error — show session matches only */ }
+        qp.items = buildItems(query, contentResults);
+        qp.busy = false;
+      }, 300);
+    });
+
+    qp.onDidAccept(() => {
+      const selected = qp.selectedItems[0];
+      qp.dispose();
+      if (selected?.sessionId) {
+        SessionDetailPanel.createOrShow(
+          this.context,
+          selected.sessionId,
+          selected.sessionTitle,
+          this.port,
+          this.checkpointProvider,
+        );
+      }
+    });
+
+    qp.onDidHide(() => {
+      if (debounce) clearTimeout(debounce);
+      qp.dispose();
+    });
+    qp.show();
   }
 
   private async promptAndSpawnSession(): Promise<void> {

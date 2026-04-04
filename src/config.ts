@@ -54,6 +54,17 @@ export function findRepo(localPath: string): RepoConfig | undefined {
   return readConfig().repos.find((r) => r.localPath === localPath);
 }
 
+/** Find a repo whose localPath is an ancestor of (or exact match for) the given path. */
+export function findRepoForPath(fsPath: string): RepoConfig | undefined {
+  const config = readConfig();
+  const exact = config.repos.find((r) => r.localPath === fsPath);
+  if (exact) return exact;
+  return config.repos.find((r) => {
+    const prefix = r.localPath.endsWith("/") ? r.localPath : r.localPath + "/";
+    return fsPath.startsWith(prefix);
+  });
+}
+
 /** Derive a default DB path for a new repo: ~/.gossamer/repos/<name>.db */
 export function defaultDbPath(name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");

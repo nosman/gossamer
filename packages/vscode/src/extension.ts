@@ -29,6 +29,12 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.searchSessions", () => {
+      GossamerPanel.searchSessions();
+    }),
+  );
+
   // Auto-open panel if a workspace folder has Entire enabled, otherwise onboard
   const entireWorkspace = findEntireWorkspace();
   if (entireWorkspace) {

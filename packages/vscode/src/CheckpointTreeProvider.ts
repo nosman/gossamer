@@ -10,26 +10,29 @@ interface Checkpoint {
   commitHash: string | null;
 }
 
-export type CheckpointTreeItem =
-  | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number }
-  | { kind: "dir";        label: string;  fullPath: string; children: CheckpointTreeItem[] }
-  | { kind: "file";       name: string;   fullPath: string; checkpointId: string; port: number };
+interface BranchLogEntry extends Checkpoint {
+  sessionId: string;
+  branch: string | null;
+}
 
-function fetchCheckpoints(sessionId: string, port: number): Promise<Checkpoint[]> {
-  return new Promise((resolve) => {
-    const req = httpGet(
-      `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
-          catch { resolve([]); }
-        });
-      },
-    );
-    req.on("error", () => resolve([]));
-    req.setTimeout(5000, () => { req.destroy(); resolve([]); });
+export type CheckpointTreeItem =
+  | { kind: "group";      label: string; checkpoints: Checkpoint[]; port: number; startIndex: number }
+  | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number }
+  | { kind: "dir";        label: string; fullPath: string; children: CheckpointTreeItem[] }
+  | { kind: "file";       name: string;  fullPath: string; checkpointId: string; port: number };
+
+function fetchJson<T>(url: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const req = httpGet(url, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error("timeout")); });
   });
 }
 
@@ -71,16 +74,59 @@ export class CheckpointTreeProvider
   private _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private checkpoints: Checkpoint[] = [];
+  private sessionCheckpoints: Checkpoint[] = [];
+  private branchCheckpoints: Checkpoint[] = [];
+  private currentBranch: string | null = null;
   private currentPort: number | null = null;
 
   async setSession(sessionId: string, port: number): Promise<void> {
     this.currentPort = port;
-    this.checkpoints = await fetchCheckpoints(sessionId, port);
+
+    const sessionCheckpoints = await fetchJson<Checkpoint[]>(
+      `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+    ).catch(() => [] as Checkpoint[]);
+
+    const sessionIds = new Set(sessionCheckpoints.map((cp) => cp.checkpointId));
+
+    let branchCheckpoints: Checkpoint[] = [];
+    try {
+      const sessionInfo = await fetchJson<{ cwd: string; branch: string | null }>(
+        `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
+      );
+      if (sessionInfo.cwd && sessionInfo.branch) {
+        this.currentBranch = sessionInfo.branch;
+        const log = await fetchJson<{ entries: BranchLogEntry[] }>(
+          `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(sessionInfo.cwd)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
+        );
+        const seen = new Set<string>(sessionIds);
+        for (const entry of log.entries) {
+          if (!seen.has(entry.checkpointId)) {
+            seen.add(entry.checkpointId);
+            branchCheckpoints.push({
+              checkpointId: entry.checkpointId,
+              createdAt:    entry.createdAt,
+              filesTouched: entry.filesTouched,
+              summary:      entry.summary,
+              commitMessage: entry.commitMessage,
+              commitHash:   entry.commitHash,
+            });
+          }
+        }
+      }
+    } catch { /* branch-log unavailable or repo not registered */ }
+
+    this.sessionCheckpoints = sessionCheckpoints;
+    this.branchCheckpoints  = branchCheckpoints;
+    if (branchCheckpoints.length === 0) this.currentBranch = null;
     this._onDidChangeTreeData.fire();
   }
 
   getTreeItem(element: CheckpointTreeItem): vscode.TreeItem {
+    if (element.kind === "group") {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
+      item.iconPath = new vscode.ThemeIcon("history");
+      return item;
+    }
     if (element.kind === "checkpoint") {
       const cp      = element.cp;
       const shortId = cp.checkpointId.slice(0, 8);
@@ -123,7 +169,31 @@ export class CheckpointTreeProvider
   getChildren(element?: CheckpointTreeItem): vscode.ProviderResult<CheckpointTreeItem[]> {
     if (!element) {
       if (!this.currentPort) return [];
-      return this.checkpoints.map((cp, index) => ({ kind: "checkpoint", cp, port: this.currentPort!, index }));
+      const port = this.currentPort;
+      const groups: CheckpointTreeItem[] = [
+        { kind: "group", label: "Session", checkpoints: this.sessionCheckpoints, port, startIndex: 0 },
+      ];
+      if (this.branchCheckpoints.length > 0) {
+        const branchLabel = this.currentBranch
+          ? `Branch History (${this.currentBranch})`
+          : "Branch History";
+        groups.push({
+          kind: "group",
+          label: branchLabel,
+          checkpoints: this.branchCheckpoints,
+          port,
+          startIndex: this.sessionCheckpoints.length,
+        });
+      }
+      return groups;
+    }
+    if (element.kind === "group") {
+      return element.checkpoints.map((cp, i) => ({
+        kind: "checkpoint" as const,
+        cp,
+        port: element.port,
+        index: element.startIndex + i,
+      }));
     }
     if (element.kind === "checkpoint") {
       return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port);

@@ -20,6 +20,10 @@
       {
         "command": "gossamer.showCheckpointDiff",
         "title": "Gossamer: Show Checkpoint Diff"
+      },
+      {
+        "command": "gossamer.searchSessions",
+        "title": "Gossamer: Search Sessions"
       }
     ],
     "viewsContainers": {
@@ -31,6 +35,14 @@
         }
       ]
     },
+    "keybindings": [
+      {
+        "command": "gossamer.searchSessions",
+        "key": "ctrl+shift+f",
+        "mac": "cmd+shift+f",
+        "when": "activeWebviewPanelId == 'gossamer'"
+      }
+    ],
     "views": {
       "gossamer": [
         {
