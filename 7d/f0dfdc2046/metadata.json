@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "7df0dfdc2046",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/OnboardingPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/extension.ts",
+    "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/f0dfdc2046/0/metadata.json",
+      "transcript": "/7d/f0dfdc2046/0/full.jsonl",
+      "content_hash": "/7d/f0dfdc2046/0/content_hash.txt",
+      "prompt": "/7d/f0dfdc2046/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4475,
+    "cache_creation_tokens": 898791,
+    "cache_read_tokens": 37877880,
+    "output_tokens": 222154,
+    "api_call_count": 412
+  }
+}

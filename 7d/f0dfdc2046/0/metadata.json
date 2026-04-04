@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "7df0dfdc2046",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-04T04:06:49.346425Z",
+  "branch": "main",
+  "checkpoints_count": 12,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/OnboardingPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/extension.ts",
+    "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "e86947f85c9b",
+  "token_usage": {
+    "input_tokens": 4475,
+    "cache_creation_tokens": 898791,
+    "cache_read_tokens": 37877880,
+    "output_tokens": 222154,
+    "api_call_count": 412
+  },
+  "session_metrics": {
+    "turn_count": 58
+  },
+  "summary": {
+    "intent": "Refactor the gossamer Claude Code session viewer from an Electron desktop app to a VS Code extension to reduce install friction and improve context-switching between editing and session review.",
+    "outcome": "Delivered a working VS Code extension with a sessions list, per-session detail tabs, a native VS Code tree view for checkpoints with inline diff support, VS Code theme integration, onboarding flow for new repos, and new/resume session terminal spawning.",
+    "learnings": {
+      "repo": [
+        "gossamer architecture: Entire.io writes session data to a dedicated git branch; gossamer indexes that branch into SQLite; the extension is a pure viewer that spawns the existing Express server as a child process",
+        "Entire.io detection is done via presence of .entire/settings.json at the repo root",
+        "CheckpointIdGitOidJoin table maps checkpointId → gitOid; required for git show calls in the file content endpoint",
+        "Repo registration lives in ~/.gossamer/config.json and must be done via POST /api/repos before indexing works for a new workspace",
+        "The server's GET /api/sessions was setting repoName from the global repoDir (basename of the configured workspace) rather than per-session cwd — every session showed the same repo name regardless of where it ran",
+        "The checkpoints endpoint /api/v2/sessions/:id/checkpoints returned null for commitHash/gitOid because the join table lookup was missing; git log must be run against session.cwd, not the global repoDir",
+        "packages/core (@gossamer/core) holds extracted indexer.ts, db.ts, search.ts, gitUtils.ts, and Prisma schema; the VS Code extension host imports neither — it spawns the server instead to avoid native module issues"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "finding": "Originally listed only src/extension.ts and src/GossamerPanel.ts in 'include'; SessionDetailPanel.ts and diffUtils.ts were never compiled, causing blank diff views at runtime. Fixed to 'src/**/*.ts' with webview excluded."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "process.execPath points to VS Code's bundled Electron node, not system node. Must use execFileSync('which', ['node']) to get system node for spawning the gossamer server, otherwise better-sqlite3 native module version mismatches."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "panel.onDidChangeViewState must re-send server_ready when the panel becomes visible again (e.g. after being moved to a new window), not just on initial startup. Requires a serverReady boolean flag."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "finding": "Auto-scroll must check scroll position inline at effect time (el.scrollHeight - el.scrollTop - el.clientHeight \u003c 80), not via a separate scroll listener — Mantine ScrollArea's viewport ref is null when the [] dep effect runs."
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "finding": "root and outDir must be absolute paths (resolve(__dirname, 'src/webview')) not relative strings — relative paths resolve from CWD (repo root when run via workspace), not the package directory."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "GET /api/v2/checkpoints/:id/file must look up the session's cwd via CheckpointIdGitOidJoin → CheckpointSessionMetadata → ShadowSession to find the correct repo for git show. Using the global repoDir returns empty content for sessions from other repos."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "Sessions sort should be two-key: workspace-matching sessions (cwd starts with repoDir) first, then by updatedAt descending within each group."
+        }
+      ],
+      "workflow": [
+        "VS Code webview script tags must have type='module' when Vite outputs ESM; omitting it causes the browser to silently ignore the script — webview appears blank with no console errors",
+        "VS Code CSS variables (--vscode-editor-background, --vscode-panel-border, etc.) are injected into webview body automatically; body also gets vscode-dark/vscode-light class for color scheme detection",
+        "TextDocumentContentProvider with a custom URI scheme (gossamer-diff:) is the right way to open vscode.diff with in-memory content — no temp files, inherently read-only, supports syntax highlighting via file extension in the URI path",
+        "VS Code extension activationEvents must be 'onStartupFinished' (not 'workspaceContains:') for onboarding flows that need to run even when the detection file is absent",
+        "vscode.window.createTerminal({ cwd }) + terminal.sendText() is the correct way to spawn a Claude session from the extension host",
+        "Native tree view (TreeDataProvider + vscode.window.registerTreeDataProvider) is far better than a webview sidebar for structured hierarchical data — gets VS Code expand/collapse, keyboard navigation, and theming for free"
+      ]
+    },
+    "friction": [
+      "Node.js MODULE_VERSION mismatch: VS Code extension host uses Electron's Node (version 140) while better-sqlite3 was compiled for system Node (version 141) — required abandoning direct Prisma imports in the extension host entirely",
+      "Vite 'Cannot resolve entry module index.html' — caused by relative root path resolving against CWD rather than package directory",
+      "Blank webview with no errors — caused by missing type='module' on script tag; VS Code webview silently drops non-module script loading",
+      "'Error loading sessions' on first open — server schema push takes several seconds; no readiness probe meant webview fetched before server was ready",
+      "Blank diff view despite endpoint returning 200 — root cause was tsconfig.extension.json missing files so diffUtils.ts and SessionDetailPanel.ts were never compiled; hard to diagnose because no runtime error was thrown",
+      "git show returned empty for checkpoint file diffs — endpoint used global repoDir instead of per-session cwd; sessions in other repos silently returned empty strings",
+      "Auto-scroll persisted after fix — Mantine ScrollArea viewport ref was null at effect registration time, so the scroll listener never attached",
+      "Content provider approach initially failed with 'generate code or select a language' blank diff — switched to temp files, then back to content provider once the actual root cause (missing compiled files) was found"
+    ],
+    "open_items": [
+      "Session naming: show session name instead of session ID in the sessions table when a name has been assigned (mentioned but deferred)",
+      "Electron app is intentionally broken during refactor — not yet cleaned up or formally deprecated",
+      "CLI exposure for packages/core (@gossamer/core) — module API only for now, CLI deferred",
+      "New session /rename timing is a hardcoded 2-second delay — fragile if claude takes longer to start",
+      "onboarding flow detects .entire/settings.json and registers the repo but does not verify the Entire.io branch actually has data before claiming setup is complete",
+      "CheckpointTreeProvider fetches checkpoints over HTTP on every setSession call — no caching; could be slow for sessions with many checkpoints"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-04T04:05:49.858544Z",
+    "agent_lines": 344,
+    "agent_removed": 22,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 344,
+    "total_lines_changed": 366,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
