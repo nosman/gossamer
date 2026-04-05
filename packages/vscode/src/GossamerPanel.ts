@@ -453,14 +453,7 @@ export class GossamerPanel {
 </head>
 <body>
   <div id="root"></div>
-  <button id="gossamer-minimize" title="Minimize panel" style="position:fixed;top:6px;right:8px;z-index:9999;background:none;border:none;cursor:pointer;opacity:0.5;font-size:16px;line-height:1;padding:2px 6px;color:var(--vscode-foreground)">─</button>
-  <script nonce="${nonce}">
-    window.__GOSSAMER_PORT__ = ${port};
-    window.__vscodeApi = acquireVsCodeApi();
-    document.getElementById('gossamer-minimize').addEventListener('click', () => {
-      window.__vscodeApi.postMessage({ type: 'minimize' });
-    });
-  </script>
+  <script nonce="${nonce}">window.__GOSSAMER_PORT__ = ${port};</script>
   <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;
