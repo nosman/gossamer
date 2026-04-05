@@ -406,3 +406,7 @@ is it possible to color-code the sidebar so that deleted, added, and modified fi
 ---
 
 ok great let's do the resourceUri to keep it consistent with other tools
+
+---
+
+add the changes, commit the files, and push
