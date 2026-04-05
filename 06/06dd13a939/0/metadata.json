@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "0606dd13a939",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-05T20:20:35.987601Z",
+  "branch": "mcp",
+  "checkpoints_count": 10,
+  "files_touched": [
+    "README.md",
+    "package-lock.json",
+    "package.json",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/webview/components/EventItem.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "scripts/install-mcp.mjs",
+    "src/config.ts",
+    "src/mcp-server.ts",
+    "src/mcp.ts",
+    "src/serve.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "a51b107bd115",
+  "token_usage": {
+    "input_tokens": 4681,
+    "cache_creation_tokens": 1591871,
+    "cache_read_tokens": 54094572,
+    "output_tokens": 313790,
+    "api_call_count": 580
+  },
+  "session_metrics": {
+    "turn_count": 75
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app into a VS Code extension to reduce install friction and improve context-switching between editing and viewing Claude Code sessions. The extension should auto-detect repos with Entire.io enabled and reuse existing indexing/server logic.",
+    "outcome": "Successfully built a fully functional VS Code extension with a sessions list, per-session detail tabs, native checkpoint tree view, VS Code-themed UI, QuickPick search with FTS, MCP server embedded in the HTTP server at /mcp, a stable port config, and an install script for Claude/Codex MCP configuration.",
+    "learnings": {
+      "repo": [
+        "The architecture is: Entire.io CLI writes to a git branch → gossamer reads git history and indexes into SQLite (via Prisma + better-sqlite3) → HTTP server serves the data → clients (Electron app, VS Code extension) read from it.",
+        "Repo detection uses .entire/settings.json at the workspace root — this is the canonical signal that Entire.io is enabled for a project.",
+        "The gossamer server uses repoDir as a global variable set at startup, but many multi-repo operations require looking up the correct repo from session.cwd or CheckpointSessionMetadata → ShadowSession.cwd.",
+        "~/.gossamer/config.json holds the repo registry with localPath, dbPath, name, remote — and now also an optional port field.",
+        "The CheckpointIdGitOidJoin table maps checkpointId → gitOid; this is the bridge needed to run git show for file content and git log for commit messages.",
+        "findRepo() uses exact path matching — cwd is often a subdirectory of the registered repo root, requiring findRepoForPath() with prefix matching instead.",
+        "The shadow branch polling (5s interval) was the primary mechanism for detecting new Entire.io commits before being replaced with fs.watch on .git/refs/."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 221,
+          "end_line": 221,
+          "finding": "repoName was set to basename(repoDir) — the server's configured workspace — not per-session from basename(session.cwd), so all sessions showed the same wrong repo name."
+        },
+        {
+          "path": "src/config.ts",
+          "finding": "Added findRepoForPath(fsPath) with prefix matching: finds repo whose localPath is a prefix of the given path, enabling branch-log to work when cwd is a subdirectory of the repo root."
+        },
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "finding": "Critical bug: include was set to only ['src/extension.ts', 'src/GossamerPanel.ts'], so SessionDetailPanel.ts and diffUtils.ts were never compiled, causing blank diff views at runtime. Fixed to ['src/**/*.ts'] with src/webview excluded."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "process.execPath points to VS Code's bundled Electron node (not system node), causing better-sqlite3 NODE_MODULE_VERSION mismatch. Must use execFileSync('which', ['node']) to get system node for spawning the server."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "finding": "Auto-scroll was implemented via a separate scroll listener on Mantine ScrollArea's viewportRef, but the ref is null at the time the effect runs (Mantine renders viewport asynchronously). Fixed by reading scroll position inline at effect time: el.scrollHeight - el.scrollTop - el.clientHeight \u003c 80."
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "finding": "Vite root: 'src/webview' resolves relative to CWD (repo root when run via workspace -w flag), not the package directory. Must use resolve(__dirname, 'src/webview') with absolute path. Also requires entryFileNames and assetFileNames set for deterministic output names."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "Webview HTML script tag must have type='module' since Vite outputs ESM — without it the browser silently ignores the script, resulting in a blank panel."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "The /api/v2/checkpoints/:id/file endpoint must look up session cwd via CheckpointSessionMetadata → ShadowSession to find the correct repo for git show, not use the server's configured repoDir."
+        }
+      ],
+      "workflow": [
+        "VS Code extension host uses Electron's bundled Node.js, not system Node.js — any native modules (better-sqlite3) compiled for system Node will fail with NODE_MODULE_VERSION mismatch. Solution: spawn the server as a child process using system node instead of importing Prisma directly.",
+        "Webview HTML reloads when a panel is moved to a new window — any one-time initialization (like server_ready postMessage) must be re-sent on onDidChangeViewState when panel becomes visible.",
+        "VS Code TextDocumentContentProvider with a custom URI scheme (gossamer-diff:) is cleaner than temp files for read-only diff content — no disk writes, inherently read-only, and URIs preserve file extension for syntax highlighting.",
+        "vscode.window.createQuickPick is the idiomatic VS Code pattern for live-filtering search, supporting QuickPickItemKind.Separator for grouped results.",
+        "For VS Code theme adoption in webviews: set forceColorScheme on MantineProvider based on document.body.classList ('vscode-light' vs 'vscode-dark'), use createTheme({ fontFamily: 'var(--vscode-font-family)' }), and replace all hardcoded colors with --vscode-* CSS variables.",
+        "MCP SDK's StreamableHTTPServerTransport with sessionIdGenerator: undefined enables stateless POST-based tool calls, making it simple to embed in an existing Express server at /mcp.",
+        "npm workspace -w flag requires the exact package name from package.json 'name' field, not the directory name."
+      ]
+    },
+    "friction": [
+      "better-sqlite3 native module version mismatch (NODE_MODULE_VERSION 141 vs 140) was a non-obvious blocker that required architectural change — spawning server as child process instead of importing Prisma in extension host.",
+      "tsconfig.extension.json only listed two specific files in 'include', silently not compiling SessionDetailPanel.ts and diffUtils.ts — resulted in a hard-to-diagnose blank diff view with no error.",
+      "Vite's relative 'root' path resolved against CWD, not the package directory — only surfaced when run via npm workspace flag.",
+      "Mantine ScrollArea viewportRef is null at React effect time, making it impossible to attach scroll listeners in a [] dependency effect.",
+      "The gossamer server's repoDir global variable didn't match session cwd (often a subdirectory), causing git show to fail silently and return empty content for file diffs.",
+      "Dynamic port selection (getFreePort) made MCP configuration impossible — required architectural change to stable configured port.",
+      "fs.watch on Mantine ScrollArea viewport doesn't attach because the DOM element isn't ready when the effect with [] dependency runs.",
+      "Server must be rebuilt (npm run build at repo root) before changes take effect in the VS Code extension — the extension spawns dist/serve.js, so TypeScript source changes aren't live."
+    ],
+    "open_items": [
+      "Session naming: show the session name in the sessions table instead of session ID when a session has been renamed — tabled because the rename/naming field wasn't immediately findable in the DB schema.",
+      "The stdio MCP wrapper (mcp.ts) still exists as a fallback for clients that don't support HTTP transport — should be tested and documented separately.",
+      "The onboarding flow (OnboardingPanel.ts) handles detection but POST /api/repos registration happens in GossamerPanel after server start — the flow between onboarding and first-time repo registration should be validated end-to-end.",
+      "Search highlight in SessionDetail: AssistantCard renders highlighted text as plain text (not Markdown) when matchTerms are present — rich markdown formatting is lost in highlighted search results.",
+      "The Electron app (app/ directory) was intentionally broken during refactor and not updated to use @gossamer/core — it's still present but non-functional.",
+      "The gossamer MCP server's get_checkpoint_diff tool fetches diff and diff-stats separately with two HTTP calls — could be combined into a single endpoint.",
+      "File watchers use fs.watch which is unreliable on some platforms — the 30s fallback poll is a workaround rather than a proper fix."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-05T20:19:36.967502Z",
+    "agent_lines": 1421,
+    "agent_removed": 76,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1421,
+    "total_lines_changed": 1497,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
