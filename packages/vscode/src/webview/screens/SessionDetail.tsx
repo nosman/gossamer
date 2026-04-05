@@ -223,7 +223,7 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   return <>{parts.map((p, i) => i % 2 === 1 ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark> : p)}</>;
 }
 
-function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; stop: Event | null }) {
+function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[] }) {
   const d      = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg    = str(d.last_assistant_message);
   const thinking = str(d.thinking);
@@ -262,12 +262,16 @@ function ClaudeTurnCard({ toolGroups, stop }: { toolGroups: ToolUseData[][]; sto
             </Group>
             <Collapse in={thinkingExpanded}>
               <Box mt={4} style={{ backgroundColor: "var(--vscode-textCodeBlock-background)", border: "1px solid var(--vscode-panel-border)", borderRadius: 4, padding: "8px 12px", fontFamily: "var(--vscode-editor-font-family, monospace)", fontSize: 12, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", color: "var(--vscode-descriptionForeground)" }}>
-                {highlightText(thinking, [])}
+                {highlightText(thinking, matchTerms ?? [])}
               </Box>
             </Collapse>
           </Box>
         )}
-        {stop && msg && <Box mb={toolGroups.length > 0 ? 6 : 0}><MarkdownView text={msg} /></Box>}
+        {stop && msg && <Box mb={toolGroups.length > 0 ? 6 : 0}>{matchTerms?.length ? (
+          <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
+            {highlightText(msg, matchTerms)}
+          </Text>
+        ) : <MarkdownView text={msg} />}</Box>}
         {toolGroups.length > 0 && (
           <Box>
             <Group gap={6} style={{ cursor: "pointer" }} onClick={() => setToolsExpanded((v) => !v)}>
@@ -297,6 +301,11 @@ interface Props {
   onBack?: () => void;
 }
 
+const highlightQuery = (window as unknown as Record<string, unknown>).__GOSSAMER_HIGHLIGHT__;
+const HIGHLIGHT_TERMS: string[] = typeof highlightQuery === "string" && highlightQuery.trim()
+  ? highlightQuery.trim().split(/\s+/).filter(Boolean)
+  : [];
+
 export function SessionDetail({ sessionId, title, onBack }: Props) {
   const [session, setSession]         = useState<Session | null>(null);
   const [renderItems, setRenderItems] = useState<RenderItem[]>([]);
@@ -304,6 +313,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   const [error, setError]             = useState<string | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
   const initialLoadDone = useRef(false);
+  const matchTerms = HIGHLIGHT_TERMS;
 
   async function load() {
     try {
@@ -323,7 +333,16 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
 
   useEffect(() => {
     initialLoadDone.current = false;
-    load().finally(() => { setLoading(false); initialLoadDone.current = true; });
+    load().finally(() => {
+      setLoading(false);
+      initialLoadDone.current = true;
+      if (matchTerms.length > 0) {
+        setTimeout(() => {
+          const mark = viewport.current?.querySelector("mark");
+          mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+      }
+    });
   }, [sessionId]);
 
   useEffect(() => {
@@ -390,9 +409,9 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
         <Box pb={32}>
           {renderItems.map((item, i) => {
             if (item.kind === "claudeTurn") {
-              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} />;
+              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} />;
             }
-            return <EventItem key={i} event={item.event} />;
+            return <EventItem key={i} event={item.event} matchTerms={matchTerms} />;
           })}
         </Box>
       </ScrollArea>

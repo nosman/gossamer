@@ -8,7 +8,9 @@ import { promisify } from "util";
 
 const exec     = promisify(execCb);
 const execFile = promisify(execFileCb);
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, watch as fsWatch, FSWatcher } from "fs";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createMcpServer } from "./mcp-server.js";
 import { basename, dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
@@ -1144,6 +1146,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       void indexCheckpointsForRepo(name, localPath, entry.dbPath);
       void indexShadowsForRepo(name, localPath, entry.dbPath);
 
+      // Start file/git watchers for the newly registered repo
+      startDbWatcher(entry.dbPath, name);
+      startGitWatcher(localPath, name, entry.dbPath);
+
       res.status(201).json(entry);
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -1216,41 +1222,125 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   };
 
-  // ── WebSocket change detection — poll every 2s across all known repo dbs ──
+  // ── WebSocket change detection — file watchers + fallback poll ──────────────
 
   // Per-db watermarks keyed by dbPath
   const wsWatermarks = new Map<string, { logEvent: number | null; checkpoint: number | null; shadow: number | null }>();
 
+  const dbFileWatchers  = new Map<string, FSWatcher[]>();
+  const gitRefWatchers  = new Map<string, FSWatcher[]>();
+  const dbDebounceTimers  = new Map<string, ReturnType<typeof setTimeout>>();
+  const gitDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  async function checkDbAndBroadcast(p: string, label: string): Promise<void> {
+    try {
+      const repoDb = await getDb(p);
+      const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
+        repoDb.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        repoDb.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+        repoDb.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
+      ]);
+      const cur = {
+        logEvent:   latestLogEvent?.id   ?? null,
+        checkpoint: latestCheckpoint?.id ?? null,
+        shadow:     latestShadow?.id     ?? null,
+      };
+      const prev = wsWatermarks.get(p);
+      if (!prev || prev.logEvent !== cur.logEvent || prev.checkpoint !== cur.checkpoint || prev.shadow !== cur.shadow) {
+        wsWatermarks.set(p, cur);
+        process.stderr.write(`file watcher [${label}]: change detected — broadcasting\n`);
+        broadcast();
+      }
+    } catch { /* non-fatal — db may not exist yet */ }
+  }
+
+  function startDbWatcher(p: string, label: string): void {
+    if (dbFileWatchers.has(p)) return;
+    const watchers: FSWatcher[] = [];
+
+    const trigger = () => {
+      const existing = dbDebounceTimers.get(p);
+      if (existing) clearTimeout(existing);
+      dbDebounceTimers.set(p, setTimeout(() => {
+        dbDebounceTimers.delete(p);
+        void checkDbAndBroadcast(p, label);
+      }, 50));
+    };
+
+    // Watch the DB file itself (updated on WAL checkpoint)
+    if (existsSync(p)) {
+      try { watchers.push(fsWatch(p, trigger)); } catch { /* ok */ }
+    }
+    // Watch the WAL file — updated on every write in WAL mode
+    const walPath = p + "-wal";
+    if (existsSync(walPath)) {
+      try { watchers.push(fsWatch(walPath, trigger)); } catch { /* ok */ }
+    }
+    // Watch the parent directory to catch the WAL file appearing and DB creation
+    const dir = dirname(p);
+    const base = basename(p);
+    try {
+      watchers.push(fsWatch(dir, (_evt, filename) => {
+        if (filename === base || filename === base + "-wal") trigger();
+      }));
+    } catch { /* ok */ }
+
+    if (watchers.length > 0) {
+      dbFileWatchers.set(p, watchers);
+      process.stderr.write(`file watcher: watching ${p}\n`);
+    }
+  }
+
+  function startGitWatcher(localPath: string, repoName: string, repoDdPath: string): void {
+    if (gitRefWatchers.has(localPath)) return;
+    const watchers: FSWatcher[] = [];
+
+    const trigger = () => {
+      const existing = gitDebounceTimers.get(localPath);
+      if (existing) clearTimeout(existing);
+      gitDebounceTimers.set(localPath, setTimeout(() => {
+        gitDebounceTimers.delete(localPath);
+        void indexShadowsForRepo(repoName, localPath, repoDdPath);
+      }, 200));
+    };
+
+    const gitDir = join(localPath, ".git");
+    if (existsSync(gitDir)) {
+      // Watch .git/ (non-recursive) for packed-refs and FETCH_HEAD changes
+      try {
+        watchers.push(fsWatch(gitDir, (_evt, filename) => {
+          if (filename === "packed-refs" || filename === "FETCH_HEAD") trigger();
+        }));
+      } catch { /* ok */ }
+      // Watch .git/refs/ recursively for loose ref updates
+      const refsDir = join(gitDir, "refs");
+      if (existsSync(refsDir)) {
+        try { watchers.push(fsWatch(refsDir, { recursive: true }, trigger)); } catch { /* ok */ }
+      }
+    }
+
+    if (watchers.length > 0) {
+      gitRefWatchers.set(localPath, watchers);
+      process.stderr.write(`git watcher: watching ${join(localPath, ".git")}\n`);
+    }
+  }
+
+  // Start watchers for the primary DB and all configured repos
+  const nameByDbPath = new Map(readConfig().repos.map((r) => [r.dbPath, r.name]));
+  startDbWatcher(dbPath, nameByDbPath.get(dbPath) ?? basename(dbPath));
+  for (const r of readConfig().repos) {
+    startDbWatcher(r.dbPath, r.name);
+    startGitWatcher(r.localPath, r.name, r.dbPath);
+  }
+
+  // Fallback poll — catches any events missed by the file watchers (e.g. network mounts,
+  // platforms where fs.watch is unreliable, or DB files that didn't exist at startup).
   const poller = setInterval(async () => {
     const repos = readConfig().repos;
-    const nameByDbPath = new Map(repos.map((r) => [r.dbPath, r.name]));
-    // Always include the primary db even if it isn't in config yet
-    const dbPaths = [...new Set([dbPath, ...repos.map((r) => r.dbPath)])];
-    let changed = false;
-    await Promise.all(dbPaths.map(async (p) => {
-      try {
-        const repoDb = await getDb(p);
-        const [latestLogEvent, latestCheckpoint, latestShadow] = await Promise.all([
-          repoDb.logEvent.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-          repoDb.checkpointMetadata.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-          repoDb.shadowSession.findFirst({ orderBy: { id: "desc" }, select: { id: true } }),
-        ]);
-        const cur = {
-          logEvent:   latestLogEvent?.id   ?? null,
-          checkpoint: latestCheckpoint?.id ?? null,
-          shadow:     latestShadow?.id     ?? null,
-        };
-        const prev = wsWatermarks.get(p);
-        if (!prev || prev.logEvent !== cur.logEvent || prev.checkpoint !== cur.checkpoint || prev.shadow !== cur.shadow) {
-          wsWatermarks.set(p, cur);
-          changed = true;
-          const label = nameByDbPath.get(p) ?? p;
-          process.stderr.write(`change poller [${label}]: change detected — broadcasting\n`);
-        }
-      } catch { /* non-fatal — db may not exist yet */ }
-    }));
-    if (changed) broadcast();
-  }, 500);
+    const allDbPaths = [...new Set([dbPath, ...repos.map((r) => r.dbPath)])];
+    const labels = new Map([...nameByDbPath, ...repos.map((r): [string, string] => [r.dbPath, r.name])]);
+    await Promise.all(allDbPaths.map((p) => checkDbAndBroadcast(p, labels.get(p) ?? basename(p))));
+  }, 30_000);
 
   // ── Per-repo indexer helpers ───────────────────────────────────────────────
 
@@ -1325,7 +1415,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const checkpointPoller = setInterval(runAllCheckpoints, 30_000);
   process.stderr.write(`checkpoint indexer: polling every 30s across ${readConfig().repos.length} repo(s)\n`);
 
-  // ── Shadow branch indexer — all repos, every 5s ───────────────────────────
+  // ── Shadow branch indexer — git watchers + fallback poll ─────────────────────
 
   const runAllShadows = async () => {
     const repos = readConfig().repos;
@@ -1333,7 +1423,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   };
 
   void runAllShadows();
-  const shadowPoller = setInterval(runAllShadows, 5_000);
+  // Fallback: re-index every 30s in case git watchers miss an event
+  const shadowPoller = setInterval(runAllShadows, 30_000);
+  process.stderr.write(`shadow indexer: git watchers active, fallback poll every 30s\n`);
 
   // POST /api/sessions/sync — force immediate re-index of all shadow branches
   app.post("/api/sessions/sync", async (_req, res) => {
@@ -1345,18 +1437,30 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       res.status(500).json({ error: String(err) });
     }
   });
-  process.stderr.write(`shadow indexer: polling every 5s across ${readConfig().repos.length} repo(s)\n`);
 
   // Graceful shutdown
   const shutdown = () => {
     clearInterval(poller);
     clearInterval(checkpointPoller);
     clearInterval(shadowPoller);
+    for (const ws of dbFileWatchers.values()) for (const w of ws) w.close();
+    for (const ws of gitRefWatchers.values()) for (const w of ws) w.close();
+    void mcpTransport.close();
     httpServer.close();
     process.exit(0);
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+
+  // ── Embedded MCP server (streamable-HTTP transport at /mcp) ─────────────────
+
+  const mcpTransport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+  await createMcpServer(port).connect(mcpTransport);
+  // Handle both POST (tool calls) and GET (SSE for server notifications)
+  app.all("/mcp", async (req, res) => {
+    await mcpTransport.handleRequest(req, res, req.body);
+  });
+  process.stderr.write(`MCP server: listening at http://localhost:${port}/mcp\n`);
 
   await new Promise<void>((resolve) => {
     httpServer.listen(port, () => {

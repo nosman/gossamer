@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 import { spawn, ChildProcess } from "child_process";
-import { watch, FSWatcher, existsSync } from "fs";
+import { watch, FSWatcher, existsSync, readFileSync } from "fs";
 import { join, resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
-import { createServer } from "net";
+import { homedir } from "os";
 import { get as httpGet, request as httpRequest } from "http";
 import { execFileSync, execFile } from "child_process";
 import { promisify } from "util";
@@ -49,14 +49,16 @@ async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
   throw new Error("Gossamer server did not start within 30s");
 }
 
-function getFreePort(): Promise<number> {
-  return new Promise((res) => {
-    const srv = createServer();
-    srv.listen(0, () => {
-      const port = (srv.address() as { port: number }).port;
-      srv.close(() => res(port));
-    });
-  });
+const DEFAULT_PORT = 3456;
+
+function getConfiguredPort(): number {
+  try {
+    const raw = readFileSync(join(homedir(), ".gossamer", "config.json"), "utf8");
+    const cfg = JSON.parse(raw) as { port?: number };
+    return typeof cfg.port === "number" ? cfg.port : DEFAULT_PORT;
+  } catch {
+    return DEFAULT_PORT;
+  }
 }
 
 function httpGetJson<T>(url: string): Promise<T> {
@@ -116,7 +118,7 @@ export class GossamerPanel {
       GossamerPanel.instance.panel.reveal();
       return;
     }
-    const port = await getFreePort();
+    const port = getConfiguredPort();
     GossamerPanel.instance = new GossamerPanel(context, repoPath, port, checkpointProvider);
   }
 
@@ -313,6 +315,7 @@ export class GossamerPanel {
 
     qp.onDidAccept(() => {
       const selected = qp.selectedItems[0];
+      const query = qp.value.trim();
       qp.dispose();
       if (selected?.sessionId) {
         SessionDetailPanel.createOrShow(
@@ -321,6 +324,7 @@ export class GossamerPanel {
           selected.sessionTitle,
           this.port,
           this.checkpointProvider,
+          query || undefined,
         );
       }
     });

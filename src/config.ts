@@ -9,8 +9,11 @@ export interface RepoConfig {
   dbPath: string;
 }
 
+export const DEFAULT_PORT = 3456;
+
 export interface GossamerConfig {
   repos: RepoConfig[];
+  port?: number;
 }
 
 const CONFIG_DIR  = join(homedir(), ".gossamer");
