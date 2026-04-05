@@ -280,7 +280,7 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseD
             </Group>
             <Collapse in={toolsExpanded}>
               <Box mt={4} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {toolGroups.map((tools, i) => <ToolGroupItem key={i} tools={tools} />)}
+                {toolGroups.map((tools, i) => <ToolGroupItem key={i} tools={tools} matchTerms={matchTerms} />)}
               </Box>
             </Collapse>
           </Box>
@@ -336,12 +336,15 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     load().finally(() => {
       setLoading(false);
       initialLoadDone.current = true;
-      if (matchTerms.length > 0) {
-        setTimeout(() => {
+      setTimeout(() => {
+        if (matchTerms.length > 0) {
           const mark = viewport.current?.querySelector("mark");
           mark?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 100);
-      }
+        } else {
+          const el = viewport.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        }
+      }, 0);
     });
   }, [sessionId]);
 

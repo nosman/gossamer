@@ -3,11 +3,13 @@
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 
-let _api: ReturnType<typeof acquireVsCodeApi> | null = null;
+let _api: { postMessage(msg: unknown): void } | null = null;
 
 function getApi() {
-  if (!_api && typeof acquireVsCodeApi !== "undefined") {
-    _api = acquireVsCodeApi();
+  if (!_api) {
+    // Reuse the instance acquired by the host page script if available
+    _api = (window as unknown as Record<string, unknown>).__vscodeApi as typeof _api
+      ?? (typeof acquireVsCodeApi !== "undefined" ? acquireVsCodeApi() : null);
   }
   return _api;
 }
