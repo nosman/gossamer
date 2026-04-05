@@ -1,0 +1,138 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "41096d310d44",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-05T23:14:06.577374Z",
+  "branch": "mcp",
+  "checkpoints_count": 19,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/extension.ts",
+    "packages/vscode/src/webview/components/ToolGroupItem.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "packages/vscode/src/webview/vscodeApi.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "2a44716d362d",
+  "token_usage": {
+    "input_tokens": 4829,
+    "cache_creation_tokens": 1824338,
+    "cache_read_tokens": 64080604,
+    "output_tokens": 352135,
+    "api_call_count": 685
+  },
+  "session_metrics": {
+    "turn_count": 95
+  },
+  "summary": {
+    "intent": "Refactor Gossamer from an Electron desktop app into a VS Code extension to reduce install friction and improve context-switching between editing and viewing Claude sessions.",
+    "outcome": "Successfully built a working VS Code extension with sessions list, session detail tabs, native checkpoint tree view, embedded MCP server, search with highlighting, file diffs via content provider, and onboarding flow for new repos.",
+    "learnings": {
+      "repo": [
+        "Gossamer architecture: Entire.io CLI writes to a git branch, gossamer indexes that into SQLite via Prisma/better-sqlite3, Express server serves data, VS Code extension is a pure viewer that spawns the server as a child process",
+        "better-sqlite3 is a native module with NODE_MODULE_VERSION mismatches between system Node.js and VS Code's bundled Electron Node.js — must run on system node via child process, not import directly in extension host",
+        "~/.gossamer/config.json stores repo registry (localPath, dbPath, name, remote) and now also the stable port (default 3456)",
+        "CheckpointIdGitOidJoin table maps checkpointId to gitOid for git show operations; ShadowSession.cwd provides the correct repo directory for git operations",
+        "findRepo() uses exact match — for branch-log and file endpoints, sessions' cwd can be a subdirectory of the registered repo root, requiring prefix matching via findRepoForPath()",
+        "The /api/v2/checkpoints/:id/file endpoint needs to look up the session's cwd via CheckpointSessionMetadata → ShadowSession, not use the server's global repoDir",
+        "Entire.io config detection: .entire/settings.json at repo root"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Originally only listed extension.ts and GossamerPanel.ts in 'include' — SessionDetailPanel.ts and diffUtils.ts were never compiled, causing runtime import failures. Fixed to include: ['src/**/*.ts'] with exclude: ['src/webview']"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is now a static singleton so it survives panel disposal; getConfiguredPort() reads ~/.gossamer/config.json for stable port instead of getFreePort()"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 15,
+          "finding": "acquireVsCodeApi() can only be called once per webview; must store the result and reuse it. Uses window.__vscodeApi as shared global to prevent double acquisition between inline script and React bundle"
+        },
+        {
+          "path": "packages/vscode/src/diffUtils.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Uses in-memory TextDocumentContentProvider (gossamer-diff: URI scheme) instead of temp files for diffs. GossamerDiffProvider stores content keyed by URI string, registered once in extension.ts"
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "ViewColumn.One (left) for session details with main sessions panel in ViewColumn.Two (right). enableFindWidget: true required for Cmd+F to work in webviews"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Replaced 500ms DB poll and 5s shadow poll with fs.watch file watchers (50ms debounce for DB .db/.db-wal, 200ms for .git/refs/ recursive). Kept 30s fallback polls for reliability"
+        },
+        {
+          "path": "src/mcp-server.ts",
+          "line": 1,
+          "end_line": 200,
+          "finding": "createMcpServer(port) factory pattern shared between embedded HTTP transport (in server.ts at /mcp) and standalone stdio wrapper (mcp.ts). Uses StreamableHTTPServerTransport with sessionIdGenerator: undefined for stateless mode"
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "resourceUri must use absolute paths (join(repoPath, relativePath)) for VS Code to apply SCM color decorations. Relative paths silently produce no decoration"
+        }
+      ],
+      "workflow": [
+        "VS Code webview panels reload when moved to a new window — must re-send state (server_ready) via onDidChangeViewState with a serverReady boolean flag",
+        "Vite builds ESM output — webview \u003cscript\u003e tags need type='module' or the browser silently ignores them",
+        "vite.config.ts root must be an absolute path (using resolve(__dirname, 'src/webview')) to work correctly when run via npm workspaces -w flag from repo root",
+        "Deterministic Vite output filenames (entryFileNames: 'assets/index.js') are required so extension host can reference them by fixed name",
+        "MCP HTTP transport config in Claude Code uses type: 'http', url: 'http://localhost:PORT/mcp' — streamable HTTP, not stdio",
+        "Git worktrees allow testing a built extension from a separate directory while the main repo stays editable in VS Code without conflicts",
+        "VS Code TreeItem.resourceUri with vscode.Uri.file(absolutePath) automatically gets SCM color decorations matching Explorer — no manual color coding needed",
+        "acquireVsCodeApi() must only be called once; subsequent calls throw. Safe pattern: lazy singleton with undefined check"
+      ]
+    },
+    "friction": [
+      "tsconfig.extension.json only listing specific files caused SessionDetailPanel.ts and diffUtils.ts to silently not compile, producing blank/broken diff views with no error messages",
+      "VS Code's bundled Electron Node.js has a different NODE_MODULE_VERSION than system Node.js — better-sqlite3 compiled for one fails in the other, requiring child process spawn workaround",
+      "Vite entry module not found error because relative root path resolved relative to CWD (repo root) when run via npm workspaces, not relative to the package directory",
+      "content provider approach for diffs initially struggled with URI encoding issues; switched to temp files then back to content provider with correct URI scheme design",
+      "The branch-log endpoint used exact repo path matching, silently returning nothing when cwd was a subdirectory of the registered repo root",
+      "npm workspace name is 'gossamer-vscode' not 'vscode', causing -w flag to fail until discovered",
+      "Server not rebuilding before testing caused multiple 'still broken' cycles where the fix was correct but old compiled code was running",
+      "acquireVsCodeApi() double-call issue only discovered when adding an inline minimize button script alongside the React bundle's lazy singleton"
+    ],
+    "open_items": [
+      "Session naming: if a session has been renamed, show the name in the sessions table instead of the session ID (tabled by user)",
+      "Electron desktop app is broken/deprecated but not removed — the app/ directory still exists with Electron-specific code",
+      "Onboarding flow doesn't handle the case where entire.io config exists but the repo isn't yet indexed (first-time index after registration may be slow with no progress indicator)",
+      "MCP stdio wrapper (mcp.ts / gossamer-mcp binary) still exists but requires knowing the port upfront — could be removed in favor of HTTP-only transport",
+      "Checkpoint sidebar in standalone/auxiliary VS Code windows shows nothing (VS Code sidebar doesn't exist in auxiliary windows) — no fallback embedded view",
+      "The testing worktree at ~/gossamer-testing needs manual syncing from the mcp branch via git merge",
+      "Minimize button added to Gossamer panel header but the reopen story is only via command palette or keyboard shortcut — no visual indicator that it's running"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-05T23:13:15.273182Z",
+    "agent_lines": 150,
+    "agent_removed": 39,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 150,
+    "total_lines_changed": 189,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
