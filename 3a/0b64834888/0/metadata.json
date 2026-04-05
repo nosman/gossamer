@@ -1,0 +1,115 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "3a0b64834888",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-05T13:50:09.640309Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/extension.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "d62b9c82799c",
+  "token_usage": {
+    "input_tokens": 4559,
+    "cache_creation_tokens": 1169151,
+    "cache_read_tokens": 44476055,
+    "output_tokens": 255786,
+    "api_call_count": 478
+  },
+  "session_metrics": {
+    "turn_count": 66
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app into a VS Code extension to reduce install friction and improve context-switching between editing code and viewing Claude Code sessions.",
+    "outcome": "Successfully built a working VS Code extension with a sessions list, session detail tabs, native checkpoint tree view, diff integration, search, new/resume session terminals, onboarding flow, and VS Code theme integration — all backed by the existing gossamer server spawned as a child process.",
+    "learnings": {
+      "repo": [
+        "Entire.io writes session data to a specific git branch; gossamer indexes that branch into SQLite — the extension only needs to detect `.entire/settings.json` to know a repo is enabled",
+        "better-sqlite3 is a native module that must run on system Node.js; VS Code's extension host uses a different Electron-bundled Node.js (MODULE_VERSION mismatch), so Prisma/SQLite must be in a spawned child process not the extension host",
+        "The repo registry lives at `~/.gossamer/config.json` with `localPath`, `dbPath`, `name`, `remote` fields; `findRepo()` used exact match which breaks when cwd is a subdirectory — needed `findRepoForPath()` with prefix matching",
+        "The `/api/v2/sessions/:id/checkpoints` endpoint was returning null commitHash/gitOid; had to batch-fetch from `CheckpointIdGitOidJoin` table and run `git log --format=%s -1 \u003cgitOid\u003e` against candidate repos",
+        "repoName in session list was incorrectly showing `basename(repoDir)` (server's configured workspace) instead of `basename(session.cwd)` per-session",
+        "The `ShadowSession.cwd` is the source of truth for which git repo a checkpoint belongs to; without it, the fallback must try all configured repos in `~/.gossamer/config.json`",
+        "Schema push on server startup takes several seconds; the extension must poll `GET /api/sessions` until the server responds before signaling the webview"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "finding": "Originally only listed `extension.ts` and `GossamerPanel.ts` in `include`, causing `SessionDetailPanel.ts` and `diffUtils.ts` to never be compiled — silent runtime failure. Must use `src/**/*.ts` with `src/webview` excluded."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "`process.execPath` points to VS Code's bundled Electron node, not system node. Must use `execFileSync('which', ['node'])` to get system node for spawning the gossamer server."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "Webview reloads when a tab is moved to a new window; `server_ready` must be re-sent via `onDidChangeViewState` using a `serverReady` boolean flag."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "finding": "Mantine ScrollArea viewport ref is null at the `[]`-dep effect time, so a separate scroll listener never attaches. Fix: check scroll position inline (`scrollHeight - scrollTop - clientHeight \u003c 80`) at the moment new content arrives."
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "finding": "`root: 'src/webview'` is relative to CWD when run via npm workspace, not the package directory. Must use `resolve(__dirname, 'src/webview')` with `fileURLToPath(import.meta.url)` for ESM compatibility."
+        },
+        {
+          "path": "packages/vscode/src/webview/index.html",
+          "finding": "Vite outputs ESM; the `\u003cscript\u003e` tag needs `type='module'` or the browser silently ignores it, causing a blank webview."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "The `/api/v2/checkpoints/:id/file` endpoint must look up the session's cwd via `CheckpointSessionMetadata → ShadowSession` to find the correct git repo, not use the server's global `repoDir`."
+        },
+        {
+          "path": "src/config.ts",
+          "finding": "Added `findRepoForPath(cwd)` that finds a repo by prefix match — necessary because `cwd` can be a subdirectory of a registered repo root."
+        }
+      ],
+      "workflow": [
+        "VS Code webview panels reload from scratch when dragged to a new window — any one-time setup (server readiness signals, injected globals) must be re-emitted on `onDidChangeViewState`",
+        "For native diffs without temp files, register a `TextDocumentContentProvider` with a custom URI scheme (`gossamer-diff:`), store content in memory, pass URIs to `vscode.diff` — files get syntax highlighting from their extension in the URI path",
+        "VS Code automatically injects `--vscode-*` CSS variables and `vscode-dark`/`vscode-light` body classes into webviews; combine with Mantine's `forceColorScheme` for full theme integration",
+        "`vscode.window.createQuickPick` is the idiomatic VS Code pattern for search — supports live updates, item groups with separators, and fuzzy matching",
+        "Context menu commands on TreeView items require declaring `menus['view/item/context']` entries in `package.json` with `when` clauses matching `viewItem` values set on tree items",
+        "Build order matters in npm workspaces: `packages/core` must be built before `packages/vscode` since the extension host imports from `@gossamer/core`"
+      ]
+    },
+    "friction": [
+      "Multiple context window truncations during a single session caused repeated re-reading of files and re-deriving of context",
+      "The `tsconfig.extension.json` bug (missing files from `include`) caused a completely silent failure — compiled JS imported non-existent modules at runtime with no error until the diff feature was tested",
+      "The content provider approach for diffs was implemented, then abandoned (URI encoding fragility), then re-adopted — two cycles of rework",
+      "Vite's deterministic output filenames required explicit `entryFileNames`/`assetFileNames` config; default hashed names broke the hardcoded reference in `GossamerPanel.ts`",
+      "Auto-scroll fix required three attempts: initial `useEffect` fix, then discovering the Mantine ScrollArea viewport ref was null at attach time, requiring an inline scroll position check",
+      "The `which node` approach to find system node is fragile on systems where `which` is not available or node is not on PATH",
+      "Commit message lookup for checkpoints required trying multiple candidate repo directories since `ShadowSession.cwd` is null for historically indexed sessions"
+    ],
+    "open_items": [
+      "Show session name instead of session ID in the sessions table when a session has been renamed (tabled by user)",
+      "The `which node` approach for finding system node may fail on some systems; consider making the node path configurable in extension settings",
+      "Onboarding panel only detects `.entire/settings.json` but doesn't verify the entire.io CLI is actually installed or the branch is configured",
+      "The gossamer server process lifecycle is tied to the GossamerPanel webview; if the panel is closed, the server dies and all SessionDetailPanels lose their data source",
+      "No cleanup of the in-memory `GossamerDiffProvider` content store — could grow unbounded in long sessions",
+      "Branch checkpoints via `/api/branch-log` require `findRepoForPath` to find the right repo, but if multiple repos share a common path prefix the wrong one could be selected",
+      "The `POST /api/repos` registration on first open kicks off background indexing but there is no progress feedback to the user while initial indexing runs",
+      "Optional future: package `packages/core` as a standalone CLI tool (`gossamer-index`)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-05T13:49:15.757546Z",
+    "agent_lines": 46,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 46,
+    "total_lines_changed": 49,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
