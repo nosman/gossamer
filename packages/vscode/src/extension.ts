@@ -3,7 +3,7 @@ import { existsSync } from "fs";
 import { join } from "path";
 import { GossamerPanel } from "./GossamerPanel.js";
 import { OnboardingPanel } from "./OnboardingPanel.js";
-import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
+import { CheckpointTreeProvider, type CheckpointTreeItem } from "./CheckpointTreeProvider.js";
 import { openCheckpointDiff, diffProvider } from "./diffUtils.js";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -32,6 +32,22 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("gossamer.searchSessions", () => {
       GossamerPanel.searchSessions();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.copyCheckpointId", (item: CheckpointTreeItem) => {
+      if (item.kind === "checkpoint") {
+        vscode.env.clipboard.writeText(item.cp.checkpointId);
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.copyCommitHash", (item: CheckpointTreeItem) => {
+      if (item.kind === "checkpoint" && item.cp.commitHash) {
+        vscode.env.clipboard.writeText(item.cp.commitHash);
+      }
     }),
   );
 

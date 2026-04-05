@@ -142,8 +142,13 @@ export class CheckpointTreeProvider
 
       const commitShort = cp.commitHash ? cp.commitHash.slice(0, 8) : null;
       item.description  = commitShort ? `${shortId} · ${commitShort}` : shortId;
-      item.tooltip      = msg ?? shortId;
-      item.iconPath     = new vscode.ThemeIcon("git-commit");
+
+      const tooltip = new vscode.MarkdownString("", true);
+      tooltip.appendMarkdown(`**Checkpoint:** \`${cp.checkpointId}\`\n\n`);
+      if (cp.commitHash) tooltip.appendMarkdown(`**Commit:** \`${cp.commitHash}\`\n\n`);
+      if (msg) tooltip.appendMarkdown(msg);
+      item.tooltip  = tooltip;
+      item.iconPath = new vscode.ThemeIcon("git-commit");
       item.contextValue = "checkpoint";
       return item;
     }

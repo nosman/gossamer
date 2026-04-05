@@ -24,8 +24,30 @@
       {
         "command": "gossamer.searchSessions",
         "title": "Gossamer: Search Sessions"
+      },
+      {
+        "command": "gossamer.copyCheckpointId",
+        "title": "Copy Checkpoint ID"
+      },
+      {
+        "command": "gossamer.copyCommitHash",
+        "title": "Copy Commit Hash"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "gossamer.copyCheckpointId",
+          "when": "view == gossamer.checkpoints && viewItem == checkpoint",
+          "group": "9_copy@1"
+        },
+        {
+          "command": "gossamer.copyCommitHash",
+          "when": "view == gossamer.checkpoints && viewItem == checkpoint",
+          "group": "9_copy@2"
+        }
+      ]
+    },
     "viewsContainers": {
       "activitybar": [
         {
