@@ -15,6 +15,7 @@ export class SessionDetailPanel {
     title: string,
     port: number,
     checkpointProvider: CheckpointTreeProvider,
+    highlight?: string,
   ): void {
     const existing = SessionDetailPanel.panels.get(sessionId);
     if (existing) {
@@ -23,7 +24,7 @@ export class SessionDetailPanel {
       return;
     }
     const shortTitle = title.length > 40 ? title.slice(0, 39) + "…" : title;
-    new SessionDetailPanel(context, sessionId, shortTitle, port, checkpointProvider);
+    new SessionDetailPanel(context, sessionId, shortTitle, port, checkpointProvider, highlight);
   }
 
   private readonly panel: vscode.WebviewPanel;
@@ -34,6 +35,7 @@ export class SessionDetailPanel {
     title: string,
     port: number,
     checkpointProvider: CheckpointTreeProvider,
+    highlight?: string,
   ) {
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
@@ -49,7 +51,7 @@ export class SessionDetailPanel {
       },
     );
 
-    this.panel.webview.html = this.getHtml(context, sessionId, title, port);
+    this.panel.webview.html = this.getHtml(context, sessionId, title, port, highlight);
     checkpointProvider.setSession(sessionId, port).catch(console.error);
     this.panel.webview.onDidReceiveMessage(
       (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string }) => {
@@ -75,6 +77,7 @@ export class SessionDetailPanel {
     sessionId: string,
     title: string,
     port: number,
+    highlight?: string,
   ): string {
     const webview   = this.panel.webview;
     const distUri   = vscode.Uri.joinPath(context.extensionUri, "dist", "webview");
@@ -99,6 +102,7 @@ export class SessionDetailPanel {
     window.__GOSSAMER_PORT__         = ${port};
     window.__GOSSAMER_SESSION_ID__    = ${JSON.stringify(sessionId)};
     window.__GOSSAMER_SESSION_TITLE__ = ${JSON.stringify(title)};
+    window.__GOSSAMER_HIGHLIGHT__     = ${JSON.stringify(highlight ?? "")};
   </script>
   <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>

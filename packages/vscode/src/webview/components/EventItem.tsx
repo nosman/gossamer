@@ -87,7 +87,7 @@ function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: User
 
 // ── Claude response ───────────────────────────────────────────────────────────
 
-function AssistantCard({ event }: { event: Event }) {
+function AssistantCard({ event, matchTerms }: { event: Event; matchTerms?: string[] }) {
   const d = data(event);
   const msg = str(d.last_assistant_message);
   const reason = str(d.reason);
@@ -101,7 +101,11 @@ function AssistantCard({ event }: { event: Event }) {
     >
       <Box>
         {reason && <Badge color="orange" size="xs" variant="light" mb={4}>{reason}</Badge>}
-        {msg && <MarkdownView text={msg} />}
+        {msg && (matchTerms?.length ? (
+          <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
+            {applyHighlight(msg, matchTerms)}
+          </Text>
+        ) : <MarkdownView text={msg} />)}
       </Box>
     </MessageRow>
   );
@@ -194,7 +198,7 @@ function CompactRow({ event }: { event: Event }) {
 
 export function EventItem({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
   if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} matchTerms={matchTerms} />;
-  if (event.event === "Stop") return <AssistantCard event={event} />;
+  if (event.event === "Stop") return <AssistantCard event={event} matchTerms={matchTerms} />;
   if (event.event === "Notification") return <NotificationRow event={event} />;
   if (event.event === "SessionStart" || event.event === "SessionEnd") return <SessionEventRow event={event} />;
   return <CompactRow event={event} />;

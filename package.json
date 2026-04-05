@@ -8,17 +8,20 @@
     "app"
   ],
   "bin": {
-    "gossamer-serve": "./dist/serve.js"
+    "gossamer-serve": "./dist/serve.js",
+    "gossamer-mcp": "./dist/mcp.js"
   },
   "scripts": {
     "postinstall": "node -e \"if(process.platform!=='win32'){require('fs').chmodSync('node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper',0o755)}\" 2>/dev/null || true",
     "build": "npm run build -w packages/core && tsc",
+    "install-mcp": "node scripts/install-mcp.mjs",
     "serve": "node dist/serve.js",
     "start": "concurrently --names \"serve,app\" -c \"blue,green\" \"npm run serve\" \"cd app && npm run dev\"",
     "db:push": "npm run db:push -w packages/core"
   },
   "dependencies": {
     "@gossamer/core": "*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "cors": "^2.8.5",
