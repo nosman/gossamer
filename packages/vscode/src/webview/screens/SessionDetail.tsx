@@ -69,15 +69,17 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
     if (le.type === "user") {
       const toolResults = le.contents.filter((c) => c.contentType === "tool_result");
       const textBlocks  = le.contents.filter((c) => c.contentType === "text");
+      const imageBlocks = le.contents.filter((c) => c.contentType === "image");
 
       if (toolResults.length > 0) {
         for (const tr of toolResults) {
           const failed = tr.isError === true;
           result.push({ id: id--, timestamp: ts, event: failed ? "PostToolUseFailure" : "PostToolUse", sessionId: sid, blocked: false, data: { tool_use_id: tr.toolUseId, tool_response: !failed ? (tr.toolResultContent ?? "") : undefined, error: failed ? (tr.toolResultContent ?? "") : undefined }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
         }
-      } else if (textBlocks.length > 0) {
-        const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
+      } else if (textBlocks.length > 0 || imageBlocks.length > 0) {
+        const prompt  = textBlocks.map((b) => b.text ?? "").join("\n\n");
+        const images  = imageBlocks.map((b) => ({ data: b.imageData, mediaType: b.imageMediaType })).filter((b) => b.data);
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt, images }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
       }
 
     } else if (le.type === "assistant") {
@@ -331,22 +333,29 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     }
   }
 
+  const didInitialScroll = useRef(false);
+
   useEffect(() => {
     initialLoadDone.current = false;
+    didInitialScroll.current = false;
     load().finally(() => {
       setLoading(false);
       initialLoadDone.current = true;
-      setTimeout(() => {
-        if (matchTerms.length > 0) {
-          const mark = viewport.current?.querySelector("mark");
-          mark?.scrollIntoView({ behavior: "smooth", block: "center" });
-        } else {
-          const el = viewport.current;
-          if (el) el.scrollTop = el.scrollHeight;
-        }
-      }, 0);
     });
   }, [sessionId]);
+
+  // Scroll after the initial render completes (loading → false flushes the content to DOM)
+  useEffect(() => {
+    if (loading || didInitialScroll.current) return;
+    didInitialScroll.current = true;
+    if (matchTerms.length > 0) {
+      const mark = viewport.current?.querySelector("mark");
+      mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      const el = viewport.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [loading]);
 
   useEffect(() => {
     return subscribeToUpdates(() => { load().catch(() => undefined); });

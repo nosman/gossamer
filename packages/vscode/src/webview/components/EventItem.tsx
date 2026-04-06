@@ -68,7 +68,9 @@ function MessageRow({ accentColor, label, labelColor, timestamp, blocked, childr
 // ── User message ──────────────────────────────────────────────────────────────
 
 function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
-  const prompt = str(data(event).prompt);
+  const d = data(event);
+  const prompt = str(d.prompt);
+  const images = Array.isArray(d.images) ? (d.images as { data: string; mediaType: string }[]) : [];
   const displayName = user?.name ?? "You";
   return (
     <MessageRow
@@ -78,9 +80,14 @@ function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: User
       timestamp={event.timestamp}
       blocked={event.blocked}
     >
-      <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
-        {prompt ? applyHighlight(prompt, matchTerms) : "(no prompt)"}
-      </Text>
+      {prompt ? (
+        matchTerms?.length
+          ? <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>{applyHighlight(prompt, matchTerms)}</Text>
+          : <MarkdownView text={prompt} />
+      ) : !images.length ? <Text size="sm" c="dimmed">(no prompt)</Text> : null}
+      {images.map((img, i) => (
+        <img key={i} src={`data:${img.mediaType};base64,${img.data}`} style={{ maxWidth: "100%", borderRadius: 4, marginTop: 4, display: "block" }} />
+      ))}
     </MessageRow>
   );
 }

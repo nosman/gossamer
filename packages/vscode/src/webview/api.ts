@@ -60,6 +60,8 @@ export interface LogContentBlock {
   toolInput: unknown | null;
   toolResultContent: string | null;
   isError: boolean | null;
+  imageData: string | null;
+  imageMediaType: string | null;
 }
 
 export interface LogEventItem {

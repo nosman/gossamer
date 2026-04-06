@@ -362,6 +362,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
           toolResultContent: c.toolResultContent,
           isError:           c.isError,
+          imageData:         c.imageData,
+          imageMediaType:    c.imageMediaType,
         })),
         usage: e.usage ? {
           model:                    e.usage.model,
@@ -433,6 +435,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
           toolResultContent: c.toolResultContent,
           isError:           c.isError,
+          imageData:         c.imageData,
+          imageMediaType:    c.imageMediaType,
         })),
         usage: e.usage ? {
           model:                    e.usage.model,
