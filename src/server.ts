@@ -8,7 +8,8 @@ import { promisify } from "util";
 
 const exec     = promisify(execCb);
 const execFile = promisify(execFileCb);
-import { existsSync, mkdirSync, watch as fsWatch, FSWatcher } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch as fsWatch, FSWatcher } from "fs";
+import { homedir } from "os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp-server.js";
 import { basename, dirname, join, resolve } from "path";
@@ -16,6 +17,51 @@ import { fileURLToPath } from "url";
 import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
 import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, type RepoConfig } from "./config.js";
+
+// ─── Custom title cache (reads ~/.claude/projects/…/*.jsonl for /rename events) ──
+
+/** Map from sessionId → the latest customTitle set via /rename. */
+const customTitleCache = new Map<string, string>();
+/** Track file mtimes so we only re-parse files that have changed. */
+const customTitleMtimes = new Map<string, number>();
+
+function refreshCustomTitles(repoDir: string): void {
+  // Claude encodes the repo path by replacing every '/' with '-'
+  const encoded = repoDir.replace(/\//g, "-");
+  const projectDir = join(homedir(), ".claude", "projects", encoded);
+  let files: string[];
+  try {
+    files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return; // project dir doesn't exist for this repo yet
+  }
+
+  for (const file of files) {
+    const filePath = join(projectDir, file);
+    let mtime: number;
+    try { mtime = statSync(filePath).mtimeMs; } catch { continue; }
+    if (customTitleMtimes.get(filePath) === mtime) continue; // unchanged
+    customTitleMtimes.set(filePath, mtime);
+
+    const sessionId = file.slice(0, -".jsonl".length);
+    let latestTitle: string | null = null;
+    try {
+      for (const line of readFileSync(filePath, "utf-8").split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const obj = JSON.parse(trimmed) as Record<string, unknown>;
+          if (obj.type === "custom-title" && typeof obj.customTitle === "string") {
+            latestTitle = obj.customTitle;
+          }
+        } catch { /* skip malformed line */ }
+      }
+    } catch { /* file unreadable */ }
+
+    if (latestTitle) customTitleCache.set(sessionId, latestTitle);
+    else customTitleCache.delete(sessionId);
+  }
+}
 
 // ─── Schema push ──────────────────────────────────────────────────────────────
 
@@ -66,6 +112,9 @@ interface SessionResponse {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  slug: string | null;
+  customTitle: string | null;
+  agent: string | null;
   /** true when this session is currently indexed in a shadow branch */
   isLive: boolean;
 }
@@ -132,13 +181,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           sessionId: true,
           checkpointId: true,
           branch: true,
+          agent: true,
           summary: { select: { intent: true } },
         },
         orderBy: { createdAt: "asc" },
       });
-      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string }>();
+      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string; agent: string | null }>();
       for (const m of allMetas) {
-        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId });
+        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId, agent: m.agent ?? null });
       }
 
       // Git user per checkpoint (from commit author stored at index time)
@@ -196,6 +246,15 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
 
+      // Latest slug per session (last event that has one, i.e. the current name)
+      const slugRows = await db.logEvent.findMany({
+        where: { sessionId: { in: allIds }, slug: { not: null } },
+        orderBy: { id: "desc" },
+        distinct: ["sessionId"],
+        select: { sessionId: true, slug: true },
+      });
+      const slugMap = new Map(slugRows.map((e) => [e.sessionId!, e.slug]));
+
       // Parent-child relationships from task checkpoints
       const allParentRows = await db.sessionParent.findMany({
         select: { childSessionId: true, parentSessionId: true },
@@ -230,6 +289,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           keywords:        [],
           branch:          cp?.branch ?? shadow?.gitBranch ?? null,
           intent:          cp?.intent ?? null,
+          slug:            slugMap.get(sessionId) ?? null,
+          customTitle:     customTitleCache.get(sessionId) ?? null,
+          agent:           cp?.agent ?? null,
           isLive:          shadow !== null,
         };
       });
@@ -250,10 +312,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/sessions/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      const [latestMeta, shadow, firstEvent, lastEvent] = await Promise.all([
+      const [latestMeta, shadow, firstEvent, lastEvent, latestSlugEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
-          select: { branch: true, checkpointId: true, summary: { select: { intent: true } } },
+          select: { branch: true, checkpointId: true, agent: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
         db.shadowSession.findUnique({ where: { sessionId: id } }),
@@ -266,6 +328,11 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           where: { sessionId: id, timestamp: { not: null } },
           orderBy: { id: "desc" },
           select: { timestamp: true },
+        }),
+        db.logEvent.findFirst({
+          where: { sessionId: id, slug: { not: null } },
+          orderBy: { id: "desc" },
+          select: { slug: true },
         }),
       ]);
       if (!latestMeta && !shadow) {
@@ -296,6 +363,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         keywords:        [],
         branch:          latestMeta?.branch ?? shadow?.gitBranch ?? null,
         intent:          latestMeta?.summary?.intent ?? null,
+        slug:            latestSlugEvent?.slug ?? null,
+        customTitle:     customTitleCache.get(id) ?? null,
+        agent:           latestMeta?.agent ?? null,
         isLive:          shadow !== null,
       } satisfies SessionResponse);
     } catch (err) {
@@ -362,6 +432,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
           toolResultContent: c.toolResultContent,
           isError:           c.isError,
+          imageData:         c.imageData,
+          imageMediaType:    c.imageMediaType,
         })),
         usage: e.usage ? {
           model:                    e.usage.model,
@@ -433,6 +505,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           toolInput:         c.toolInput ? (JSON.parse(c.toolInput) as unknown) : null,
           toolResultContent: c.toolResultContent,
           isError:           c.isError,
+          imageData:         c.imageData,
+          imageMediaType:    c.imageMediaType,
         })),
         usage: e.usage ? {
           model:                    e.usage.model,
@@ -1390,6 +1464,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   async function indexShadowsForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
     process.stderr.write(`shadow indexer [${name}]: running\n`);
+    refreshCustomTitles(localPath);
     try {
       const repoDb = await getDb(repoDdPath);
       const { sessions } = await indexAllShadowBranches(repoDb, localPath);
@@ -1410,6 +1485,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const repos = readConfig().repos;
     await Promise.all(repos.map((r) => indexCheckpointsForRepo(r.name, r.localPath, r.dbPath)));
   };
+
+  // Seed the custom title cache for the primary repo immediately
+  if (repoDir) refreshCustomTitles(repoDir);
 
   void runAllCheckpoints();
   const checkpointPoller = setInterval(runAllCheckpoints, 30_000);

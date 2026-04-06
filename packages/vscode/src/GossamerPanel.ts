@@ -18,6 +18,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Path to the gossamer server entry point (dist/serve.js at the repo root)
 const SERVE_SCRIPT = resolve(__dirname, "../../../dist/serve.js");
 
+// Maps the agent name (from CheckpointSessionMetadata.agent) to its CLI command.
+export const AGENT_CLI: Record<string, { bin: string; resumeFlag: string; renameCmd?: string }> = {
+  "Claude Code": { bin: "claude",  resumeFlag: "--resume", renameCmd: "/rename" },
+  "Gemini CLI":  { bin: "gemini",  resumeFlag: "--resume" },
+  "Codex":       { bin: "codex",   resumeFlag: "--session" },
+};
+const DEFAULT_AGENT_CLI = AGENT_CLI["Claude Code"];
+
 // Use the system node, not VS Code's bundled Electron node
 function getSystemNode(): string {
   try {
@@ -103,12 +111,15 @@ function httpPostJson<T>(url: string, body: unknown): Promise<T> {
 export class GossamerPanel {
   private static instance: GossamerPanel | undefined;
 
+  // Server is static so it survives panel disposal (minimize/restore)
+  private static server: ChildProcess | undefined;
+  private static serverPort: number | undefined;
+
   private readonly panel: vscode.WebviewPanel;
   private readonly context: vscode.ExtensionContext;
   private readonly repoPath: string;
   private readonly port: number;
   private readonly checkpointProvider: CheckpointTreeProvider;
-  private server: ChildProcess | undefined;
   private watcher: FSWatcher | undefined;
   private disposables: vscode.Disposable[] = [];
   private serverReady = false;
@@ -122,8 +133,56 @@ export class GossamerPanel {
     GossamerPanel.instance = new GossamerPanel(context, repoPath, port, checkpointProvider);
   }
 
+  /** Hide the panel without killing the server (minimizes to nothing; re-open via command). */
+  static minimize() {
+    if (!GossamerPanel.instance) return;
+    // Dispose the webview only — server stays alive
+    GossamerPanel.instance.disposeWebviewOnly();
+  }
+
+  /** Toggle: minimize if visible, restore if hidden. */
+  static toggle(context: vscode.ExtensionContext, repoPath: string, checkpointProvider: CheckpointTreeProvider) {
+    if (GossamerPanel.instance) {
+      GossamerPanel.minimize();
+    } else {
+      GossamerPanel.createOrShow(context, repoPath, checkpointProvider).catch(console.error);
+    }
+  }
+
+  /** Kill and restart the server process, then re-signal the panel when ready. */
+  static restart(repoPath: string) {
+    const port = getConfiguredPort();
+    GossamerPanel.server?.kill();
+    GossamerPanel.server = undefined;
+    GossamerPanel.serverPort = undefined;
+    const instance = GossamerPanel.instance;
+    if (instance) {
+      instance.serverReady = false;
+      instance.spawnServer();
+      waitForServer(port)
+        .then(() => instance.ensureRepoRegistered())
+        .then(() => {
+          instance.serverReady = true;
+          instance.panel.webview.postMessage({ type: "server_ready" });
+        })
+        .catch((err) => instance.panel.webview.postMessage({ type: "server_error", error: String(err) }));
+    } else {
+      const nodeExec = getSystemNode();
+      if (existsSync(SERVE_SCRIPT)) {
+        const proc = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", repoPath, "--port", String(port)], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, FORCE_COLOR: "0" },
+        });
+        proc.on("exit", () => { if (GossamerPanel.server === proc) { GossamerPanel.server = undefined; GossamerPanel.serverPort = undefined; } });
+        GossamerPanel.server = proc;
+        GossamerPanel.serverPort = port;
+      }
+    }
+  }
+
+  /** Full shutdown — kills server too (called on extension deactivate). */
   static dispose() {
-    GossamerPanel.instance?.cleanup();
+    GossamerPanel.instance?.cleanup(true);
     GossamerPanel.instance = undefined;
   }
 
@@ -153,7 +212,7 @@ export class GossamerPanel {
 
     this.spawnServer();
     this.panel.webview.html = this.getWebviewHtml(context);
-    this.panel.onDidDispose(() => this.cleanup(), undefined, this.disposables);
+    this.panel.onDidDispose(() => this.cleanup(false), undefined, this.disposables);
     this.panel.webview.onDidReceiveMessage(
       (msg: { type: string; sessionId?: string; title?: string; checkpointId?: string; filePath?: string }) => {
         if (msg.type === "open_session" && msg.sessionId) {
@@ -167,6 +226,9 @@ export class GossamerPanel {
         }
         if (msg.type === "search_sessions") {
           this.openSearchQuickPick().catch(console.error);
+        }
+        if (msg.type === "minimize") {
+          GossamerPanel.minimize();
         }
       },
       undefined,
@@ -188,6 +250,12 @@ export class GossamerPanel {
   }
 
   private spawnServer() {
+    // Reuse existing static server if already running on the same port
+    if (GossamerPanel.server && GossamerPanel.serverPort === this.port) {
+      console.log("[Gossamer] reusing existing server on port", this.port);
+      return;
+    }
+
     if (!existsSync(SERVE_SCRIPT)) {
       const msg = `Gossamer server script not found at ${SERVE_SCRIPT}. Run \`npm run build\` in the gossamer repo root first.`;
       console.error("[Gossamer]", msg);
@@ -198,24 +266,31 @@ export class GossamerPanel {
     const nodeExec = getSystemNode();
     console.log(`[Gossamer] spawning: ${nodeExec} ${SERVE_SCRIPT} --repo-dir ${this.repoPath} --port ${this.port}`);
 
-    this.server = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", this.repoPath, "--port", String(this.port)], {
+    const proc = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", this.repoPath, "--port", String(this.port)], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORCE_COLOR: "0" },
     });
 
-    this.server.stdout?.on("data", (d: Buffer) => {
+    proc.stdout?.on("data", (d: Buffer) => {
       console.log("[Gossamer server stdout]", d.toString().trim());
     });
-    this.server.stderr?.on("data", (d: Buffer) => {
+    proc.stderr?.on("data", (d: Buffer) => {
       console.error("[Gossamer server stderr]", d.toString().trim());
     });
-    this.server.on("error", (err) => {
+    proc.on("error", (err) => {
       console.error("[Gossamer] failed to spawn server:", err.message);
       vscode.window.showErrorMessage(`Gossamer: failed to start server — ${err.message}`);
     });
-    this.server.on("exit", (code, signal) => {
+    proc.on("exit", (code, signal) => {
       console.log(`[Gossamer server] exited code=${code} signal=${signal}`);
+      if (GossamerPanel.server === proc) {
+        GossamerPanel.server = undefined;
+        GossamerPanel.serverPort = undefined;
+      }
     });
+
+    GossamerPanel.server = proc;
+    GossamerPanel.serverPort = this.port;
   }
 
   private async openSearchQuickPick(): Promise<void> {
@@ -225,6 +300,8 @@ export class GossamerPanel {
       prompt: string | null;
       repoName: string | null;
       cwd: string;
+      slug?: string | null;
+      customTitle?: string | null;
     }
     interface ContentResult {
       sessionId: string;
@@ -236,7 +313,7 @@ export class GossamerPanel {
     const allSessions = await httpGetJson<SessionData[]>(`http://localhost:${this.port}/api/sessions`);
 
     const sessionLabel = (s: SessionData) =>
-      s.intent ?? s.prompt?.slice(0, 80) ?? s.sessionId.slice(0, 8);
+      s.intent ?? s.prompt?.slice(0, 80) ?? s.customTitle ?? s.slug ?? s.sessionId.slice(0, 8) ?? "";
 
     const toSessionItem = (s: SessionData): QP => ({
       sessionId:    s.sessionId,
@@ -270,12 +347,13 @@ export class GossamerPanel {
         items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Chat History", sessionId: "", sessionTitle: "" });
         for (const r of contentResults) {
           const session = allSessions.find((s) => s.sessionId === r.sessionId);
+          const sLabel  = sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "", slug: null });
           const snippet = r.snippet.replace(/«/g, "").replace(/»/g, "").trim();
           items.push({
             sessionId:    r.sessionId,
-            sessionTitle: sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "" }),
-            label:        sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "" }),
-            description:  seenInSessions.has(r.sessionId) ? snippet : `${session?.repoName ?? ""} · ${snippet}`,
+            sessionTitle: sLabel,
+            label:        snippet || sLabel,
+            description:  sLabel,
             detail:       session?.cwd ?? "",
             alwaysShow:   true,
           });
@@ -337,9 +415,28 @@ export class GossamerPanel {
   }
 
   private async promptAndSpawnSession(): Promise<void> {
+    // Pick agent — offer choices based on which agents have been used in this repo
+    interface SessionStub { agent: string | null }
+    let agentCli = DEFAULT_AGENT_CLI;
+    try {
+      const sessions = await httpGetJson<SessionStub[]>(`http://localhost:${this.port}/api/sessions`);
+      const usedAgents = [...new Set(sessions.map((s) => s.agent).filter(Boolean) as string[])];
+      const knownAgents = usedAgents.filter((a) => AGENT_CLI[a]);
+      if (knownAgents.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          knownAgents.map((a) => ({ label: a, description: AGENT_CLI[a].bin })),
+          { title: "Choose agent", ignoreFocusOut: true },
+        );
+        if (!picked) return;
+        agentCli = AGENT_CLI[picked.label];
+      } else if (knownAgents.length === 1) {
+        agentCli = AGENT_CLI[knownAgents[0]];
+      }
+    } catch { /* use default */ }
+
     const prompt = await vscode.window.showInputBox({
-      title: "New Claude Session",
-      prompt: "What do you want Claude to do?",
+      title: `New ${agentCli.bin} Session`,
+      prompt: `What do you want ${agentCli.bin} to do?`,
       placeHolder: "Describe the task…",
       ignoreFocusOut: true,
     });
@@ -354,14 +451,13 @@ export class GossamerPanel {
 
     const escaped = prompt.replace(/"/g, '\\"');
     const terminal = vscode.window.createTerminal({
-      name: name || "Claude",
+      name: name || agentCli.bin,
       cwd: this.repoPath,
     });
     terminal.show();
-    terminal.sendText(`claude "${escaped}"`, true);
-    if (name) {
-      // Send /rename after a brief pause to let claude start up
-      setTimeout(() => terminal.sendText(`/rename ${name}`, true), 2000);
+    terminal.sendText(`${agentCli.bin} "${escaped}"`, true);
+    if (name && agentCli.renameCmd) {
+      setTimeout(() => terminal.sendText(`${agentCli.renameCmd} ${name}`, true), 2000);
     }
   }
 
@@ -409,7 +505,7 @@ export class GossamerPanel {
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src http://localhost:${port} ws://localhost:${port};" />
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src http://localhost:${port} ws://localhost:${port}; img-src data: https: http:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="${styleUri}" rel="stylesheet" />
   <title>Gossamer</title>
@@ -422,8 +518,21 @@ export class GossamerPanel {
 </html>`;
   }
 
-  private cleanup() {
-    this.server?.kill();
+  /** Dispose only the webview — server stays alive for quick restore. */
+  private disposeWebviewOnly() {
+    this.watcher?.close();
+    this.disposables.forEach((d) => d.dispose());
+    this.disposables = [];
+    GossamerPanel.instance = undefined;
+    this.panel.dispose();
+  }
+
+  private cleanup(killServer: boolean) {
+    if (killServer) {
+      GossamerPanel.server?.kill();
+      GossamerPanel.server = undefined;
+      GossamerPanel.serverPort = undefined;
+    }
     this.watcher?.close();
     this.disposables.forEach((d) => d.dispose());
     this.disposables = [];

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { get as httpGet } from "http";
+import { join } from "path";
 
 interface Checkpoint {
   checkpointId: string;
@@ -16,10 +17,10 @@ interface BranchLogEntry extends Checkpoint {
 }
 
 export type CheckpointTreeItem =
-  | { kind: "group";      label: string; checkpoints: Checkpoint[]; port: number; startIndex: number }
-  | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number }
-  | { kind: "dir";        label: string; fullPath: string; children: CheckpointTreeItem[] }
-  | { kind: "file";       name: string;  fullPath: string; checkpointId: string; port: number };
+  | { kind: "group";      label: string; checkpoints: Checkpoint[]; port: number; startIndex: number; repoPath: string }
+  | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number; repoPath: string }
+  | { kind: "dir";        label: string; fullPath: string; absPath: string; children: CheckpointTreeItem[] }
+  | { kind: "file";       name: string;  fullPath: string; absPath: string; checkpointId: string; port: number };
 
 function fetchJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -40,6 +41,7 @@ function buildItems(
   paths: string[],
   checkpointId: string,
   port: number,
+  repoPath: string,
 ): CheckpointTreeItem[] {
   interface Node { children: Map<string, Node>; isFile: boolean; }
   const root = new Map<string, Node>();
@@ -58,10 +60,11 @@ function buildItems(
   function toItems(nodes: Map<string, Node>, prefix: string): CheckpointTreeItem[] {
     return Array.from(nodes.entries()).map(([name, node]) => {
       const fullPath = prefix ? `${prefix}/${name}` : name;
+      const absPath  = join(repoPath, fullPath);
       if (node.isFile) {
-        return { kind: "file", name, fullPath, checkpointId, port } as CheckpointTreeItem;
+        return { kind: "file", name, fullPath, absPath, checkpointId, port } as CheckpointTreeItem;
       }
-      return { kind: "dir", label: name, fullPath, children: toItems(node.children, fullPath) } as CheckpointTreeItem;
+      return { kind: "dir", label: name, fullPath, absPath, children: toItems(node.children, fullPath) } as CheckpointTreeItem;
     });
   }
 
@@ -78,6 +81,7 @@ export class CheckpointTreeProvider
   private branchCheckpoints: Checkpoint[] = [];
   private currentBranch: string | null = null;
   private currentPort: number | null = null;
+  private currentRepoPath: string = "";
 
   async setSession(sessionId: string, port: number): Promise<void> {
     this.currentPort = port;
@@ -93,6 +97,7 @@ export class CheckpointTreeProvider
       const sessionInfo = await fetchJson<{ cwd: string; branch: string | null }>(
         `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
       );
+      if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
       if (sessionInfo.cwd && sessionInfo.branch) {
         this.currentBranch = sessionInfo.branch;
         const log = await fetchJson<{ entries: BranchLogEntry[] }>(
@@ -154,14 +159,12 @@ export class CheckpointTreeProvider
     }
     if (element.kind === "dir") {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
-      item.iconPath = new vscode.ThemeIcon("folder");
-      item.resourceUri = vscode.Uri.file(element.fullPath);
+      item.resourceUri = vscode.Uri.file(element.absPath);
       return item;
     }
     // file
     const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
-    item.iconPath = vscode.ThemeIcon.File;
-    item.resourceUri = vscode.Uri.file(element.fullPath);
+    item.resourceUri = vscode.Uri.file(element.absPath);
     item.tooltip = element.fullPath;
     item.command = {
       command: "gossamer.showCheckpointDiff",
@@ -175,8 +178,9 @@ export class CheckpointTreeProvider
     if (!element) {
       if (!this.currentPort) return [];
       const port = this.currentPort;
+      const repoPath = this.currentRepoPath;
       const groups: CheckpointTreeItem[] = [
-        { kind: "group", label: "Session", checkpoints: this.sessionCheckpoints, port, startIndex: 0 },
+        { kind: "group", label: "Session", checkpoints: this.sessionCheckpoints, port, startIndex: 0, repoPath },
       ];
       if (this.branchCheckpoints.length > 0) {
         const branchLabel = this.currentBranch
@@ -188,6 +192,7 @@ export class CheckpointTreeProvider
           checkpoints: this.branchCheckpoints,
           port,
           startIndex: this.sessionCheckpoints.length,
+          repoPath,
         });
       }
       return groups;
@@ -198,10 +203,11 @@ export class CheckpointTreeProvider
         cp,
         port: element.port,
         index: element.startIndex + i,
+        repoPath: element.repoPath,
       }));
     }
     if (element.kind === "checkpoint") {
-      return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port);
+      return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port, element.repoPath);
     }
     if (element.kind === "dir") {
       return element.children;

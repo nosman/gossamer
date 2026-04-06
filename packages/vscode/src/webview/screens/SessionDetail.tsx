@@ -69,15 +69,17 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
     if (le.type === "user") {
       const toolResults = le.contents.filter((c) => c.contentType === "tool_result");
       const textBlocks  = le.contents.filter((c) => c.contentType === "text");
+      const imageBlocks = le.contents.filter((c) => c.contentType === "image");
 
       if (toolResults.length > 0) {
         for (const tr of toolResults) {
           const failed = tr.isError === true;
           result.push({ id: id--, timestamp: ts, event: failed ? "PostToolUseFailure" : "PostToolUse", sessionId: sid, blocked: false, data: { tool_use_id: tr.toolUseId, tool_response: !failed ? (tr.toolResultContent ?? "") : undefined, error: failed ? (tr.toolResultContent ?? "") : undefined }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
         }
-      } else if (textBlocks.length > 0) {
-        const prompt = textBlocks.map((b) => b.text ?? "").join("\n\n");
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
+      } else if (textBlocks.length > 0 || imageBlocks.length > 0) {
+        const prompt  = textBlocks.map((b) => b.text ?? "").join("\n\n");
+        const images  = imageBlocks.map((b) => ({ data: b.imageData, mediaType: b.imageMediaType })).filter((b) => b.data);
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt, images }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
       }
 
     } else if (le.type === "assistant") {
@@ -223,7 +225,7 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   return <>{parts.map((p, i) => i % 2 === 1 ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark> : p)}</>;
 }
 
-function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[] }) {
+function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[]; agentLabel: string }) {
   const d      = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg    = str(d.last_assistant_message);
   const thinking = str(d.thinking);
@@ -248,7 +250,7 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseD
         fw={600}
         style={{ width: 52, flexShrink: 0, paddingTop: 2, color: "var(--mantine-color-orange-5)", whiteSpace: "nowrap" }}
       >
-        Claude
+        {agentLabel}
       </Text>
       <Box style={{ flex: 1, minWidth: 0 }}>
         {reason && <Badge color="orange" size="xs" variant="light" mb={4}>{reason}</Badge>}
@@ -280,7 +282,7 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseD
             </Group>
             <Collapse in={toolsExpanded}>
               <Box mt={4} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                {toolGroups.map((tools, i) => <ToolGroupItem key={i} tools={tools} />)}
+                {toolGroups.map((tools, i) => <ToolGroupItem key={i} tools={tools} matchTerms={matchTerms} />)}
               </Box>
             </Collapse>
           </Box>
@@ -314,6 +316,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const initialLoadDone = useRef(false);
   const matchTerms = HIGHLIGHT_TERMS;
+  const agentLabel = session?.agent ?? "Claude";
 
   async function load() {
     try {
@@ -331,19 +334,29 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     }
   }
 
+  const didInitialScroll = useRef(false);
+
   useEffect(() => {
     initialLoadDone.current = false;
+    didInitialScroll.current = false;
     load().finally(() => {
       setLoading(false);
       initialLoadDone.current = true;
-      if (matchTerms.length > 0) {
-        setTimeout(() => {
-          const mark = viewport.current?.querySelector("mark");
-          mark?.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 100);
-      }
     });
   }, [sessionId]);
+
+  // Scroll after the initial render completes (loading → false flushes the content to DOM)
+  useEffect(() => {
+    if (loading || didInitialScroll.current) return;
+    didInitialScroll.current = true;
+    if (matchTerms.length > 0) {
+      const mark = viewport.current?.querySelector("mark");
+      mark?.scrollIntoView({ behavior: "smooth", block: "center" });
+    } else {
+      const el = viewport.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    }
+  }, [loading]);
 
   useEffect(() => {
     return subscribeToUpdates(() => { load().catch(() => undefined); });
@@ -379,7 +392,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             <ActionIcon variant="subtle" size="sm" onClick={onBack} title="Back to sessions">←</ActionIcon>
           )}
           <Text size="sm" fw={600} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {session?.intent ?? session?.summary ?? title}
+            {session?.intent ?? session?.summary ?? session?.customTitle ?? session?.slug ?? title}
           </Text>
           {session?.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
@@ -387,7 +400,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             size="sm"
             variant="subtle"
             title="Resume session in terminal"
-            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "" })}
+            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "", agent: session?.agent ?? undefined })}
           >▶</ActionIcon>
         </Group>
         {session && (
@@ -409,9 +422,9 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
         <Box pb={32}>
           {renderItems.map((item, i) => {
             if (item.kind === "claudeTurn") {
-              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} />;
+              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} agentLabel={agentLabel} />;
             }
-            return <EventItem key={i} event={item.event} matchTerms={matchTerms} />;
+            return <EventItem key={i} event={item.event} matchTerms={matchTerms} agentLabel={agentLabel} />;
           })}
         </Box>
       </ScrollArea>

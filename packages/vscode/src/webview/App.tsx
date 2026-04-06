@@ -19,8 +19,15 @@ export function App() {
   }
 
   return (
-    <ActiveSessions
-      onSessionPress={(id, title) => postToExtension({ type: "open_session", sessionId: id, title })}
-    />
+    <>
+      <button
+        title="Minimize panel"
+        onClick={() => postToExtension({ type: "minimize" })}
+        style={{ position: "fixed", top: 6, right: 8, zIndex: 9999, background: "none", border: "none", cursor: "pointer", opacity: 0.5, fontSize: 16, lineHeight: 1, padding: "2px 6px", color: "var(--vscode-foreground)" }}
+      >─</button>
+      <ActiveSessions
+        onSessionPress={(id, title) => postToExtension({ type: "open_session", sessionId: id, title })}
+      />
+    </>
   );
 }

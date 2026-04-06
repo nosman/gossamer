@@ -11,7 +11,7 @@ import { postToExtension } from "../vscodeApi";
 
 const SESSION_COLUMNS: { label: string; width: number }[] = [
   { label: "Intent",     width: COL_WIDTHS.intent          },
-  { label: "Session ID", width: COL_WIDTHS.sessionId       },
+  { label: "Name",       width: COL_WIDTHS.sessionId       },
   { label: "Updated",    width: COL_WIDTHS.updated         },
   { label: "Branch",     width: COL_WIDTHS.branch          },
   { label: "Repo",       width: COL_WIDTHS.repo            },
@@ -182,7 +182,7 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
                   <SessionRow
                     key={item.sessionId}
                     session={item}
-                    onPress={() => onSessionPress(item.sessionId, item.intent ?? item.summary ?? `${item.sessionId.slice(0, 8)}…`)}
+                    onPress={() => onSessionPress(item.sessionId, item.intent ?? item.summary ?? item.customTitle ?? item.slug ?? `${item.sessionId.slice(0, 8)}…`)}
                     onArchive={handleArchive}
                     isArchived={archivedIds.has(item.sessionId)}
                   />

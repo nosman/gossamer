@@ -262,7 +262,7 @@ model LogContent {
   logEvent          LogEvent  @relation(fields: [logEventId], references: [id])
   role              String    // user | assistant
   contentIndex      Int       // 0-based position in the content array
-  contentType       String    // text | thinking | tool_use | tool_result
+  contentType       String    // text | thinking | tool_use | tool_result | image
   text              String?   // type=text
   thinking          String?   // type=thinking
   toolUseId         String?   // type=tool_use (id field) or type=tool_result (tool_use_id field)
@@ -270,6 +270,8 @@ model LogContent {
   toolInput         String?   // type=tool_use, JSON text of input object
   toolResultContent String?   // type=tool_result, stringified content
   isError           Boolean?  // type=tool_result
+  imageData         String?   // type=image, base64-encoded data
+  imageMediaType    String?   // type=image, e.g. "image/png"
 
   @@index([logEventId])
   @@index([toolUseId])

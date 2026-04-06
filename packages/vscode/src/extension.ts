@@ -75,6 +75,32 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Toggle (minimize/restore) the main Gossamer panel
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.togglePanel", () => {
+      const ws = findEntireWorkspace();
+      if (!ws) return;
+      GossamerPanel.toggle(context, ws, checkpointProvider);
+    }),
+  );
+
+  // Restart the gossamer server
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.restartServer", () => {
+      const ws = findEntireWorkspace();
+      if (!ws) return;
+      GossamerPanel.restart(ws);
+      vscode.window.showInformationMessage("Gossamer: server restarting…");
+    }),
+  );
+
+  // Focus the checkpoints sidebar
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.focusSidebar", () => {
+      vscode.commands.executeCommand("gossamer.checkpoints.focus");
+    }),
+  );
+
   // Watch for new workspace folders being added
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {

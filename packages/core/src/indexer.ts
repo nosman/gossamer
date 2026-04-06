@@ -606,6 +606,8 @@ export async function indexFullJsonlContent(
             toolInput:         c.input != null ? JSON.stringify(c.input) : null,
             toolResultContent,
             isError:           (c.is_error as boolean | undefined)    ?? null,
+            imageData:         cType === "image" ? ((c.source as Record<string, unknown> | undefined)?.data as string | undefined) ?? null : null,
+            imageMediaType:    cType === "image" ? ((c.source as Record<string, unknown> | undefined)?.media_type as string | undefined) ?? null : null,
           },
         });
       }

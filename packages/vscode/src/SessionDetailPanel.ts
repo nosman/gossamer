@@ -3,6 +3,7 @@ import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { openCheckpointDiff } from "./diffUtils.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
+import { AGENT_CLI } from "./GossamerPanel.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -40,7 +41,7 @@ export class SessionDetailPanel {
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
       title,
-      vscode.ViewColumn.Beside,
+      vscode.ViewColumn.Two,
       {
         enableScripts: true,
         enableFindWidget: true,
@@ -53,18 +54,26 @@ export class SessionDetailPanel {
 
     this.panel.webview.html = this.getHtml(context, sessionId, title, port, highlight);
     checkpointProvider.setSession(sessionId, port).catch(console.error);
+
+    // Update sidebar whenever this tab is brought into focus
+    this.panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        checkpointProvider.setSession(sessionId, port).catch(console.error);
+      }
+    });
+
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string }) => {
+      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string; agent?: string }) => {
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
           openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
         }
         if (msg.type === "resume_session" && msg.sessionId) {
-          const terminal = vscode.window.createTerminal({
-            name: title,
-            cwd: msg.cwd || undefined,
-          });
+          const agentEntry = msg.agent ? AGENT_CLI[msg.agent] : undefined;
+          const bin        = agentEntry?.bin        ?? "claude";
+          const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
+          const terminal = vscode.window.createTerminal({ name: title, cwd: msg.cwd || undefined });
           terminal.show();
-          terminal.sendText(`claude --resume ${msg.sessionId}`, true);
+          terminal.sendText(`${bin} ${resumeFlag} ${msg.sessionId}`, true);
         }
       },
     );
@@ -91,7 +100,7 @@ export class SessionDetailPanel {
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src http://localhost:${port} ws://localhost:${port};" />
+    content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; connect-src http://localhost:${port} ws://localhost:${port}; img-src data: https: http:;" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link href="${styleUri}" rel="stylesheet" />
   <title>${safeTitle}</title>

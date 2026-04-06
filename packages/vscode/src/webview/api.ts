@@ -25,6 +25,9 @@ export interface Session {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  slug: string | null;
+  customTitle: string | null;
+  agent: string | null;
   isLive: boolean;
 }
 
@@ -60,6 +63,8 @@ export interface LogContentBlock {
   toolInput: unknown | null;
   toolResultContent: string | null;
   isError: boolean | null;
+  imageData: string | null;
+  imageMediaType: string | null;
 }
 
 export interface LogEventItem {

@@ -15,6 +15,12 @@ function toolName(pre: Event): string {
   return typeof d.tool_name === "string" ? d.tool_name : "?";
 }
 
+function toolTextMatches(tool: ToolUseData, terms: string[]): boolean {
+  if (!terms.length) return false;
+  const text = (JSON.stringify(tool.pre.data) + JSON.stringify(tool.post?.data ?? "")).toLowerCase();
+  return terms.some((t) => text.includes(t.toLowerCase()));
+}
+
 export function ToolGroupItem({ tools, autoExpand, matchTerms, targetLogEventId }: {
   tools: ToolUseData[];
   autoExpand?: boolean;
@@ -23,9 +29,11 @@ export function ToolGroupItem({ tools, autoExpand, matchTerms, targetLogEventId 
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  const hasTermMatch = matchTerms?.length ? tools.some((t) => toolTextMatches(t, matchTerms)) : false;
+
   useEffect(() => {
-    if (autoExpand) setExpanded(true);
-  }, [autoExpand]);
+    if (autoExpand || hasTermMatch) setExpanded(true);
+  }, [autoExpand, hasTermMatch]);
 
   const names = tools.map((t) => toolName(t.pre));
   const counts = new Map<string, number>();
@@ -69,11 +77,12 @@ export function ToolGroupItem({ tools, autoExpand, matchTerms, targetLogEventId 
         <Collapse in={expanded}>
           <Box style={{ borderTop: "1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4))" }}>
             {tools.map((t, i) => {
-              const isMatch = targetLogEventId != null && (
+              const isLogMatch = targetLogEventId != null && (
                 t.pre._sourceLogEventId === targetLogEventId ||
                 t.post?._sourceLogEventId === targetLogEventId
               );
-              return <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} autoExpand={isMatch} matchTerms={isMatch ? matchTerms : undefined} />;
+              const isTermMatch = matchTerms?.length ? toolTextMatches(t, matchTerms) : false;
+              return <ToolUseItem key={i} pre={t.pre} post={t.post} failed={t.failed} autoExpand={isLogMatch || isTermMatch} matchTerms={(isLogMatch || isTermMatch) ? matchTerms : undefined} />;
             })}
           </Box>
         </Collapse>

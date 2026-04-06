@@ -32,6 +32,18 @@
       {
         "command": "gossamer.copyCommitHash",
         "title": "Copy Commit Hash"
+      },
+      {
+        "command": "gossamer.togglePanel",
+        "title": "Gossamer: Toggle Panel"
+      },
+      {
+        "command": "gossamer.restartServer",
+        "title": "Gossamer: Restart Server"
+      },
+      {
+        "command": "gossamer.focusSidebar",
+        "title": "Gossamer: Focus Checkpoints Sidebar"
       }
     ],
     "menus": {
@@ -63,6 +75,16 @@
         "key": "ctrl+shift+f",
         "mac": "cmd+shift+f",
         "when": "activeWebviewPanelId == 'gossamer'"
+      },
+      {
+        "command": "gossamer.togglePanel",
+        "key": "ctrl+k g",
+        "mac": "ctrl+k g"
+      },
+      {
+        "command": "gossamer.focusSidebar",
+        "key": "ctrl+k ctrl+g",
+        "mac": "ctrl+k ctrl+g"
       }
     ],
     "views": {
