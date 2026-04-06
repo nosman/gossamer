@@ -1,0 +1,21 @@
+merge the cmp branch here into the gossamer-testing worktree
+
+---
+
+yes mcp branch
+
+---
+
+after the recent commit, opening the sessionDetails view doesn't work
+
+---
+
+Nothing happens at all. I think it is problem 1
+
+---
+
+Does the server still keep running if the gossamer window is closed and reopened?
+
+---
+
+ok commit these changes then merge them into the testing worktree
