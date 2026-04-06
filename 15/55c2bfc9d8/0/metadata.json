@@ -1,0 +1,116 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "1555c2bfc9d8",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-06T01:39:13.838856Z",
+  "branch": "mcp",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "5cf7fb56830e",
+  "token_usage": {
+    "input_tokens": 4930,
+    "cache_creation_tokens": 2118100,
+    "cache_read_tokens": 75010913,
+    "output_tokens": 373477,
+    "api_call_count": 764
+  },
+  "session_metrics": {
+    "turn_count": 107
+  },
+  "summary": {
+    "intent": "Refactor gossamer (a Claude Code session viewer) from an Electron desktop app into a VS Code extension to eliminate install friction and improve workflow integration with Claude Code sessions.",
+    "outcome": "Successfully built a fully functional VS Code extension with sessions list, session detail view, native checkpoint tree sidebar, embedded MCP server at /mcp, QuickPick search with FTS, terminal-spawned sessions, VS Code theme integration, and image rendering support.",
+    "learnings": {
+      "repo": [
+        "gossamer's architecture: Entire.io CLI writes session data to a git branch (entire/checkpoints/v1), gossamer indexes that branch into per-project SQLite DBs registered in ~/.gossamer/config.json",
+        "Each project has its own DB — never use a shared/global DB; schema migrations must target all project DBs individually",
+        "CheckpointIdGitOidJoin maps checkpointId (12-char hex) to gitOid; ShadowSession.cwd holds the session's working directory and is needed to locate the correct git repo for operations",
+        "Images are stored as base64 in full.jsonl files on the checkpoint branch but were never persisted in the LogContent schema — required a new imageData/imageMediaType column + backfill migration",
+        "The gossamer server uses repoDir (configured workspace) for all git ops; multi-repo setups require looking up the correct repo from ShadowSession.cwd or falling back to all config repos",
+        "findRepo() uses exact match; when cwd is a subdirectory of the registered repo root, findRepoForPath() with prefix matching is required (added to config.ts)",
+        "DEFAULT_PORT = 3456 is now the stable configured port; previously getFreePort() picked a random port making MCP config impossible"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "process.execPath in a VS Code extension points to Electron's bundled Node.js, not the system node — always use execFileSync('which', ['node']) to get the system node for spawning processes that use native modules"
+        },
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "finding": "Must use 'include': ['src/**/*.ts'] not a file list — listing specific files caused SessionDetailPanel.ts and diffUtils.ts to never compile, producing silent runtime failures"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "finding": "acquireVsCodeApi() can only be called once per webview; if the HTML also calls it (e.g. for a minimize button), the React module must reuse window.__vscodeApi rather than call it again"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "finding": "Mantine ScrollArea's viewport ref is null at the [] useEffect because the viewport renders asynchronously — check scroll position inline at the moment new content arrives rather than attaching a separate scroll listener"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "VS Code webview CSP needs explicit 'img-src data: https:' to render base64 images; default-src 'none' blocks all images including data: URIs silently"
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "finding": "Vite root/outDir must be absolute paths (using resolve(__dirname, ...)) — relative paths resolve from CWD (repo root when run via npm workspace -w flag), not the package directory"
+        },
+        {
+          "path": "packages/core/src/db.ts",
+          "finding": "After moving files to packages/core/src/, prisma generated client import path is ../prisma/generated/client/index.js (one level up), not ../../prisma/... — monorepo restructuring changes relative depths"
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "repoName in the sessions list was using basename(repoDir) globally — should be basename(session.cwd) per-session to show the correct repository for each session"
+        }
+      ],
+      "workflow": [
+        "VS Code extension host runs on Electron's Node.js (different NODE_MODULE_VERSION than system node) — avoid importing native modules (better-sqlite3, Prisma) directly; spawn a child process using system node instead",
+        "When a VS Code webview tab is dragged to a new window, the webview reloads from scratch — re-send any initialization messages (like server_ready) in onDidChangeViewState when the panel becomes visible",
+        "For VS Code diffs with in-memory content, TextDocumentContentProvider + gossamer-diff: URI scheme is cleaner than temp files — no disk writes, inherently read-only, no filename collision issues",
+        "MCP stateless mode (sessionIdGenerator: undefined) with StreamableHTTPServerTransport lets you embed an MCP server directly in an existing Express app at a /mcp route",
+        "npm workspaces -w flag requires the workspace name (e.g. -w gossamer-vscode), not the directory name (e.g. -w vscode)",
+        "Git worktrees can't check out the same branch twice — create a new branch (e.g. testing from mcp) for the worktree"
+      ]
+    },
+    "friction": [
+      "better-sqlite3 native module NODE_MODULE_VERSION mismatch between system Node and VS Code's Electron Node — required significant architectural change (spawning child process) to resolve",
+      "tsconfig.extension.json include list missing new files caused silent runtime failures (blank diff views) with no build errors — very hard to diagnose",
+      "Server startup race condition: webview fetched sessions before the server finished schema push; required polling + server_ready message protocol",
+      "Prisma path misconfiguration after monorepo restructuring (../../ vs ../ prefix) — caused build failures",
+      "Vite relative path resolution for root/outDir only exposed when running via npm workspace -w flag (different CWD)",
+      "CSP blocking data: URIs for image rendering — silent failure with no console error",
+      "Random port from getFreePort() was fundamentally incompatible with static MCP config — required architectural change to stable configured port",
+      "Image data was stored in JSONL but never persisted in the DB schema — required schema migration + backfill for existing sessions",
+      "Multiple context window exhaustions requiring summary-based continuations across a very long session"
+    ],
+    "open_items": [
+      "Show session name/rename in the sessions table if a session has been renamed (tabled by user)",
+      "Electron desktop app was intentionally broken during refactor and never restored — it remains in the repo but non-functional",
+      "Existing sessions need manual re-sync to pick up newly indexed image data; no automatic re-indexing trigger",
+      "MCP stdio wrapper (dist/mcp.js) still exists as fallback but is now redundant given the embedded /mcp endpoint",
+      "Onboarding flow only checks for .entire/settings.json presence — no validation of Entire.io CLI version or proper configuration",
+      "testing branch/worktree at ~/gossamer-testing was created for isolated builds but may need cleanup or merging",
+      "The install-mcp.mjs script handles Claude Code and Codex CLI but no other MCP clients",
+      "fs.watch fallback polls (30s) added for reliability — could evaluate if they're still needed once file watcher stability is confirmed"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-06T01:38:11.820397Z",
+    "agent_lines": 2,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "total_lines_changed": 4,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
