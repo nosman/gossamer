@@ -141,6 +141,37 @@ export class GossamerPanel {
     }
   }
 
+  /** Kill and restart the server process, then re-signal the panel when ready. */
+  static restart(repoPath: string) {
+    const port = getConfiguredPort();
+    GossamerPanel.server?.kill();
+    GossamerPanel.server = undefined;
+    GossamerPanel.serverPort = undefined;
+    const instance = GossamerPanel.instance;
+    if (instance) {
+      instance.serverReady = false;
+      instance.spawnServer();
+      waitForServer(port)
+        .then(() => instance.ensureRepoRegistered())
+        .then(() => {
+          instance.serverReady = true;
+          instance.panel.webview.postMessage({ type: "server_ready" });
+        })
+        .catch((err) => instance.panel.webview.postMessage({ type: "server_error", error: String(err) }));
+    } else {
+      const nodeExec = getSystemNode();
+      if (existsSync(SERVE_SCRIPT)) {
+        const proc = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", repoPath, "--port", String(port)], {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, FORCE_COLOR: "0" },
+        });
+        proc.on("exit", () => { if (GossamerPanel.server === proc) { GossamerPanel.server = undefined; GossamerPanel.serverPort = undefined; } });
+        GossamerPanel.server = proc;
+        GossamerPanel.serverPort = port;
+      }
+    }
+  }
+
   /** Full shutdown — kills server too (called on extension deactivate). */
   static dispose() {
     GossamerPanel.instance?.cleanup(true);

@@ -84,6 +84,16 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Restart the gossamer server
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.restartServer", () => {
+      const ws = findEntireWorkspace();
+      if (!ws) return;
+      GossamerPanel.restart(ws);
+      vscode.window.showInformationMessage("Gossamer: server restarting…");
+    }),
+  );
+
   // Focus the checkpoints sidebar
   context.subscriptions.push(
     vscode.commands.registerCommand("gossamer.focusSidebar", () => {

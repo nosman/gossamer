@@ -38,6 +38,10 @@
         "title": "Gossamer: Toggle Panel"
       },
       {
+        "command": "gossamer.restartServer",
+        "title": "Gossamer: Restart Server"
+      },
+      {
         "command": "gossamer.focusSidebar",
         "title": "Gossamer: Focus Checkpoints Sidebar"
       }
