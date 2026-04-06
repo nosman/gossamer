@@ -1,0 +1,131 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "6e17675a8657",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-06T02:13:12.739001Z",
+  "branch": "mcp",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/extension.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "11298473d59e",
+  "token_usage": {
+    "input_tokens": 4982,
+    "cache_creation_tokens": 2461716,
+    "cache_read_tokens": 81088028,
+    "output_tokens": 388570,
+    "api_call_count": 804
+  },
+  "session_metrics": {
+    "turn_count": 112
+  },
+  "summary": {
+    "intent": "Refactor the Gossamer desktop app (Electron) into a VS Code extension to reduce install friction, enable auto-detection of Entire.io repos, and provide a more integrated editing experience.",
+    "outcome": "Successfully shipped a working VS Code extension with session list, session detail view, native checkpoint tree view, search with FTS, diff viewer, MCP server, image rendering, and onboarding flow. Images not yet rendering due to server running stale code from worktree.",
+    "learnings": {
+      "repo": [
+        "Gossamer uses a per-project SQLite DB architecture — each repo in ~/.gossamer/config.json has its own dbPath; never push schema to a global DB",
+        "The server runs from whichever dist/ was most recently spawned — with a git worktree at ~/gossamer-testing, the live server is gossamer-testing/dist/serve.js, not the main repo",
+        "Entire.io writes session data to git branch entire/checkpoints/v1; gossamer indexes that into SQLite; images are stored as base64 in full.jsonl files on that branch",
+        "LogContent schema originally had no image fields; imageData and imageMediaType had to be added and backfilled from LogEvent.data raw JSON",
+        "findRepo() uses exact path match — when session cwd is a subdirectory of the repo root, it fails; findRepoForPath() with prefix matching was added to config.ts",
+        "The CheckpointIdGitOidJoin table maps checkpointId to gitOid; commit messages require running git log against the correct repo (can't use repoDir if session ran elsewhere)",
+        "ShadowSession.cwd is null for sessions indexed only via checkpoint branch (not tracked live), causing git operations to fall back to the wrong repo",
+        "better-sqlite3 is compiled against system Node.js (MODULE_VERSION 141) but VS Code extension host uses Electron's Node.js (MODULE_VERSION 140) — must spawn server as child process using system node",
+        "Mantine ScrollArea viewport ref is null at initial useEffect([]) time — must check scroll position inline in the effect that fires on content change, not via a separate scroll listener",
+        "VS Code webview CSP with default-src 'none' blocks data: URIs for images — must explicitly add img-src data: https: http:"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "Server made a static singleton (GossamerPanel.server, GossamerPanel.serverPort) so it survives panel disposal; minimize/restore pattern disposes only the webview"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "finding": "acquireVsCodeApi() can only be called once — stored as window.__vscodeApi in the host HTML, vscodeApi.ts checks for it before calling acquireVsCodeApi()"
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "finding": "resourceUri must use absolute paths (join(repoPath, relativePath)) for VS Code SCM color decorations to apply; relative paths silently fail"
+        },
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "finding": "Was only including extension.ts and GossamerPanel.ts — SessionDetailPanel.ts and diffUtils.ts were never compiled, causing silent runtime failures"
+        },
+        {
+          "path": "packages/vscode/src/diffUtils.ts",
+          "finding": "TextDocumentContentProvider with gossamer-diff: URI scheme used instead of temp files — content held in memory Map, file extension preserved in URI path for syntax highlighting"
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "repoName was derived from basename(repoDir) — the server's configured workspace — not per-session; fixed to use basename(session.cwd) with fallback"
+        },
+        {
+          "path": "src/config.ts",
+          "finding": "DEFAULT_PORT = 3456 added; getConfiguredPort() reads ~/.gossamer/config.json port field, enabling stable MCP config URLs"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "finding": "Image content blocks: data is in c.source.data, media type in c.source.media_type; cType check needed before accessing source"
+        },
+        {
+          "path": "packages/vscode/src/webview/vite.config.ts",
+          "finding": "root must be absolute path using resolve(__dirname, 'src/webview') — relative paths resolve from CWD (repo root when run via workspace), not package dir"
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "finding": "entryFileNames and assetFileNames must be set to assets/index.js and assets/[name].[ext] for deterministic filenames that GossamerPanel.ts can reference"
+        }
+      ],
+      "workflow": [
+        "Git worktrees cannot check out the same branch twice — create a new branch from the source branch for the worktree",
+        "When using a worktree for testing VS Code extensions, always rebuild in the worktree before testing — the running server process path shows which dist/ is active",
+        "VS Code webview panels reload their HTML when dragged to a new window — server_ready must be re-sent via onDidChangeViewState, not just once at startup",
+        "Prisma db push --accept-data-loss is required for adding nullable columns to SQLite even though it's safe; alternatively use direct SQLite ALTER TABLE ADD COLUMN",
+        "VS Code chord keybindings (Ctrl+K G) don't fire when the webview has keyboard focus — minimize buttons within the webview are more reliable",
+        "npm run build -w \u003cworkspace-name\u003e requires the exact name from package.json, not the directory name",
+        "The MCP StreamableHTTPServerTransport with sessionIdGenerator: undefined enables stateless mode suitable for simple tool calls without session management"
+      ]
+    },
+    "friction": [
+      "Server running from gossamer-testing/dist/ instead of main repo — caused confusion throughout debugging; images appeared to not work even after schema+code fixes",
+      "acquireVsCodeApi() double-call error when adding inline minimize button script to webview HTML",
+      "tsconfig.extension.json only listed 2 files in include — SessionDetailPanel.ts and diffUtils.ts silently not compiled, blank diff views with no error",
+      "Vite root relative path resolved from repo root CWD, not package directory — 'Cannot resolve entry module index.html' error",
+      "prisma db push failed on entireio_cli.db due to FTS table presence; had to use direct SQLite ALTER TABLE",
+      "Accidental Electron app changes when user asked to 'make the main gossamer window minimizable' — had to fully revert app/src/main/index.ts, preload/index.ts, Shell.tsx",
+      "NODE_MODULE_VERSION mismatch for better-sqlite3 discovered only at runtime after extension was already built",
+      "context window exhausted multiple times requiring summaries; each context resumption lost some nuance about current state",
+      "Ctrl+K G chord keybinding conflicts or doesn't fire when webview has focus — toggle panel feature works inconsistently"
+    ],
+    "open_items": [
+      "Images still not rendering — server (pid 9716) running stale code needs restart via Gossamer: Restart Server command",
+      "Session name display in sessions table (tabled when user asked about it — show name instead of sessionId if session has a name)",
+      "Toggle panel keybinding (Ctrl+K G) doesn't reliably work when webview has focus — needs investigation or different approach",
+      "Re-index existing sessions to pick up image data — users must manually hit Sync; no automatic backfill for new repos",
+      "gossamer-testing worktree on branch 'testing' will diverge from 'mcp' — needs periodic git merge mcp to stay current",
+      "Claude-output images not yet handled — only user-input images added; need to check if tool_result blocks contain image data in JSONL",
+      "MCP stdio wrapper (dist/mcp.js) still exists but is now redundant with embedded /mcp endpoint — could be cleaned up",
+      "Electron app (app/) left in partially broken state throughout refactor — should be formally deprecated or removed",
+      "resourceUri color coding for checkpoint tree files shows git working tree status, not historical diff status — deleted files in old checkpoints may not show as deleted if they exist now",
+      "CheckpointTreeProvider shows repoPath from session cwd which may be a subdirectory, not the git root — could cause resourceUri path mismatches for SCM decorations"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-06T02:12:10.874092Z",
+    "agent_lines": 45,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 45,
+    "total_lines_changed": 45,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

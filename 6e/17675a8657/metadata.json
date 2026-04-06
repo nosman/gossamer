@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "6e17675a8657",
+  "strategy": "manual-commit",
+  "branch": "mcp",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "packages/vscode/package.json",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/extension.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/17675a8657/0/metadata.json",
+      "transcript": "/6e/17675a8657/0/full.jsonl",
+      "content_hash": "/6e/17675a8657/0/content_hash.txt",
+      "prompt": "/6e/17675a8657/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4982,
+    "cache_creation_tokens": 2461716,
+    "cache_read_tokens": 81088028,
+    "output_tokens": 388570,
+    "api_call_count": 804
+  }
+}
