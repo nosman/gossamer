@@ -1,0 +1,149 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "0c892ade5a1c",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-06T02:55:07.68895Z",
+  "branch": "mcp",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/webview/api.ts",
+    "packages/vscode/src/webview/components/SessionRow.tsx",
+    "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "4c78d0b2bdc2",
+  "token_usage": {
+    "input_tokens": 5094,
+    "cache_creation_tokens": 2586374,
+    "cache_read_tokens": 87904855,
+    "output_tokens": 408543,
+    "api_call_count": 908
+  },
+  "session_metrics": {
+    "turn_count": 116
+  },
+  "summary": {
+    "intent": "Refactor gossamer (a Claude Code hook event viewer) from an Electron desktop app into a VS Code extension to reduce install friction and improve context-switching between editing and viewing Claude sessions. Then incrementally add features to the extension.",
+    "outcome": "Successfully migrated gossamer to a VS Code extension with a monorepo structure (packages/core + packages/vscode), implemented sessions list, session detail view, native checkpoint tree view, search via QuickPick with FTS, MCP server, image rendering, session naming, and numerous UX improvements. The extension is functional and running from a git worktree (gossamer-testing).",
+    "learnings": {
+      "repo": [
+        "The architecture is: Entire.io CLI writes session data to a specific git branch → gossamer indexes that branch into SQLite → extension displays from SQLite via a spawned HTTP server",
+        "Entire.io config is detected via .entire/settings.json at repo root",
+        "Each registered repo in ~/.gossamer/config.json has its own separate SQLite database (not a single shared DB)",
+        "Session slugs (human-readable names) are stored on individual LogEvent rows, not as a session-level field — must query the latest slug per session",
+        "Images in sessions are stored as base64 in full.jsonl files on the entire/checkpoints/v1 branch, inside content blocks with type 'image' and source.data / source.media_type fields",
+        "The server runs from gossamer-testing/dist/serve.js (worktree), not the main repo — always rebuild the worktree when testing",
+        "CheckpointIdGitOidJoin maps checkpointId → gitOid; ShadowSession.cwd gives the repo path needed for git operations",
+        "findRepo() uses exact path matching which fails when cwd is a subdirectory — findRepoForPath() was added for prefix matching",
+        "The gossamer server is now a static singleton in GossamerPanel.ts that survives webview panel disposal"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is a static singleton (GossamerPanel.server, GossamerPanel.serverPort) — survives panel disposal. spawnServer() reuses existing if port matches. getConfiguredPort() reads ~/.gossamer/config.json with DEFAULT_PORT=3456 fallback."
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "One panel per session stored in Map\u003cstring, SessionDetailPanel\u003e. Opens in ViewColumn.Two. Accepts highlight?: string for search term highlighting, injected as window.__GOSSAMER_HIGHLIGHT__."
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Uses resourceUri with absolute paths (join(repoPath, fullPath)) for SCM file decorations. Supports kind: 'group' | 'checkpoint' | 'dir' | 'file'. First checkpoint is Expanded, rest Collapsed. Fetches both session checkpoints and branch-log checkpoints."
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "acquireVsCodeApi() can only be called once per webview. Stored as window.__vscodeApi by the host page script and reused by the React app via this module."
+        },
+        {
+          "path": "packages/vscode/src/diffUtils.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "Uses GossamerDiffProvider (TextDocumentContentProvider) with gossamer-diff: URI scheme instead of temp files. Fetches before/after from /api/v2/checkpoints/:id/file endpoint and serves in-memory. No disk writes needed."
+        },
+        {
+          "path": "src/config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "DEFAULT_PORT=3456 added. findRepoForPath() uses prefix matching (repo.localPath + '/') to handle subdirectory cwds. readConfig() returns GossamerConfig with optional port field."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "MCP server embedded at /mcp via StreamableHTTPServerTransport with sessionIdGenerator: undefined (stateless mode). File watchers replace polling: fs.watch on .db/.db-wal for DB changes (50ms debounce), .git/refs/ recursive + .git/packed-refs for shadow branch (200ms debounce). 30s fallback polls kept."
+        },
+        {
+          "path": "packages/core/prisma/schema.prisma",
+          "line": 1,
+          "end_line": 10,
+          "finding": "imageData String? and imageMediaType String? added to LogContent model to persist base64 image data from Claude sessions."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "HIGHLIGHT_TERMS computed at module level from window.__GOSSAMER_HIGHLIGHT__. initialLoadDone ref prevents double scroll. Auto-scrolls to bottom on load (useEffect on loading state), or to first \u003cmark\u003e if search terms present. Sticky scroll: checks distFromBottom \u003c 80 inline."
+        }
+      ],
+      "workflow": [
+        "VS Code webviews need img-src data: https: http: in CSP to render base64 images — default-src 'none' blocks them silently",
+        "VS Code TextDocumentContentProvider with custom URI scheme is cleaner than temp files for diffs — documents are inherently read-only and no disk cleanup needed",
+        "When using git worktrees for testing, the running server always comes from the worktree's dist/ — must rebuild the worktree, not the main repo",
+        "Vite builds ESM output — webview script tags must have type='module' or the browser silently ignores them",
+        "tsconfig.json include array must use glob patterns (src/**/*.ts) not specific files, or new files won't compile",
+        "VS Code extension host runs on Electron's Node.js, not system Node.js — native modules (better-sqlite3) get NODE_MODULE_VERSION mismatches. Solution: spawn server as child process using system node (which node).",
+        "Mantine ScrollArea's viewport ref is null at []‐dep useEffect time — check scroll position inline at effect fire time instead of a separate listener",
+        "npm workspaces: -w flag requires the package name from package.json (e.g. gossamer-vscode), not the directory name"
+      ]
+    },
+    "friction": [
+      "Server running from gossamer-testing worktree instead of main repo caused repeated confusion about why changes weren't reflected — had to rebuild the worktree multiple times",
+      "Accidentally made Electron app changes instead of VS Code extension changes — had to revert app/src/main/index.ts, preload, and Shell.tsx",
+      "prisma db push fails with FTS tables in SQLite — had to use direct ALTER TABLE ADD COLUMN as workaround",
+      "acquireVsCodeApi() can only be called once — caused runtime errors when both inline script and React app tried to call it",
+      "tsconfig.extension.json only listed specific files in include, causing SessionDetailPanel.ts and diffUtils.ts to never compile — blank diff views until discovered",
+      "Ctrl+K G chord keybinding doesn't fire when webview has focus, making toggle panel unreliable",
+      "Vite uses hashed filenames by default — had to configure entryFileNames/assetFileNames for deterministic output that GossamerPanel.ts could reference",
+      "Session images not appearing required tracing through: schema → Prisma client → indexer → server API → webview CSP → stale compiled JS — each layer appeared correct individually",
+      "GossamerPanel.restart() command needed getConfiguredPort() which wasn't exported from the module — required restructuring"
+    ],
+    "open_items": [
+      "Toggle panel keybinding (Ctrl+K G) doesn't work when webview has focus — needs a webview-internal minimize button as primary mechanism",
+      "Session names from /rename command: currently fetches latest slug per session but the 'If the session is named, show the name' feature was tabled mid-session",
+      "Image support requires re-syncing old sessions to backfill imageData — no automatic migration for historical data",
+      "Claude-output images (assistant generating images) not yet handled — only user-uploaded images are stored and displayed",
+      "Onboarding flow (OnboardingPanel) exists but repo registration flow via POST /api/repos hasn't been tested end-to-end",
+      "MCP stdio wrapper (src/mcp.ts) still exists as fallback but the embedded /mcp endpoint is the primary path — stdio wrapper may not be needed",
+      "CheckpointTreeProvider resourceUri for SCM decorations requires the repo to be open in VS Code's workspace — decorations won't show for repos in other windows",
+      "Session detail tabs open in ViewColumn.Two which may conflict with other panels depending on user's layout",
+      "Worktree (gossamer-testing) on branch 'testing' is diverged from 'mcp' — needs periodic merge to stay current",
+      "The Electron app (app/) is broken/unused but still exists in the repo — should be removed or explicitly deprecated"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-06T02:54:05.281778Z",
+    "agent_lines": 34,
+    "agent_removed": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 34,
+    "total_lines_changed": 41,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
