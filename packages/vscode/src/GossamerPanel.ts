@@ -292,7 +292,7 @@ export class GossamerPanel {
       prompt: string | null;
       repoName: string | null;
       cwd: string;
-      slug: string | null;
+      slug?: string | null;
     }
     interface ContentResult {
       sessionId: string;
@@ -304,7 +304,7 @@ export class GossamerPanel {
     const allSessions = await httpGetJson<SessionData[]>(`http://localhost:${this.port}/api/sessions`);
 
     const sessionLabel = (s: SessionData) =>
-      s.intent ?? s.prompt?.slice(0, 80) ?? s.slug ?? s.sessionId.slice(0, 8);
+      s.intent ?? s.prompt?.slice(0, 80) ?? s.slug ?? s.sessionId.slice(0, 8) ?? "";
 
     const toSessionItem = (s: SessionData): QP => ({
       sessionId:    s.sessionId,
@@ -338,7 +338,7 @@ export class GossamerPanel {
         items.push({ kind: vscode.QuickPickItemKind.Separator, label: "Chat History", sessionId: "", sessionTitle: "" });
         for (const r of contentResults) {
           const session = allSessions.find((s) => s.sessionId === r.sessionId);
-          const sLabel  = sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "" });
+          const sLabel  = sessionLabel(session ?? { sessionId: r.sessionId, intent: null, prompt: null, repoName: null, cwd: "", slug: null });
           const snippet = r.snippet.replace(/«/g, "").replace(/»/g, "").trim();
           items.push({
             sessionId:    r.sessionId,
