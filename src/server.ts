@@ -8,7 +8,8 @@ import { promisify } from "util";
 
 const exec     = promisify(execCb);
 const execFile = promisify(execFileCb);
-import { existsSync, mkdirSync, watch as fsWatch, FSWatcher } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch as fsWatch, FSWatcher } from "fs";
+import { homedir } from "os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp-server.js";
 import { basename, dirname, join, resolve } from "path";
@@ -16,6 +17,51 @@ import { fileURLToPath } from "url";
 import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
 import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, type RepoConfig } from "./config.js";
+
+// ─── Custom title cache (reads ~/.claude/projects/…/*.jsonl for /rename events) ──
+
+/** Map from sessionId → the latest customTitle set via /rename. */
+const customTitleCache = new Map<string, string>();
+/** Track file mtimes so we only re-parse files that have changed. */
+const customTitleMtimes = new Map<string, number>();
+
+function refreshCustomTitles(repoDir: string): void {
+  // Claude encodes the repo path by replacing every '/' with '-'
+  const encoded = repoDir.replace(/\//g, "-");
+  const projectDir = join(homedir(), ".claude", "projects", encoded);
+  let files: string[];
+  try {
+    files = readdirSync(projectDir).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return; // project dir doesn't exist for this repo yet
+  }
+
+  for (const file of files) {
+    const filePath = join(projectDir, file);
+    let mtime: number;
+    try { mtime = statSync(filePath).mtimeMs; } catch { continue; }
+    if (customTitleMtimes.get(filePath) === mtime) continue; // unchanged
+    customTitleMtimes.set(filePath, mtime);
+
+    const sessionId = file.slice(0, -".jsonl".length);
+    let latestTitle: string | null = null;
+    try {
+      for (const line of readFileSync(filePath, "utf-8").split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const obj = JSON.parse(trimmed) as Record<string, unknown>;
+          if (obj.type === "custom-title" && typeof obj.customTitle === "string") {
+            latestTitle = obj.customTitle;
+          }
+        } catch { /* skip malformed line */ }
+      }
+    } catch { /* file unreadable */ }
+
+    if (latestTitle) customTitleCache.set(sessionId, latestTitle);
+    else customTitleCache.delete(sessionId);
+  }
+}
 
 // ─── Schema push ──────────────────────────────────────────────────────────────
 
@@ -67,6 +113,7 @@ interface SessionResponse {
   branch: string | null;
   intent: string | null;
   slug: string | null;
+  customTitle: string | null;
   /** true when this session is currently indexed in a shadow branch */
   isLive: boolean;
 }
@@ -241,6 +288,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           branch:          cp?.branch ?? shadow?.gitBranch ?? null,
           intent:          cp?.intent ?? null,
           slug:            slugMap.get(sessionId) ?? null,
+          customTitle:     customTitleCache.get(sessionId) ?? null,
           isLive:          shadow !== null,
         };
       });
@@ -313,6 +361,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         branch:          latestMeta?.branch ?? shadow?.gitBranch ?? null,
         intent:          latestMeta?.summary?.intent ?? null,
         slug:            latestSlugEvent?.slug ?? null,
+        customTitle:     customTitleCache.get(id) ?? null,
         isLive:          shadow !== null,
       } satisfies SessionResponse);
     } catch (err) {
@@ -1411,6 +1460,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   async function indexShadowsForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
     process.stderr.write(`shadow indexer [${name}]: running\n`);
+    refreshCustomTitles(localPath);
     try {
       const repoDb = await getDb(repoDdPath);
       const { sessions } = await indexAllShadowBranches(repoDb, localPath);
@@ -1431,6 +1481,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const repos = readConfig().repos;
     await Promise.all(repos.map((r) => indexCheckpointsForRepo(r.name, r.localPath, r.dbPath)));
   };
+
+  // Seed the custom title cache for the primary repo immediately
+  if (repoDir) refreshCustomTitles(repoDir);
 
   void runAllCheckpoints();
   const checkpointPoller = setInterval(runAllCheckpoints, 30_000);

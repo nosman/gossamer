@@ -53,6 +53,14 @@ export class SessionDetailPanel {
 
     this.panel.webview.html = this.getHtml(context, sessionId, title, port, highlight);
     checkpointProvider.setSession(sessionId, port).catch(console.error);
+
+    // Update sidebar whenever this tab is brought into focus
+    this.panel.onDidChangeViewState((e) => {
+      if (e.webviewPanel.active) {
+        checkpointProvider.setSession(sessionId, port).catch(console.error);
+      }
+    });
+
     this.panel.webview.onDidReceiveMessage(
       (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string }) => {
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {

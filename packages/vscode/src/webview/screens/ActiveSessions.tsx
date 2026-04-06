@@ -182,7 +182,7 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
                   <SessionRow
                     key={item.sessionId}
                     session={item}
-                    onPress={() => onSessionPress(item.sessionId, item.intent ?? item.summary ?? item.slug ?? `${item.sessionId.slice(0, 8)}…`)}
+                    onPress={() => onSessionPress(item.sessionId, item.intent ?? item.summary ?? item.customTitle ?? item.slug ?? `${item.sessionId.slice(0, 8)}…`)}
                     onArchive={handleArchive}
                     isArchived={archivedIds.has(item.sessionId)}
                   />

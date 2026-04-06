@@ -26,6 +26,7 @@ export interface Session {
   branch: string | null;
   intent: string | null;
   slug: string | null;
+  customTitle: string | null;
   isLive: boolean;
 }
 
