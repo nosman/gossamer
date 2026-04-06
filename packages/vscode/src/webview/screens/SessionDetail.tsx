@@ -391,7 +391,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             <ActionIcon variant="subtle" size="sm" onClick={onBack} title="Back to sessions">←</ActionIcon>
           )}
           <Text size="sm" fw={600} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {session?.intent ?? session?.summary ?? title}
+            {session?.intent ?? session?.summary ?? session?.slug ?? title}
           </Text>
           {session?.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}

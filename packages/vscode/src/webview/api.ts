@@ -25,6 +25,7 @@ export interface Session {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  slug: string | null;
   isLive: boolean;
 }
 

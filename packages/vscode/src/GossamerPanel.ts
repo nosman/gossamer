@@ -292,6 +292,7 @@ export class GossamerPanel {
       prompt: string | null;
       repoName: string | null;
       cwd: string;
+      slug: string | null;
     }
     interface ContentResult {
       sessionId: string;
@@ -303,7 +304,7 @@ export class GossamerPanel {
     const allSessions = await httpGetJson<SessionData[]>(`http://localhost:${this.port}/api/sessions`);
 
     const sessionLabel = (s: SessionData) =>
-      s.intent ?? s.prompt?.slice(0, 80) ?? s.sessionId.slice(0, 8);
+      s.intent ?? s.prompt?.slice(0, 80) ?? s.slug ?? s.sessionId.slice(0, 8);
 
     const toSessionItem = (s: SessionData): QP => ({
       sessionId:    s.sessionId,

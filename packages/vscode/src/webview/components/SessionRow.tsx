@@ -103,7 +103,15 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
         </CopyCell>
 
         <CopyCell copyValue={session.sessionId} width={COL_WIDTHS.sessionId}>
-          <Text ff="monospace" size="sm" c="indigo">{shortId}</Text>
+          {session.slug ? (
+            <Tooltip label={shortId} withArrow openDelay={300}>
+              <Text ff="monospace" size="sm" c="indigo"
+                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+              >{session.slug}</Text>
+            </Tooltip>
+          ) : (
+            <Text ff="monospace" size="sm" c="indigo">{shortId}</Text>
+          )}
         </CopyCell>
 
         <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>

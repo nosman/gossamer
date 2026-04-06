@@ -40,7 +40,7 @@ export class SessionDetailPanel {
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
       title,
-      vscode.ViewColumn.Three,
+      vscode.ViewColumn.Two,
       {
         enableScripts: true,
         enableFindWidget: true,

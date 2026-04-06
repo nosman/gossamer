@@ -66,6 +66,7 @@ interface SessionResponse {
   keywords: string[];
   branch: string | null;
   intent: string | null;
+  slug: string | null;
   /** true when this session is currently indexed in a shadow branch */
   isLive: boolean;
 }
@@ -196,6 +197,15 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       });
       const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
 
+      // Latest slug per session (last event that has one, i.e. the current name)
+      const slugRows = await db.logEvent.findMany({
+        where: { sessionId: { in: allIds }, slug: { not: null } },
+        orderBy: { id: "desc" },
+        distinct: ["sessionId"],
+        select: { sessionId: true, slug: true },
+      });
+      const slugMap = new Map(slugRows.map((e) => [e.sessionId!, e.slug]));
+
       // Parent-child relationships from task checkpoints
       const allParentRows = await db.sessionParent.findMany({
         select: { childSessionId: true, parentSessionId: true },
@@ -230,6 +240,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           keywords:        [],
           branch:          cp?.branch ?? shadow?.gitBranch ?? null,
           intent:          cp?.intent ?? null,
+          slug:            slugMap.get(sessionId) ?? null,
           isLive:          shadow !== null,
         };
       });
@@ -250,7 +261,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/sessions/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      const [latestMeta, shadow, firstEvent, lastEvent] = await Promise.all([
+      const [latestMeta, shadow, firstEvent, lastEvent, latestSlugEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
           select: { branch: true, checkpointId: true, summary: { select: { intent: true } } },
@@ -266,6 +277,11 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           where: { sessionId: id, timestamp: { not: null } },
           orderBy: { id: "desc" },
           select: { timestamp: true },
+        }),
+        db.logEvent.findFirst({
+          where: { sessionId: id, slug: { not: null } },
+          orderBy: { id: "desc" },
+          select: { slug: true },
         }),
       ]);
       if (!latestMeta && !shadow) {
@@ -296,6 +312,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         keywords:        [],
         branch:          latestMeta?.branch ?? shadow?.gitBranch ?? null,
         intent:          latestMeta?.summary?.intent ?? null,
+        slug:            latestSlugEvent?.slug ?? null,
         isLive:          shadow !== null,
       } satisfies SessionResponse);
     } catch (err) {
