@@ -27,6 +27,7 @@ export interface Session {
   intent: string | null;
   slug: string | null;
   customTitle: string | null;
+  agent: string | null;
   isLive: boolean;
 }
 

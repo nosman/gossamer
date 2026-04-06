@@ -114,6 +114,7 @@ interface SessionResponse {
   intent: string | null;
   slug: string | null;
   customTitle: string | null;
+  agent: string | null;
   /** true when this session is currently indexed in a shadow branch */
   isLive: boolean;
 }
@@ -180,13 +181,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           sessionId: true,
           checkpointId: true,
           branch: true,
+          agent: true,
           summary: { select: { intent: true } },
         },
         orderBy: { createdAt: "asc" },
       });
-      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string }>();
+      const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string; agent: string | null }>();
       for (const m of allMetas) {
-        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId });
+        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId, agent: m.agent ?? null });
       }
 
       // Git user per checkpoint (from commit author stored at index time)
@@ -289,6 +291,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
           intent:          cp?.intent ?? null,
           slug:            slugMap.get(sessionId) ?? null,
           customTitle:     customTitleCache.get(sessionId) ?? null,
+          agent:           cp?.agent ?? null,
           isLive:          shadow !== null,
         };
       });
@@ -312,7 +315,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const [latestMeta, shadow, firstEvent, lastEvent, latestSlugEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
-          select: { branch: true, checkpointId: true, summary: { select: { intent: true } } },
+          select: { branch: true, checkpointId: true, agent: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
         db.shadowSession.findUnique({ where: { sessionId: id } }),
@@ -362,6 +365,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         intent:          latestMeta?.summary?.intent ?? null,
         slug:            latestSlugEvent?.slug ?? null,
         customTitle:     customTitleCache.get(id) ?? null,
+        agent:           latestMeta?.agent ?? null,
         isLive:          shadow !== null,
       } satisfies SessionResponse);
     } catch (err) {

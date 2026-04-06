@@ -18,6 +18,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // Path to the gossamer server entry point (dist/serve.js at the repo root)
 const SERVE_SCRIPT = resolve(__dirname, "../../../dist/serve.js");
 
+// Maps the agent name (from CheckpointSessionMetadata.agent) to its CLI command.
+export const AGENT_CLI: Record<string, { bin: string; resumeFlag: string; renameCmd?: string }> = {
+  "Claude Code": { bin: "claude",  resumeFlag: "--resume", renameCmd: "/rename" },
+  "Gemini CLI":  { bin: "gemini",  resumeFlag: "--resume" },
+  "Codex":       { bin: "codex",   resumeFlag: "--session" },
+};
+const DEFAULT_AGENT_CLI = AGENT_CLI["Claude Code"];
+
 // Use the system node, not VS Code's bundled Electron node
 function getSystemNode(): string {
   try {
@@ -407,9 +415,28 @@ export class GossamerPanel {
   }
 
   private async promptAndSpawnSession(): Promise<void> {
+    // Pick agent — offer choices based on which agents have been used in this repo
+    interface SessionStub { agent: string | null }
+    let agentCli = DEFAULT_AGENT_CLI;
+    try {
+      const sessions = await httpGetJson<SessionStub[]>(`http://localhost:${this.port}/api/sessions`);
+      const usedAgents = [...new Set(sessions.map((s) => s.agent).filter(Boolean) as string[])];
+      const knownAgents = usedAgents.filter((a) => AGENT_CLI[a]);
+      if (knownAgents.length > 1) {
+        const picked = await vscode.window.showQuickPick(
+          knownAgents.map((a) => ({ label: a, description: AGENT_CLI[a].bin })),
+          { title: "Choose agent", ignoreFocusOut: true },
+        );
+        if (!picked) return;
+        agentCli = AGENT_CLI[picked.label];
+      } else if (knownAgents.length === 1) {
+        agentCli = AGENT_CLI[knownAgents[0]];
+      }
+    } catch { /* use default */ }
+
     const prompt = await vscode.window.showInputBox({
-      title: "New Claude Session",
-      prompt: "What do you want Claude to do?",
+      title: `New ${agentCli.bin} Session`,
+      prompt: `What do you want ${agentCli.bin} to do?`,
       placeHolder: "Describe the task…",
       ignoreFocusOut: true,
     });
@@ -424,14 +451,13 @@ export class GossamerPanel {
 
     const escaped = prompt.replace(/"/g, '\\"');
     const terminal = vscode.window.createTerminal({
-      name: name || "Claude",
+      name: name || agentCli.bin,
       cwd: this.repoPath,
     });
     terminal.show();
-    terminal.sendText(`claude "${escaped}"`, true);
-    if (name) {
-      // Send /rename after a brief pause to let claude start up
-      setTimeout(() => terminal.sendText(`/rename ${name}`, true), 2000);
+    terminal.sendText(`${agentCli.bin} "${escaped}"`, true);
+    if (name && agentCli.renameCmd) {
+      setTimeout(() => terminal.sendText(`${agentCli.renameCmd} ${name}`, true), 2000);
     }
   }
 

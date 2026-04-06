@@ -225,7 +225,7 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   return <>{parts.map((p, i) => i % 2 === 1 ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark> : p)}</>;
 }
 
-function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[] }) {
+function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[]; agentLabel: string }) {
   const d      = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg    = str(d.last_assistant_message);
   const thinking = str(d.thinking);
@@ -250,7 +250,7 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms }: { toolGroups: ToolUseD
         fw={600}
         style={{ width: 52, flexShrink: 0, paddingTop: 2, color: "var(--mantine-color-orange-5)", whiteSpace: "nowrap" }}
       >
-        Claude
+        {agentLabel}
       </Text>
       <Box style={{ flex: 1, minWidth: 0 }}>
         {reason && <Badge color="orange" size="xs" variant="light" mb={4}>{reason}</Badge>}
@@ -316,6 +316,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   const viewport = useRef<HTMLDivElement>(null);
   const initialLoadDone = useRef(false);
   const matchTerms = HIGHLIGHT_TERMS;
+  const agentLabel = session?.agent ?? "Claude";
 
   async function load() {
     try {
@@ -399,7 +400,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             size="sm"
             variant="subtle"
             title="Resume session in terminal"
-            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "" })}
+            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "", agent: session?.agent ?? undefined })}
           >▶</ActionIcon>
         </Group>
         {session && (
@@ -421,9 +422,9 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
         <Box pb={32}>
           {renderItems.map((item, i) => {
             if (item.kind === "claudeTurn") {
-              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} />;
+              return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} agentLabel={agentLabel} />;
             }
-            return <EventItem key={i} event={item.event} matchTerms={matchTerms} />;
+            return <EventItem key={i} event={item.event} matchTerms={matchTerms} agentLabel={agentLabel} />;
           })}
         </Box>
       </ScrollArea>

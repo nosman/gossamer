@@ -94,14 +94,14 @@ function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: User
 
 // ── Claude response ───────────────────────────────────────────────────────────
 
-function AssistantCard({ event, matchTerms }: { event: Event; matchTerms?: string[] }) {
+function AssistantCard({ event, matchTerms, agentLabel }: { event: Event; matchTerms?: string[]; agentLabel?: string }) {
   const d = data(event);
   const msg = str(d.last_assistant_message);
   const reason = str(d.reason);
   return (
     <MessageRow
       accentColor="var(--mantine-color-orange-5)"
-      label="Claude"
+      label={agentLabel ?? "Claude"}
       labelColor="var(--mantine-color-orange-5)"
       timestamp={event.timestamp}
       blocked={event.blocked}
@@ -203,9 +203,9 @@ function CompactRow({ event }: { event: Event }) {
 
 // ── Export ────────────────────────────────────────────────────────────────────
 
-export function EventItem({ event, user, matchTerms }: { event: Event; user?: UserInfo; matchTerms?: string[] }) {
+export function EventItem({ event, user, matchTerms, agentLabel }: { event: Event; user?: UserInfo; matchTerms?: string[]; agentLabel?: string }) {
   if (event.event === "UserPromptSubmit") return <UserPromptCard event={event} user={user} matchTerms={matchTerms} />;
-  if (event.event === "Stop") return <AssistantCard event={event} matchTerms={matchTerms} />;
+  if (event.event === "Stop") return <AssistantCard event={event} matchTerms={matchTerms} agentLabel={agentLabel} />;
   if (event.event === "Notification") return <NotificationRow event={event} />;
   if (event.event === "SessionStart" || event.event === "SessionEnd") return <SessionEventRow event={event} />;
   return <CompactRow event={event} />;
