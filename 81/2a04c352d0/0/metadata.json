@@ -1,0 +1,149 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "812a04c352d0",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-06T03:10:18.361609Z",
+  "branch": "mcp",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "CLAUDE.md",
+    "packages/vscode/src/GossamerPanel.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "39969bcd64e8",
+  "token_usage": {
+    "input_tokens": 5127,
+    "cache_creation_tokens": 2680315,
+    "cache_read_tokens": 90431929,
+    "output_tokens": 416157,
+    "api_call_count": 935
+  },
+  "session_metrics": {
+    "turn_count": 119
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app to a VS Code extension to reduce install friction, then implement a full feature set including sessions view, session detail, checkpoint tree, search, image rendering, and an embedded MCP server.",
+    "outcome": "Successfully built a VS Code extension with sessions list, session detail tabs (column 2), native checkpoint tree view with SCM color decorations, VS Code QuickPick search with FTS database integration, image rendering for user/Claude messages, native diff view via in-memory TextDocumentContentProvider, an embedded MCP server at /mcp, and a stable port configuration. Also extracted core indexing logic into @gossamer/core npm workspace package.",
+    "learnings": {
+      "repo": [
+        "Each repo in ~/.gossamer/config.json gets its own SQLite database at a per-repo dbPath — never create or push schema to a new database file",
+        "The server runs from gossamer-testing/dist/serve.js (the worktree), not gossamer/dist/ — rebuilds must happen in gossamer-testing for changes to take effect in the running extension",
+        "Entire.io writes session data to the entire/checkpoints/v1 git branch and a shadow branch; gossamer reads those and indexes them into SQLite via packages/core",
+        "LogEvent.slug carries the session name and updates on /rename — the API fetches the latest slug via orderBy id desc + distinct sessionId, so renames propagate automatically on next hook event",
+        "Images are stored as base64 in full.jsonl on the entire/checkpoints/v1 branch; the schema needed imageData and imageMediaType columns added to LogContent",
+        "The ShadowSession.cwd field is the canonical way to determine which git repo a checkpoint belongs to — many endpoints had bugs using the server's configured repoDir instead",
+        "DEFAULT_PORT = 3456 is now stored in src/config.ts and shared by server, VS Code extension (reads ~/.gossamer/config.json), and the MCP install script",
+        "findRepoForPath() uses prefix matching (not exact match) because session cwd may be a subdirectory of the registered repo root"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Original file only listed src/extension.ts and src/GossamerPanel.ts in 'include' — SessionDetailPanel.ts and diffUtils.ts were silently never compiled. Fixed to src/**/*.ts with src/webview excluded."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is a static singleton (GossamerPanel.server, GossamerPanel.serverPort) that outlives panel disposal. acquireVsCodeApi() is called once and stored as window.__vscodeApi to prevent double-call when React app also tries to acquire it."
+        },
+        {
+          "path": "packages/vscode/src/diffUtils.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "Uses in-memory TextDocumentContentProvider with gossamer-diff: URI scheme instead of temp files. Content stored in a Map keyed by URI string, served synchronously. File extension preserved in URI path for syntax highlighting."
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Must check window.__vscodeApi before calling acquireVsCodeApi() — the host page script stores the instance there, and acquireVsCodeApi() can only be called once per webview lifetime."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "File watchers (fs.watch) replace polling: .db and .db-wal watched at 50ms debounce for SQLite changes, .git/refs/ and packed-refs watched at 200ms debounce for shadow branch updates. Both have 30s fallback polls."
+        },
+        {
+          "path": "packages/core/prisma/schema.prisma",
+          "line": 1,
+          "end_line": 20,
+          "finding": "imageData String? and imageMediaType String? added to LogContent model. SQLite ALTER TABLE ADD COLUMN works for adding nullable columns when Prisma db push fails with FTS table conflicts."
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "resourceUri must use absolute paths (join(repoPath, relativePath)) for VS Code SCM decorations to apply correct git status colors. Relative paths silently don't match."
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "ViewColumn.Two opens session detail tabs alongside (left of) the main Gossamer panel. ViewColumn.Three opens to the right. ViewColumn.Beside is relative to current focus and unpredictable."
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "root and outDir must use absolute paths via resolve(__dirname, ...) — relative paths resolve from CWD (repo root when run via npm workspace -w flag), not the package directory."
+        },
+        {
+          "path": "src/mcp-server.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "createMcpServer(port) factory pattern allows the same tool definitions to be shared between the embedded StreamableHTTPServerTransport at /mcp and the thin stdio wrapper in mcp.ts."
+        }
+      ],
+      "workflow": [
+        "Git worktrees can't check out the same branch twice — create a new branch (testing from mcp) for the worktree",
+        "VS Code webview panels reload completely when moved to a new window — re-send any initialization messages (like server_ready) via onDidChangeViewState",
+        "VS Code content providers are the right approach for read-only diff content — no temp files, inherently read-only, syntax highlighting works via file extension in URI path",
+        "Chord keybindings (Ctrl+K G) are VS Code convention for less-frequent extension commands and avoid conflicts with core bindings",
+        "When a VS Code extension needs native Node.js modules (better-sqlite3), spawn a child process using system node (which node) rather than importing in the extension host — avoids NODE_MODULE_VERSION mismatches with VS Code's bundled Electron node",
+        "npm run build -w \u003cworkspace-name\u003e requires the exact name from package.json, not the directory name"
+      ]
+    },
+    "friction": [
+      "Server running from gossamer-testing/dist/ (worktree) not the main repo — multiple build/test cycles wasted before identifying this",
+      "tsconfig.extension.json listing only specific files silently omitted new source files from compilation with no error until runtime failure",
+      "acquireVsCodeApi() can only be called once — required refactor to store as window.__vscodeApi and thread through both host page script and React module",
+      "better-sqlite3 NODE_MODULE_VERSION mismatch required full architecture change (spawn child process instead of direct import)",
+      "Prisma db push failed on FTS tables in one database requiring direct SQLite ALTER TABLE as workaround",
+      "Vite entry resolution failure when using relative path for root — silent in some configurations, failed in workspace context",
+      "Accidentally made Electron app changes when user wanted VS Code changes (user explicitly corrected: 'this is not an electron app')",
+      "ViewColumn for session detail tabs changed three times (One → Three → Two) before settling",
+      "Stray ~/.gossamer/gossamer.db created during schema push testing, violating per-repo DB invariant",
+      "Static server singleton added complexity to restart flow — required explicit gossamer.restartServer command since panel close no longer kills server",
+      "Content Security Policy missing img-src blocked all base64 image rendering silently",
+      "Toggle panel keybinding (Ctrl+K G) unreliable when webview has keyboard focus"
+    ],
+    "open_items": [
+      "Toggle panel keybinding (Ctrl+K G) doesn't fire when webview has focus — chords are captured by webview; needs investigation or alternative approach",
+      "Session rename propagation only works when a subsequent hook event fires after /rename — if user renames and immediately closes, rename won't appear until next indexing cycle",
+      "Electron app is explicitly broken (user approved) — deprecation path not formally tracked",
+      "gossamer.focusSidebar command uses vscode.commands.executeCommand('gossamer.checkpoints.focus') which may not be reliable across VS Code versions",
+      "Image support only applies to sessions re-indexed after schema migration — existing sessions need manual Sync to backfill imageData (backfill script was run once but not automated)",
+      "Claude-output images are not yet handled — only user-input images were wired up in EventItem.tsx",
+      "Onboarding flow doesn't handle the case where entire.io is installed but the repo isn't in ~/.gossamer/config.json and the server fails to start",
+      "MCP server uses stateless StreamableHTTPServerTransport (sessionIdGenerator: undefined) — stateful sessions not supported if needed later",
+      "Branch history in checkpoint tree requires findRepoForPath prefix matching but this only works for repos registered in ~/.gossamer/config.json — unregistered repos silently return no branch history"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-06T03:09:08.881506Z",
+    "agent_lines": 130,
+    "agent_removed": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 130,
+    "total_lines_changed": 133,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
