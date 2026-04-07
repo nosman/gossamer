@@ -1,0 +1,164 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "284349bc9db9",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-07T04:04:20.340785Z",
+  "branch": "mcp",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "README.md",
+    "packages/vscode/bundled-server/serve.js"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "15455491a075",
+  "token_usage": {
+    "input_tokens": 5411,
+    "cache_creation_tokens": 3874761,
+    "cache_read_tokens": 116674914,
+    "output_tokens": 540285,
+    "api_call_count": 1169
+  },
+  "session_metrics": {
+    "turn_count": 141
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app into a VS Code extension to eliminate install friction (auto-detect .entire/settings.json instead of manual repo registration) and improve context-switching between editing and viewing Claude Code sessions.",
+    "outcome": "Built a fully functional VS Code extension with sessions list, session detail view, native checkpoint tree sidebar with SCM file decorations, embedded MCP server at /mcp, QuickPick search with FTS, image rendering, agent-aware labels and commands, VSIX packaging script, onboarding flow, and stable port configuration.",
+    "learnings": {
+      "repo": [
+        "Each repo gets its own SQLite database at ~/.gossamer/repos/\u003cname\u003e.db; config lives at ~/.gossamer/config.json and is auto-created on first repo registration",
+        "The server runs from gossamer-testing/dist/serve.js (the worktree), NOT gossamer/dist/serve.js — all server rebuilds must happen in gossamer-testing for the dev extension to pick them up",
+        "Custom session names (/rename) are stored as custom-title events in ~/.claude/projects/\u003cencoded-path\u003e/*.jsonl, NOT in the shadow or checkpoint branches — they must be read from those files directly with mtime-based caching",
+        "The slug field on LogEvent is auto-generated and never changes on /rename; only custom-title events reflect the user-visible name",
+        "Images are stored as base64 in full.jsonl on the entire/checkpoints/v1 branch but were stripped by the indexer — schema required imageData/imageMediaType columns added to LogContent",
+        "ensureWorktree() in server.ts creates \u003crepo\u003e/.gossamer/checkpoints as a git worktree for the entire/checkpoints/v1 branch; it gets recreated every ~30s, so add .gossamer/ to .gitignore",
+        "The checkpoints endpoint's commitMessage comes from git log -1 \u003cgitOid\u003e run against candidate repos — this fails for session checkpoints because the gitOid lives in a different branch; branch-log entries must be used as a fallback message source",
+        "Session checkpoints should be filtered by createdAt \u003c= last-log-event + 2min to exclude post-session commits that Entire tags to the same session ID",
+        "Entire.io summary data (intent, outcome, openItems, friction, repoLearnings, codeLearnings, workflowLearnings) is already stored via mapV2Summary but was not fully exposed in the Checkpoint tree item type",
+        "acquireVsCodeApi() can only be called once per webview — must store as window.__vscodeApi and have vscodeApi.ts check for it before calling"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Was only listing extension.ts and GossamerPanel.ts in include — SessionDetailPanel.ts and diffUtils.ts were never compiled, causing blank diff views at runtime. Must use include: [\"src/**/*.ts\"] with exclude: [\"src/webview\"]"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "process.execPath points to VS Code's bundled Electron node (MODULE_VERSION 140), not system node (141). Must use execFileSync('which', ['node']) to get system node for spawning the gossamer server to avoid better-sqlite3 native module version mismatch"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "Server is a static singleton (private static server, private static serverPort) that survives panel disposal. Only killed on extension deactivation. Panel dispose only calls disposeWebviewOnly(), keeping server alive for instant re-open"
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "onDidChangeViewState must call checkpointProvider.setSession() when e.webviewPanel.active — without this, the checkpoint sidebar only updates on first open, not when switching back to an already-open tab"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "findRepo() uses exact localPath match; cwd is often a subdirectory of repo root. Added findRepoForPath() with prefix matching in config.ts to handle /api/branch-log correctly"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "repoName in session response was derived from basename(repoDir) — the server's workspace — making every session show the same repo name. Fixed to basename(session.cwd) per-session"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Must check window.__vscodeApi first (set by host page script) before calling acquireVsCodeApi() to avoid 'can only be called once' error when both the inline minimize button script and React app both try to acquire it"
+        },
+        {
+          "path": "packages/core/prisma/schema.prisma",
+          "line": 1,
+          "end_line": 50,
+          "finding": "LogContent model was missing imageData String? and imageMediaType String? fields — images in full.jsonl were silently dropped during indexing. Backfill needed from LogEvent.data raw JSON for existing rows"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 68,
+          "end_line": 80,
+          "finding": "getFreePort() was used initially, making a stable MCP config URL impossible. Replaced with getConfiguredPort() reading ~/.gossamer/config.json with DEFAULT_PORT=3456 fallback"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Auto-scroll-to-bottom must use a useEffect([loading]) that fires after loading=false, not setTimeout(...,0) — the zero-delay fires before React flushes the setLoading(false) render, so scrollHeight reflects stale DOM"
+        },
+        {
+          "path": "packages/vscode/src/webview/components/EventItem.tsx",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Agent label column was 52px — too narrow for 'Claude Code'. Widened to 80px with overflow:hidden + textOverflow:ellipsis to prevent agent label from overflowing into 'thinking' badge"
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "resourceUri for SCM file decorations requires absolute paths (vscode.Uri.file(absPath)). Relative paths from filesTouched must be joined with repoPath from sessionInfo.cwd"
+        }
+      ],
+      "workflow": [
+        "Edit in gossamer/, copy changed files to gossamer-testing/, rebuild in gossamer-testing/ — this is the required pattern for testing since the extension dev host runs from the worktree",
+        "When the server is a static singleton, 'Gossamer: Restart Server' command is needed; closing/reopening the panel won't restart it",
+        "VS Code webview CSP must explicitly include img-src data: https: http: — default-src 'none' blocks all images including base64 data: URIs",
+        "Vite builds ESM output for webviews — script tags need type='module' attribute or the browser silently ignores them",
+        "VS Code content provider approach for diffs is fragile (URI encoding issues, hard to debug); temp files or in-memory TextDocumentContentProvider with gossamer-diff: scheme are more reliable",
+        "fs.watch on .db-wal files (SQLite WAL mode) and .git/refs/ gives near-real-time change detection vs polling; always keep a long fallback poll (30s) for reliability",
+        "For the VSIX packaging script: esbuild bundles all pure-JS deps into a single serve.js, then native modules (better-sqlite3, node-pty, bindings, file-uri-to-path) are copied separately with their prebuilts",
+        "Git worktrees can't check out the same branch twice — must create a new branch (testing from mcp) for the worktree",
+        "StreamableHTTPServerTransport with sessionIdGenerator: undefined enables stateless MCP POST requests without session management overhead"
+      ]
+    },
+    "friction": [
+      "gossamer-testing worktree has separate file copies — every change requires explicit cp + rebuild in the worktree; stale builds caused multiple mysterious failures that were hard to diagnose",
+      "Server process (pid 9716) kept running stale code after rebuilds because it was a static singleton; no way to restart it without the new 'Restart Server' command",
+      "TypeScript compile errors from missing fields in inline object literals (slug, customTitle) were only caught at build time after syncing to worktree",
+      "Prisma db push --accept-data-loss warning blocked schema changes for nullable column additions, even though they're safe in SQLite",
+      "Accidentally edited Electron app files (app/src/main/index.ts) when user wanted VS Code extension changes — had to revert all Electron changes",
+      "Checkpoint commit messages were null for session checkpoints because git log couldn't find the gitOid in the candidate repos; required fallback to branch-log data",
+      "Vite's outDir resolves relative to CWD (repo root) when run via npm workspace, not relative to the package — required switching to absolute paths via resolve(__dirname, ...)",
+      "VS Code chord keybindings (Ctrl+K G) don't fire when the webview has focus, making the toggle panel shortcut unreliable",
+      "The new stray ~/.gossamer/ directory gets recreated inside the repo root every ~30s due to ensureWorktree() calls, polluting git status"
+    ],
+    "open_items": [
+      "Session color coding (user-picked colors for sessions in Claude Code) — color data is not persisted anywhere in Claude's files yet",
+      "Toggle panel keybinding (Ctrl+K G) doesn't work when webview has focus — needs investigation or alternative approach",
+      "gossamer.vsix and packages/vscode/bundled-server/ should be in .gitignore since they're generated artifacts",
+      "The --no-verify flag on the Entire onboarding 'entire configure' command was not validated — need to confirm the actual Entire CLI setup flow",
+      "Checkpoint sidebar resourceUri SCM decorations rely on VS Code's git extension being active and having staged/working tree info — may not show colors for non-active workspaces",
+      "Images in Claude output (tool results, etc.) are not yet handled — only user-submitted images and assistant text with embedded images work",
+      "MCP server at /mcp endpoint uses stateless mode; session-based streaming MCP not yet supported",
+      "The 'New Session' button only detects agents from the current repo's sessions — if no sessions exist yet, it defaults to Claude Code",
+      "Gemini CLI and Codex resume flags (--resume, --session) in AGENT_CLI map are unverified guesses",
+      "The package-vsix.sh script does not handle node-pty rebuilds for the user's specific VS Code version — may need node-gyp rebuild step documented"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-07T04:03:06.220555Z",
+    "agent_lines": 4,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "total_lines_changed": 6,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

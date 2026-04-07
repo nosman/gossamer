@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "284349bc9db9",
+  "strategy": "manual-commit",
+  "branch": "mcp",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "README.md",
+    "packages/vscode/bundled-server/serve.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/28/4349bc9db9/0/metadata.json",
+      "transcript": "/28/4349bc9db9/0/full.jsonl",
+      "content_hash": "/28/4349bc9db9/0/content_hash.txt",
+      "prompt": "/28/4349bc9db9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5411,
+    "cache_creation_tokens": 3874761,
+    "cache_read_tokens": 116674914,
+    "output_tokens": 540285,
+    "api_call_count": 1169
+  }
+}
