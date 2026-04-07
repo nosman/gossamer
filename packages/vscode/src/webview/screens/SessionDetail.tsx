@@ -248,7 +248,7 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
       <Text
         size="xs"
         fw={600}
-        style={{ width: 52, flexShrink: 0, paddingTop: 2, color: "var(--mantine-color-orange-5)", whiteSpace: "nowrap" }}
+        style={{ width: 80, flexShrink: 0, paddingTop: 2, color: "var(--mantine-color-orange-5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
       >
         {agentLabel}
       </Text>

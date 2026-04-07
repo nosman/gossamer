@@ -44,10 +44,19 @@
       {
         "command": "gossamer.focusSidebar",
         "title": "Gossamer: Focus Checkpoints Sidebar"
+      },
+      {
+        "command": "gossamer.rewindToCheckpoint",
+        "title": "Rewind to Checkpoint"
       }
     ],
     "menus": {
       "view/item/context": [
+        {
+          "command": "gossamer.rewindToCheckpoint",
+          "when": "view == gossamer.checkpoints && viewItem == checkpoint",
+          "group": "1_rewind@1"
+        },
         {
           "command": "gossamer.copyCheckpointId",
           "when": "view == gossamer.checkpoints && viewItem == checkpoint",

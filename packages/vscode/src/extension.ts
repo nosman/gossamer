@@ -1,16 +1,39 @@
 import * as vscode from "vscode";
-import { existsSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { GossamerPanel } from "./GossamerPanel.js";
+import { homedir } from "os";
+import { GossamerPanel, AGENT_CLI } from "./GossamerPanel.js";
 import { OnboardingPanel } from "./OnboardingPanel.js";
 import { CheckpointTreeProvider, type CheckpointTreeItem } from "./CheckpointTreeProvider.js";
-import { openCheckpointDiff, diffProvider } from "./diffUtils.js";
+import { openCheckpointDiff, diffProvider, openCheckpointSummary, summaryProvider } from "./diffUtils.js";
+
+/** Returns true if any agent process is running with cwd === repoPath. */
+function isAgentRunning(repoPath: string): boolean {
+  const sessionsDir = join(homedir(), ".claude", "sessions");
+  try {
+    for (const file of readdirSync(sessionsDir).filter((f) => f.endsWith(".json"))) {
+      try {
+        const s = JSON.parse(readFileSync(join(sessionsDir, file), "utf-8")) as { pid?: number; cwd?: string };
+        if (s.cwd === repoPath && typeof s.pid === "number") {
+          try {
+            process.kill(s.pid, 0); // throws ESRCH if process is gone
+            return true;
+          } catch (e) {
+            if ((e as NodeJS.ErrnoException).code !== "ESRCH") return true; // EPERM = running but unpermitted
+          }
+        }
+      } catch { /* skip malformed file */ }
+    }
+  } catch { /* sessions dir absent */ }
+  return false;
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const checkpointProvider = new CheckpointTreeProvider();
 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider("gossamer-diff", diffProvider),
+    vscode.workspace.registerTextDocumentContentProvider("gossamer-summary", summaryProvider),
   );
 
   context.subscriptions.push(
@@ -18,6 +41,15 @@ export function activate(context: vscode.ExtensionContext) {
       treeDataProvider: checkpointProvider,
       showCollapseAll: true,
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "gossamer.showCheckpointSummary",
+      (checkpointId: string, text: string) => {
+        openCheckpointSummary(checkpointId, text).catch(console.error);
+      },
+    ),
   );
 
   context.subscriptions.push(
@@ -91,6 +123,26 @@ export function activate(context: vscode.ExtensionContext) {
       if (!ws) return;
       GossamerPanel.restart(ws);
       vscode.window.showInformationMessage("Gossamer: server restarting…");
+    }),
+  );
+
+  // Rewind to a checkpoint via the checkpoints context menu
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.rewindToCheckpoint", (item: CheckpointTreeItem) => {
+      if (item.kind !== "checkpoint") return;
+      const { checkpointId, repoPath } = { checkpointId: item.cp.checkpointId, repoPath: item.repoPath };
+      const agentRunning = isAgentRunning(repoPath);
+      const cmd = `${agentRunning ? "!" : ""}entire rewind ${checkpointId}`;
+      if (agentRunning) {
+        // Prefer an existing terminal; fall back to creating one
+        const terminal = vscode.window.activeTerminal ?? vscode.window.createTerminal({ cwd: repoPath });
+        terminal.show();
+        terminal.sendText(cmd, true);
+      } else {
+        const terminal = vscode.window.createTerminal({ cwd: repoPath });
+        terminal.show();
+        terminal.sendText(cmd, true);
+      }
     }),
   );
 

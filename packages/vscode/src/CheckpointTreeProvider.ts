@@ -2,11 +2,21 @@ import * as vscode from "vscode";
 import { get as httpGet } from "http";
 import { join } from "path";
 
+interface CheckpointSummary {
+  intent: string;
+  outcome: string;
+  openItems: { text: string; status: string }[];
+  friction: string[];
+  repoLearnings: string[];
+  codeLearnings: { path: string; finding: string }[];
+  workflowLearnings: string[];
+}
+
 interface Checkpoint {
   checkpointId: string;
   createdAt: string | null;
   filesTouched: string[];
-  summary: { intent: string } | null;
+  summary: CheckpointSummary | null;
   commitMessage: string | null;
   commitHash: string | null;
 }
@@ -19,6 +29,7 @@ interface BranchLogEntry extends Checkpoint {
 export type CheckpointTreeItem =
   | { kind: "group";      label: string; checkpoints: Checkpoint[]; port: number; startIndex: number; repoPath: string }
   | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number; repoPath: string }
+  | { kind: "summary";    checkpointId: string; text: string }
   | { kind: "dir";        label: string; fullPath: string; absPath: string; children: CheckpointTreeItem[] }
   | { kind: "file";       name: string;  fullPath: string; absPath: string; checkpointId: string; port: number };
 
@@ -157,6 +168,17 @@ export class CheckpointTreeProvider
       item.contextValue = "checkpoint";
       return item;
     }
+    if (element.kind === "summary") {
+      const item = new vscode.TreeItem("summary.txt", vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon("note");
+      item.tooltip = element.text;
+      item.command = {
+        command: "gossamer.showCheckpointSummary",
+        title: "Show Summary",
+        arguments: [element.checkpointId, element.text],
+      };
+      return item;
+    }
     if (element.kind === "dir") {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Expanded);
       item.resourceUri = vscode.Uri.file(element.absPath);
@@ -207,7 +229,47 @@ export class CheckpointTreeProvider
       }));
     }
     if (element.kind === "checkpoint") {
-      return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port, element.repoPath);
+      const cp = element.cp;
+      const SEP = "─".repeat(68);
+      const section = (title: string, body: string) => `${SEP}\n${title}\n${SEP}\n${body}`;
+
+      const lines: string[] = [];
+      lines.push(`Checkpoint: ${cp.checkpointId}`);
+      if (cp.createdAt) lines.push(`Created:    ${new Date(cp.createdAt).toLocaleString()}`);
+      if (cp.commitHash) lines.push(`Commit:     ${cp.commitHash}`);
+
+      const s = cp.summary;
+      if (s) {
+        if (s.intent)  lines.push("", section("Intent", s.intent));
+        if (s.outcome) lines.push("", section("Outcome", s.outcome));
+        if (s.openItems.length > 0) {
+          const body = s.openItems.map((o) => `[${o.status.padEnd(11)}] ${o.text}`).join("\n");
+          lines.push("", section("Open Items", body));
+        }
+        if (s.friction.length > 0) {
+          lines.push("", section("Friction", s.friction.map((f) => `• ${f}`).join("\n")));
+        }
+        if (s.repoLearnings.length > 0) {
+          lines.push("", section("Repo Learnings", s.repoLearnings.map((r) => `• ${r}`).join("\n")));
+        }
+        if (s.codeLearnings.length > 0) {
+          const body = s.codeLearnings.map((c) => `${c.path}\n  ${c.finding}`).join("\n\n");
+          lines.push("", section("Code Learnings", body));
+        }
+        if (s.workflowLearnings.length > 0) {
+          lines.push("", section("Workflow Learnings", s.workflowLearnings.map((w) => `• ${w}`).join("\n")));
+        }
+      } else if (cp.commitMessage) {
+        lines.push("", section("Commit Message", cp.commitMessage));
+      }
+
+      if (cp.filesTouched.length > 0) {
+        lines.push("", section("Files Touched", cp.filesTouched.map((f) => `  ${f}`).join("\n")));
+      }
+
+      const summaryText = lines.join("\n").trimEnd();
+      const summaryItem: CheckpointTreeItem = { kind: "summary", checkpointId: cp.checkpointId, text: summaryText };
+      return [summaryItem, ...buildItems(cp.filesTouched, cp.checkpointId, element.port, element.repoPath)];
     }
     if (element.kind === "dir") {
       return element.children;
