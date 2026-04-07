@@ -1,0 +1,133 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "c54a24ebe80c",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-07T02:56:25.924563Z",
+  "branch": "mcp",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "gossamer.vsix",
+    "packages/vscode/src/OnboardingPanel.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "e6712758715e",
+  "token_usage": {
+    "input_tokens": 5356,
+    "cache_creation_tokens": 3519230,
+    "cache_read_tokens": 111830108,
+    "output_tokens": 491175,
+    "api_call_count": 1132
+  },
+  "session_metrics": {
+    "turn_count": 134
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app to a VS Code extension to reduce install friction (auto-detect .entire/settings.json instead of manual repo registration) and improve context-switching between editing and viewing Claude sessions.",
+    "outcome": "A fully functional VS Code extension was built with sessions list, session detail view, native checkpoint tree sidebar, MCP server embedded at /mcp, search via QuickPick with FTS, image rendering, agent-aware labels and commands, VSIX packaging script, and onboarding flow for new users.",
+    "learnings": {
+      "repo": [
+        "Each repo in ~/.gossamer/config.json gets its own SQLite database at dbPath; the server reads this at startup and uses the correct per-repo DB",
+        "Entire.io writes session data to the `entire/checkpoints/v1` git branch and shadow branches; gossamer indexes from git into SQLite, never directly from Entire.io",
+        "Session naming uses `custom-title` events stored in ~/.claude/projects/\u003cencoded-path\u003e/*.jsonl files, NOT the `slug` field on LogEvent (slug is auto-generated and never changes on /rename)",
+        "Images are stored as base64 in full.jsonl files on the checkpoint branch under content blocks with type='image' and source.data/source.media_type fields",
+        "The server process runs from gossamer-testing/dist/serve.js (the worktree) when using F5 in the extension dev host, not from gossamer/dist/ — all rebuilds must happen in the worktree",
+        "better-sqlite3 native module version mismatch with VS Code's bundled Electron Node.js (MODULE_VERSION 140 vs 141); solved by spawning the server as a child process using system node (`which node`) instead of importing Prisma in the extension host",
+        "Agent name comes from CheckpointSessionMetadata.agent; session color is not persisted anywhere in Claude's data files",
+        "acquireVsCodeApi() can only be called once per webview; must store as window.__vscodeApi and reuse in vscodeApi.ts"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Original config listed only src/extension.ts and src/GossamerPanel.ts in `include`, causing SessionDetailPanel.ts and diffUtils.ts to silently never compile. Fix: use `include: [\"src/**/*.ts\"]` with `exclude: [\"src/webview\"]`"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is a static singleton (GossamerPanel.server, GossamerPanel.serverPort) that survives panel disposal; disposeWebviewOnly() hides the panel without killing the server, enabling instant restore"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 60,
+          "end_line": 75,
+          "finding": "getConfiguredPort() reads ~/.gossamer/config.json for the port; DEFAULT_PORT=3456 is the stable fallback, replacing getFreePort() which was random and made MCP config impossible"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Checks window.__vscodeApi first before calling acquireVsCodeApi() to handle the case where the host page script already acquired it"
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "root must use resolve(__dirname, 'src/webview') with absolute path; relative path resolves from CWD (repo root when run via workspace), not package directory"
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "onDidChangeViewState listener calls checkpointProvider.setSession() when webviewPanel.active — required to update checkpoint sidebar when switching between open session detail tabs"
+        },
+        {
+          "path": "packages/core/prisma/schema.prisma",
+          "line": 1,
+          "end_line": 50,
+          "finding": "imageData String? and imageMediaType String? were added to LogContent model; existing rows required a manual backfill from LogEvent.data JSON column since old rows were indexed before the schema change"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 200,
+          "end_line": 220,
+          "finding": "Webview HTML CSP requires `img-src data: https: http:` to render base64 images; default-src 'none' blocks all data: URIs"
+        }
+      ],
+      "workflow": [
+        "gossamer-testing worktree pattern: edit source in gossamer/, manually copy changed files to gossamer-testing/, rebuild extension there; all F5 test runs use gossamer-testing built artifacts",
+        "VS Code webviews reload when dragged to a new window; use panel.onDidChangeViewState to re-send server_ready or other state messages when the panel becomes visible again",
+        "fs.watch on .db/.db-wal files and .git/refs/ with debouncing replaces polling for near-real-time updates; keep 30s fallback polls for reliability",
+        "Use TextDocumentContentProvider with a custom URI scheme (gossamer-diff:) to serve in-memory diff content instead of writing temp files; content provider approach is cleaner and files are inherently read-only",
+        "When a TypeScript build succeeds but runtime behavior is wrong, check which dist/ directory the running process is actually loading from — often a stale artifact from a different location",
+        "For per-repo state (checkpoint tree, session focus), use TreeDataProvider.setSession() called from panel.onDidChangeViewState rather than only on panel creation"
+      ]
+    },
+    "friction": [
+      "gossamer-testing worktree requires manual file syncing (cp) after every edit in the main repo; easy to forget and waste time debugging stale behavior",
+      "Server runs from gossamer-testing/dist/ not gossamer/dist/ — caused multiple debugging sessions where code changes appeared to have no effect",
+      "tsconfig.extension.json silently excluded new files, causing blank diff views with no error message until traced to the missing compiled output",
+      "VS Code's bundled Node.js has a different MODULE_VERSION than system node, causing native module crashes; required full architecture change to external process",
+      "Prisma schema pushes failed with FTS table conflicts on existing DBs; had to fall back to raw SQLite ALTER TABLE commands",
+      "acquireVsCodeApi() called twice when minimize button inline script and React app both called it — required window.__vscodeApi singleton pattern",
+      "Ctrl+K G chord keybinding does not fire when the webview has keyboard focus, making the toggle command unreliable",
+      "Image backfill required a one-time Python script to populate imageData from the raw LogEvent.data JSON column for sessions indexed before the schema change"
+    ],
+    "open_items": [
+      "gossamer.vsix and packages/vscode/bundled-server/serve.js are generated artifacts that should be added to .gitignore",
+      "The gossamer-testing worktree file sync is manual and error-prone; a watch script or rsync hook would eliminate most of the sync friction",
+      "Ctrl+K G toggle panel keybinding doesn't work when webview has focus — needs an alternative trigger (e.g., status bar button or command from within the webview)",
+      "Session color (chosen in Claude Code UI) is not persisted anywhere in Claude's data files — cannot be implemented without Entire.io storing it in the checkpoint metadata",
+      "Claude output images (tool results with image content) are not yet rendered — only user-input images were implemented; requires checking if tool_result content blocks contain image types",
+      "The rewindToCheckpoint command uses isAgentRunning() which checks ~/.claude/sessions/*.json — this may not work for non-Claude agents (Gemini, Codex)",
+      "AGENT_CLI mapping in GossamerPanel.ts only covers Claude Code, Gemini CLI, and Codex — other agents will fall back to claude binary which may be wrong",
+      "The summary.txt virtual file shows the full Entire.io summary; if Entire.io summaries are not enabled, the file only shows basic checkpoint metadata — consider indicating to the user how to enable summaries",
+      "MCP server embed uses stateless StreamableHTTPServerTransport; if Claude Code adds session support for stateful MCP connections, the transport config will need updating"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-07T02:55:14.869841Z",
+    "agent_lines": 152,
+    "agent_removed": 35,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 152,
+    "total_lines_changed": 187,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
