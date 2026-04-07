@@ -23,54 +23,61 @@ And because Gossamer integrates with **[Entire.io](https://entire.io)**, your AI
 ## Requirements
 
 - [Node.js](https://nodejs.org) v18+
-- [Entire CLI](https://entire.io) installed
-- Claude Code installed and configured
+- [Entire CLI](https://entire.io) installed and configured in your repo
+- VS Code 1.85+
 
 ---
 
 ## Installation
 
+Build and install the VS Code extension locally:
+
 ```bash
-brew tap nosman/gossamer
-brew install --cask gossamer
+# Install dependencies and build everything
+npm install
+./scripts/package-vsix.sh
+
+# Install into VS Code
+code --install-extension gossamer.vsix
 ```
-
-Then open **Gossamer.app** from your Applications folder.
-
-> **If macOS says the app is damaged**, run `xattr -cr /Applications/Gossamer.app` and try again. This is a Gatekeeper restriction on unsigned apps.
 
 ---
 
 ## Getting started
 
-### 1. Install the Entire CLI and enable it in your repo
-
-Install the [Entire CLI](https://entire.io), then run the following inside any repo you want Gossamer to track:
+### 1. Install the Entire CLI
 
 ```bash
-entire enable
+brew install entire/tap/entire
 ```
 
-This hooks into your Git workflow so Gossamer can link AI sessions to commits.
+Then enable it inside any repo you want Gossamer to track:
 
-### 2. Open Gossamer
+```bash
+cd your-project
+entire configure
+```
 
-Launch **Gossamer.app** from your Applications folder, or open the **VS Code extension** from the Gossamer icon in the activity bar. Either starts the backend server automatically.
+This sets up session capture and links your AI sessions to Git commits.
 
-### 3. Add your repo
+### 2. Open a workspace in VS Code
 
-Gossamer will detect repos with Entire enabled and register them automatically. You can also add a repo manually from the Repos tab (desktop app) or by opening any workspace folder in VS Code with Entire enabled.
+Open any folder with Entire configured. Gossamer activates automatically and the session browser opens in column 2. If Entire isn't detected, Gossamer walks you through the setup.
+
+### 3. That's it
+
+Repos are registered automatically on first open. The server starts in the background, indexes your session history, and begins live-updating as you work.
 
 ---
 
 ## VS Code extension
 
-The VS Code extension is the primary interface for most workflows. Install it from the `packages/vscode` directory and open any workspace with Entire enabled — Gossamer opens automatically.
+The VS Code extension is the primary interface. Open any workspace with Entire configured — Gossamer activates automatically.
 
-Features available in the extension:
+Features:
 - Session list with live updates, search (`Cmd+Shift+F`), and new session spawning
-- Per-session conversation view with checkpoint timeline
-- Native checkpoint tree in the activity bar sidebar with file diffs
+- Per-session conversation view with checkpoint timeline and full markdown + image rendering
+- Checkpoint tree in the activity bar: file diffs, `summary.txt` per checkpoint, rewind command
 - Resume any session in an embedded terminal
 
 ---
@@ -143,15 +150,14 @@ If you prefer to configure your tool manually, add this to its MCP servers confi
 
 ## Architecture
 
-Gossamer has three components:
+Gossamer has two components:
 
 | Component | What it does |
 |-----------|-------------|
-| **Server** (`src/serve.ts`) | Node.js + Express + WebSocket server. Indexes Claude Code sessions from disk, syncs with Entire.io, and serves a real-time API on `localhost:3456`. Also hosts the MCP server at `/mcp`. |
+| **Server** (`src/serve.ts`) | Node.js + Express + WebSocket server. Indexes sessions from disk, syncs with Entire.io, and serves a real-time API on `localhost:3456`. Also hosts the MCP server at `/mcp`. |
 | **VS Code extension** (`packages/vscode/`) | Primary UI — session browser, checkpoint tree, diffs, search, and terminal integration. Starts the server as a child process. |
-| **Desktop app** (`app/`) | Electron app built with React + Mantine. Alternative to the VS Code extension. |
 
-Both the desktop app and VS Code extension start the server automatically. Run the server standalone with `npm run serve`.
+The extension starts the server automatically when a workspace is opened. Run the server standalone with `npm run serve`.
 
 ---
 
@@ -176,7 +182,7 @@ Gossamer is built on a simple principle: your AI sessions are yours. No telemetr
 - **SQLite database** — each repo gets its own database at `~/.gossamer/repos/<name>.db` (where `<name>` is the repo's folder name). Readable with any SQLite tool, deletable whenever you want.
 - **Git worktree** — Gossamer creates a `.gossamer/checkpoints/` directory inside each repo root. This is a git worktree used to read the `entire/checkpoints/v1` branch without switching branches. Add `.gossamer/` to your `.gitignore` to keep it out of `git status`.
 - **Session history** is stored in your local Git repository. Push it to your own remote to back it up or share it across machines — on your terms, using infrastructure you already control.
-- **The server is local.** Gossamer's backend runs on `localhost` and never opens an external connection. The Electron app talks only to that local server.
+- **The server is local.** Gossamer's backend runs on `localhost` and never opens an external connection.
 
 You decide what gets backed up, who has access, and when it gets deleted. Gossamer never touches your data without you.
 
@@ -185,19 +191,26 @@ You decide what gets backed up, who has access, and when it gets deleted. Gossam
 ## Development
 
 ```bash
-# Build everything
+# Install dependencies
+npm install
+
+# Build core + server
 npm run build
 
-# Server only
+# Build the VS Code extension (TypeScript) + webview (React/Vite)
+npm run build -w packages/vscode
+
+# Watch mode for the extension only (rebuilds on save)
+npm run watch -w packages/vscode
+
+# Package as a .vsix for local installation
+./scripts/package-vsix.sh
+code --install-extension gossamer.vsix
+
+# Run the server standalone
 npm run serve
 
-# VS Code extension (watch mode)
-cd packages/vscode && npm run watch
-
-# Desktop app (Electron + Vite HMR)
-cd app && npm run dev
-
-# Database UI
+# Database UI (Prisma Studio)
 npm run db:studio
 ```
 
