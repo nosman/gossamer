@@ -1,0 +1,22 @@
+when i installed gossamer.vsix i got the error: 
+Error: Dynamic require of path is not supported
+extensionHostProcess.js:635
+    at file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:12:9
+extensionHostProcess.js:635
+    at node_modules/depd/index.js (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:41:20)
+extensionHostProcess.js:635
+    at __require2 (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:15:50)
+extensionHostProcess.js:635
+    at node_modules/body-parser/index.js (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:20528:21)
+extensionHostProcess.js:635
+    at __require2 (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:15:50)
+extensionHostProcess.js:635
+    at node_modules/express/lib/express.js (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:25868:22)
+extensionHostProcess.js:635
+    at __require2 (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:15:50)
+extensionHostProcess.js:635
+    at node_modules/express/index.js (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:25937:22)
+extensionHostProcess.js:635
+    at __require2 (file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:15:50)
+extensionHostProcess.js:635
+    at file:///Users/stephanostsoucas/gossamer/packages/vscode/bundled-server/serve.js:52084:30
