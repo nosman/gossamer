@@ -97,18 +97,36 @@ export class CheckpointTreeProvider
   async setSession(sessionId: string, port: number): Promise<void> {
     this.currentPort = port;
 
-    const sessionCheckpoints = await fetchJson<Checkpoint[]>(
-      `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
-    ).catch(() => [] as Checkpoint[]);
+    // Fetch session info and checkpoints in parallel.
+    const [allSessionCheckpoints, sessionInfo] = await Promise.all([
+      fetchJson<Checkpoint[]>(
+        `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+      ).catch(() => [] as Checkpoint[]),
+      fetchJson<{ cwd: string; branch: string | null; updatedAt: string; isLive: boolean }>(
+        `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
+      ).catch(() => ({ cwd: "", branch: null, updatedAt: "", isLive: false })),
+    ]);
 
+    if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
+
+    // For completed sessions, restrict "Session" to checkpoints that were created
+    // during the agent's active run (at or before the last log event, plus a small
+    // buffer for indexing lag). Post-session commits tagged to the same session ID
+    // by Entire are excluded here and will appear in Branch History instead.
+    let sessionCheckpoints = allSessionCheckpoints;
+    if (!sessionInfo.isLive && sessionInfo.updatedAt) {
+      const cutoff = new Date(new Date(sessionInfo.updatedAt).getTime() + 2 * 60 * 1000);
+      sessionCheckpoints = allSessionCheckpoints.filter(
+        (cp) => !cp.createdAt || new Date(cp.createdAt) <= cutoff,
+      );
+    }
+
+    // Deduplicate branch history against session checkpoints so each commit
+    // appears in exactly one section.
     const sessionIds = new Set(sessionCheckpoints.map((cp) => cp.checkpointId));
 
     let branchCheckpoints: Checkpoint[] = [];
     try {
-      const sessionInfo = await fetchJson<{ cwd: string; branch: string | null }>(
-        `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
-      );
-      if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
       if (sessionInfo.cwd && sessionInfo.branch) {
         this.currentBranch = sessionInfo.branch;
         const log = await fetchJson<{ entries: BranchLogEntry[] }>(
@@ -119,12 +137,12 @@ export class CheckpointTreeProvider
           if (!seen.has(entry.checkpointId)) {
             seen.add(entry.checkpointId);
             branchCheckpoints.push({
-              checkpointId: entry.checkpointId,
-              createdAt:    entry.createdAt,
-              filesTouched: entry.filesTouched,
-              summary:      entry.summary,
+              checkpointId:  entry.checkpointId,
+              createdAt:     entry.createdAt,
+              filesTouched:  entry.filesTouched,
+              summary:       entry.summary,
               commitMessage: entry.commitMessage,
-              commitHash:   entry.commitHash,
+              commitHash:    entry.commitHash,
             });
           }
         }
