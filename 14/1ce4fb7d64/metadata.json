@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "141ce4fb7d64",
+  "strategy": "manual-commit",
+  "branch": "mcp",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "package.json",
+    "packages/core/prisma/schema.sql",
+    "scripts/package-vsix.sh",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/14/1ce4fb7d64/0/metadata.json",
+      "transcript": "/14/1ce4fb7d64/0/full.jsonl",
+      "content_hash": "/14/1ce4fb7d64/0/content_hash.txt",
+      "prompt": "/14/1ce4fb7d64/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5503,
+    "cache_creation_tokens": 4354771,
+    "cache_read_tokens": 123486799,
+    "output_tokens": 583715,
+    "api_call_count": 1249
+  }
+}
