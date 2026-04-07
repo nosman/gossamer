@@ -70,17 +70,14 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 // schema.sql is generated at build time by `prisma migrate diff --from-empty --to-schema ...`
 // and transformed to use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
 // In dev: dist/schema.sql (copied by tsconfig); bundled VSIX: bundled-server/schema.sql.
-const SCHEMA_SQL_DEV     = join(SCRIPT_DIR, "schema.sql");
-const SCHEMA_SQL_BUNDLED = join(SCRIPT_DIR, "schema.sql"); // same name, different dir
-const SCHEMA_SQL_PATH    = existsSync(SCHEMA_SQL_DEV) ? SCHEMA_SQL_DEV : SCHEMA_SQL_BUNDLED;
+// schema.sql lives next to serve.js in both dev (dist/) and bundled VSIX (bundled-server/).
+const SCHEMA_SQL_PATH = join(SCRIPT_DIR, "schema.sql");
 
 async function pushSchema(db: PrismaClient): Promise<void> {
   const sql = readFileSync(SCHEMA_SQL_PATH, "utf8");
-  // Split on statement boundaries (semicolon + newline) and execute each one.
-  const stmts = sql
-    .split(/;\s*\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+  // Strip comment lines, split on semicolons, execute each non-empty statement.
+  const stripped = sql.split("\n").filter((l) => !l.trimStart().startsWith("--")).join("\n");
+  const stmts = stripped.split(";").map((s) => s.trim()).filter((s) => s.length > 0);
   for (const stmt of stmts) {
     await db.$executeRawUnsafe(stmt);
   }
