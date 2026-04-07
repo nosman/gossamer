@@ -30,7 +30,11 @@ node_modules/.bin/esbuild dist/serve.js \
   --external:fsevents \
   --log-level=warning
 
-# ── 3. Copy native packages and their deps ────────────────────────────────────
+# ── 3. Copy schema SQL (used by pushSchema() at runtime to initialise the DB) ─
+echo "==> Copying schema SQL..."
+cp packages/core/prisma/schema.sql "$BUNDLE_DIR/schema.sql"
+
+# ── 4. Copy native packages and their deps ────────────────────────────────────
 echo "==> Copying native modules..."
 NM="node_modules"
 
@@ -53,7 +57,7 @@ copy_module file-uri-to-path
 copy_module node-pty
 copy_module node-addon-api
 
-# ── 4. Package VSIX ───────────────────────────────────────────────────────────
+# ── 5. Package VSIX ───────────────────────────────────────────────────────────
 echo "==> Packaging VSIX..."
 OUT="$(pwd)/gossamer.vsix"
 cd packages/vscode

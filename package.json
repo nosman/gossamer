@@ -13,7 +13,7 @@
   },
   "scripts": {
     "postinstall": "node -e \"if(process.platform!=='win32'){require('fs').chmodSync('node_modules/node-pty/prebuilds/'+process.platform+'-'+process.arch+'/spawn-helper',0o755)}\" 2>/dev/null || true",
-    "build": "npm run build -w packages/core && tsc",
+    "build": "npm run build -w packages/core && tsc && cp packages/core/prisma/schema.sql dist/schema.sql",
     "install-mcp": "node scripts/install-mcp.mjs",
     "serve": "node dist/serve.js",
     "start": "concurrently --names \"serve,app\" -c \"blue,green\" \"npm run serve\" \"cd app && npm run dev\"",
