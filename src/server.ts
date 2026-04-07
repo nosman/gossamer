@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch as fs
 import { homedir } from "os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp-server.js";
-import { basename, dirname, join, resolve } from "path";
+import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
@@ -63,16 +63,27 @@ function refreshCustomTitles(repoDir: string): void {
   }
 }
 
-// ─── Schema push ──────────────────────────────────────────────────────────────
+// ─── Schema initialisation ────────────────────────────────────────────────────
 
-const PROJECT_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const PRISMA_BIN   = join(PROJECT_ROOT, "node_modules", ".bin", "prisma");
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
-async function pushSchema(dbFilePath: string): Promise<void> {
-  await exec(`${JSON.stringify(PRISMA_BIN)} db push`, {
-    env: { ...process.env, DATABASE_URL: `file:${dbFilePath}` },
-    cwd: PROJECT_ROOT,
-  });
+// schema.sql is generated at build time by `prisma migrate diff --from-empty --to-schema ...`
+// and transformed to use CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
+// In dev: dist/schema.sql (copied by tsconfig); bundled VSIX: bundled-server/schema.sql.
+const SCHEMA_SQL_DEV     = join(SCRIPT_DIR, "schema.sql");
+const SCHEMA_SQL_BUNDLED = join(SCRIPT_DIR, "schema.sql"); // same name, different dir
+const SCHEMA_SQL_PATH    = existsSync(SCHEMA_SQL_DEV) ? SCHEMA_SQL_DEV : SCHEMA_SQL_BUNDLED;
+
+async function pushSchema(db: PrismaClient): Promise<void> {
+  const sql = readFileSync(SCHEMA_SQL_PATH, "utf8");
+  // Split on statement boundaries (semicolon + newline) and execute each one.
+  const stmts = sql
+    .split(/;\s*\n/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0 && !s.startsWith("--"));
+  for (const stmt of stmts) {
+    await db.$executeRawUnsafe(stmt);
+  }
 }
 
 // ─── Git user ─────────────────────────────────────────────────────────────────
@@ -154,15 +165,24 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   const db = await getDb(dbPath);
 
-  // Ensure ArchivedSession table exists (can't use prisma db push due to FTS5 table conflicts)
-  await db.$executeRawUnsafe(
-    `CREATE TABLE IF NOT EXISTS "ArchivedSession" (sessionId TEXT PRIMARY KEY, archivedAt DATETIME NOT NULL DEFAULT (datetime('now')))`
-  );
+  // Ensure schema is applied on startup (handles fresh DBs and bundled VSIX where
+  // the repo-registration path hasn't run yet).
+  try {
+    await pushSchema(db);
+    process.stderr.write(`[gossamer] schema ready: ${dbPath}\n`);
+  } catch (err) {
+    process.stderr.write(`[gossamer] schema push failed — ${err}\n`);
+    throw err;
+  }
 
-
-  // Ensure FTS table exists and is up-to-date on startup
+  // Ensure FTS table exists and is up-to-date on startup.
   await setupLogContentFts(db);
-  await syncLogContentFts(db);
+  try {
+    await syncLogContentFts(db);
+  } catch (err) {
+    // Non-fatal: LogContent table may not exist yet on a brand-new DB before first index.
+    process.stderr.write(`[gossamer] FTS sync skipped — ${err}\n`);
+  }
 
   const app = express();
   app.use(cors());
@@ -1207,9 +1227,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       };
       addRepo(entry);
       mkdirSync(dirname(entry.dbPath), { recursive: true });
+      const repoDb = await getDb(entry.dbPath);
       process.stderr.write(`repo onboard [${name}]: pushing schema to ${entry.dbPath}\n`);
       try {
-        await pushSchema(entry.dbPath);
+        await pushSchema(repoDb);
         process.stderr.write(`repo onboard [${name}]: schema ready\n`);
       } catch (err) {
         // Non-fatal: schema may already be applied
