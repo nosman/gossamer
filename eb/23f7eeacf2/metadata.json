@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "eb23f7eeacf2",
+  "strategy": "manual-commit",
+  "branch": "mcp",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "packages/vscode/src/CheckpointTreeProvider.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/23f7eeacf2/0/metadata.json",
+      "transcript": "/eb/23f7eeacf2/0/full.jsonl",
+      "content_hash": "/eb/23f7eeacf2/0/content_hash.txt",
+      "prompt": "/eb/23f7eeacf2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5399,
+    "cache_creation_tokens": 3563049,
+    "cache_read_tokens": 116054976,
+    "output_tokens": 539111,
+    "api_call_count": 1163
+  }
+}
