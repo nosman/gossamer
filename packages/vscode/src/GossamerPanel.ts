@@ -15,8 +15,12 @@ const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Path to the gossamer server entry point (dist/serve.js at the repo root)
-const SERVE_SCRIPT = resolve(__dirname, "../../../dist/serve.js");
+// Path to the gossamer server entry point.
+// Packaged VSIX: bundled-server/serve.js lives inside the extension directory.
+// Dev mode (gossamer-testing): fall back to the repo's compiled dist/serve.js.
+const BUNDLED_SERVE = resolve(__dirname, "../bundled-server/serve.js");
+const DEV_SERVE     = resolve(__dirname, "../../../dist/serve.js");
+const SERVE_SCRIPT  = existsSync(BUNDLED_SERVE) ? BUNDLED_SERVE : DEV_SERVE;
 
 // Maps the agent name (from CheckpointSessionMetadata.agent) to its CLI command.
 export const AGENT_CLI: Record<string, { bin: string; resumeFlag: string; renameCmd?: string }> = {

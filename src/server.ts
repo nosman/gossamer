@@ -781,7 +781,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const sessionId = req.params.id;
       const sessionRows = await db.checkpointSessionMetadata.findMany({
         where:   { sessionId },
-        orderBy: { createdAt: "asc" },
+        orderBy: { createdAt: "desc" },
         include: {
           ...V2_SESSION_INCLUDE,
           tokenUsage:   true,

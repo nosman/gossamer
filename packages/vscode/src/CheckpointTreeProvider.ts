@@ -2,11 +2,21 @@ import * as vscode from "vscode";
 import { get as httpGet } from "http";
 import { join } from "path";
 
+interface CheckpointSummary {
+  intent: string;
+  outcome: string;
+  openItems: { text: string; status: string }[];
+  friction: string[];
+  repoLearnings: string[];
+  codeLearnings: { path: string; finding: string }[];
+  workflowLearnings: string[];
+}
+
 interface Checkpoint {
   checkpointId: string;
   createdAt: string | null;
   filesTouched: string[];
-  summary: { intent: string } | null;
+  summary: CheckpointSummary | null;
   commitMessage: string | null;
   commitHash: string | null;
 }
@@ -19,6 +29,7 @@ interface BranchLogEntry extends Checkpoint {
 export type CheckpointTreeItem =
   | { kind: "group";      label: string; checkpoints: Checkpoint[]; port: number; startIndex: number; repoPath: string }
   | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number; repoPath: string }
+  | { kind: "summary";    checkpointId: string; text: string }
   | { kind: "dir";        label: string; fullPath: string; absPath: string; children: CheckpointTreeItem[] }
   | { kind: "file";       name: string;  fullPath: string; absPath: string; checkpointId: string; port: number };
 
@@ -86,34 +97,69 @@ export class CheckpointTreeProvider
   async setSession(sessionId: string, port: number): Promise<void> {
     this.currentPort = port;
 
-    const sessionCheckpoints = await fetchJson<Checkpoint[]>(
-      `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
-    ).catch(() => [] as Checkpoint[]);
+    // Fetch session info and checkpoints in parallel.
+    const [allSessionCheckpoints, sessionInfo] = await Promise.all([
+      fetchJson<Checkpoint[]>(
+        `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
+      ).catch(() => [] as Checkpoint[]),
+      fetchJson<{ cwd: string; branch: string | null; updatedAt: string; isLive: boolean }>(
+        `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
+      ).catch(() => ({ cwd: "", branch: null, updatedAt: "", isLive: false })),
+    ]);
 
+    if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
+
+    // For completed sessions, restrict "Session" to checkpoints that were created
+    // during the agent's active run (at or before the last log event, plus a small
+    // buffer for indexing lag). Post-session commits tagged to the same session ID
+    // by Entire are excluded here and will appear in Branch History instead.
+    let sessionCheckpoints = allSessionCheckpoints;
+    if (!sessionInfo.isLive && sessionInfo.updatedAt) {
+      const cutoff = new Date(new Date(sessionInfo.updatedAt).getTime() + 2 * 60 * 1000);
+      sessionCheckpoints = allSessionCheckpoints.filter(
+        (cp) => !cp.createdAt || new Date(cp.createdAt) <= cutoff,
+      );
+    }
+
+    // Deduplicate branch history against session checkpoints so each commit
+    // appears in exactly one section.
     const sessionIds = new Set(sessionCheckpoints.map((cp) => cp.checkpointId));
 
     let branchCheckpoints: Checkpoint[] = [];
     try {
-      const sessionInfo = await fetchJson<{ cwd: string; branch: string | null }>(
-        `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
-      );
-      if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
       if (sessionInfo.cwd && sessionInfo.branch) {
         this.currentBranch = sessionInfo.branch;
         const log = await fetchJson<{ entries: BranchLogEntry[] }>(
           `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(sessionInfo.cwd)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
         );
+
+        // Build a message map from ALL branch-log entries before dedup, so session
+        // checkpoints missing a commit message can fall back to the branch-log value.
+        const branchMessageMap = new Map<string, string>();
+        const branchHashMap    = new Map<string, string>();
+        for (const entry of log.entries) {
+          if (entry.commitMessage) branchMessageMap.set(entry.checkpointId, entry.commitMessage);
+          if (entry.commitHash)    branchHashMap.set(entry.checkpointId, entry.commitHash);
+        }
+
+        // Enrich session checkpoints that have a null commit message.
+        sessionCheckpoints = sessionCheckpoints.map((cp) => ({
+          ...cp,
+          commitMessage: cp.commitMessage ?? branchMessageMap.get(cp.checkpointId) ?? null,
+          commitHash:    cp.commitHash    ?? branchHashMap.get(cp.checkpointId)    ?? null,
+        }));
+
         const seen = new Set<string>(sessionIds);
         for (const entry of log.entries) {
           if (!seen.has(entry.checkpointId)) {
             seen.add(entry.checkpointId);
             branchCheckpoints.push({
-              checkpointId: entry.checkpointId,
-              createdAt:    entry.createdAt,
-              filesTouched: entry.filesTouched,
-              summary:      entry.summary,
+              checkpointId:  entry.checkpointId,
+              createdAt:     entry.createdAt,
+              filesTouched:  entry.filesTouched,
+              summary:       entry.summary,
               commitMessage: entry.commitMessage,
-              commitHash:   entry.commitHash,
+              commitHash:    entry.commitHash,
             });
           }
         }
@@ -155,6 +201,17 @@ export class CheckpointTreeProvider
       item.tooltip  = tooltip;
       item.iconPath = new vscode.ThemeIcon("git-commit");
       item.contextValue = "checkpoint";
+      return item;
+    }
+    if (element.kind === "summary") {
+      const item = new vscode.TreeItem("summary.txt", vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon("note");
+      item.tooltip = element.text;
+      item.command = {
+        command: "gossamer.showCheckpointSummary",
+        title: "Show Summary",
+        arguments: [element.checkpointId, element.text],
+      };
       return item;
     }
     if (element.kind === "dir") {
@@ -207,7 +264,45 @@ export class CheckpointTreeProvider
       }));
     }
     if (element.kind === "checkpoint") {
-      return buildItems(element.cp.filesTouched, element.cp.checkpointId, element.port, element.repoPath);
+      const cp = element.cp;
+      const SEP = "─".repeat(68);
+      const section = (title: string, body: string) => `${SEP}\n${title}\n${SEP}\n${body}`;
+
+      const lines: string[] = [];
+      lines.push(`Checkpoint: ${cp.checkpointId}`);
+      if (cp.createdAt) lines.push(`Created:    ${new Date(cp.createdAt).toLocaleString()}`);
+      if (cp.commitHash) lines.push(`Commit:     ${cp.commitHash}${cp.commitMessage ? `  ${cp.commitMessage}` : ""}`);
+
+      const s = cp.summary;
+      if (s) {
+        if (s.intent)  lines.push("", section("Intent", s.intent));
+        if (s.outcome) lines.push("", section("Outcome", s.outcome));
+        if (s.openItems.length > 0) {
+          const body = s.openItems.map((o) => `[${o.status.padEnd(11)}] ${o.text}`).join("\n");
+          lines.push("", section("Open Items", body));
+        }
+        if (s.friction.length > 0) {
+          lines.push("", section("Friction", s.friction.map((f) => `• ${f}`).join("\n")));
+        }
+        if (s.repoLearnings.length > 0) {
+          lines.push("", section("Repo Learnings", s.repoLearnings.map((r) => `• ${r}`).join("\n")));
+        }
+        if (s.codeLearnings.length > 0) {
+          const body = s.codeLearnings.map((c) => `${c.path}\n  ${c.finding}`).join("\n\n");
+          lines.push("", section("Code Learnings", body));
+        }
+        if (s.workflowLearnings.length > 0) {
+          lines.push("", section("Workflow Learnings", s.workflowLearnings.map((w) => `• ${w}`).join("\n")));
+        }
+      }
+
+      if (cp.filesTouched.length > 0) {
+        lines.push("", section("Files Touched", cp.filesTouched.map((f) => `  ${f}`).join("\n")));
+      }
+
+      const summaryText = lines.join("\n").trimEnd();
+      const summaryItem: CheckpointTreeItem = { kind: "summary", checkpointId: cp.checkpointId, text: summaryText };
+      return [summaryItem, ...buildItems(cp.filesTouched, cp.checkpointId, element.port, element.repoPath)];
     }
     if (element.kind === "dir") {
       return element.children;

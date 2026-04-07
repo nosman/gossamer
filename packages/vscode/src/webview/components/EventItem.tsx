@@ -50,7 +50,7 @@ function MessageRow({ accentColor, label, labelColor, timestamp, blocked, childr
       <Text
         size="xs"
         fw={600}
-        style={{ width: 52, flexShrink: 0, paddingTop: 2, color: labelColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+        style={{ width: 80, flexShrink: 0, paddingTop: 2, color: labelColor, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
       >
         {label}
       </Text>
