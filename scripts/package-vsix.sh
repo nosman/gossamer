@@ -24,6 +24,7 @@ node_modules/.bin/esbuild dist/serve.js \
   --bundle \
   --platform=node \
   --format=esm \
+  --banner:js="import { createRequire } from 'module'; const require = createRequire(import.meta.url);" \
   --outfile="$BUNDLE_DIR/serve.js" \
   --external:better-sqlite3 \
   --external:node-pty \
