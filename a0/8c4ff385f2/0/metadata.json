@@ -1,0 +1,159 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "a08c4ff385f2",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-07T13:31:53.103412Z",
+  "branch": "mcp",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".vscode/launch.json",
+    ".vscode/tasks.json",
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "01dd7b4c1537",
+  "token_usage": {
+    "input_tokens": 5425,
+    "cache_creation_tokens": 4196756,
+    "cache_read_tokens": 117963045,
+    "output_tokens": 545915,
+    "api_call_count": 1179
+  },
+  "session_metrics": {
+    "turn_count": 143
+  },
+  "summary": {
+    "intent": "Refactor Gossamer from an Electron desktop app into a VS Code extension to reduce install friction (auto-detect .entire/settings.json instead of manual repo registration) and improve context-switching between code editing and Claude session viewing.",
+    "outcome": "A fully functional VS Code extension was built and packaged as a VSIX with: sessions list, session detail view, native checkpoint tree sidebar, MCP server embedded at /mcp, QuickPick search with FTS, image rendering, agent-aware labels and commands, VSIX packaging script, and onboarding flow for new users.",
+    "learnings": {
+      "repo": [
+        "Each repo gets its own SQLite database at ~/.gossamer/repos/\u003cname\u003e.db; the top-level config is ~/.gossamer/config.json and is auto-created on first use",
+        "The server runs from gossamer-testing/dist/serve.js (the worktree), NOT gossamer/dist/serve.js — always rebuild in the worktree after editing in the main repo",
+        "custom-title events (from /rename) only exist in ~/.claude/projects/\u003cencoded-path\u003e/*.jsonl, NOT in shadow or checkpoint branches — must read those files directly",
+        "The .gossamer/checkpoints/ directory inside each repo is a git worktree for entire/checkpoints/v1; it gets recreated by the indexer and should be .gitignore'd",
+        "Session slugs (auto-generated names) come from LogEvent.slug and never change on /rename; the actual rename signal is the custom-title event type",
+        "Images are stored as base64 in full.jsonl files on entire/checkpoints/v1 but the schema had no imageData field — needed schema migration + backfill from LogEvent.data JSON column",
+        "Agent name (Claude Code, Gemini CLI, etc.) is stored in CheckpointSessionMetadata.agent",
+        "The stable server port is stored in ~/.gossamer/config.json (default 3456); old approach used getFreePort() which made MCP config impossible",
+        "Branch-log endpoint requires prefix matching (findRepoForPath) not exact match because session cwd can be a subdirectory of the registered repo root"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Was only including extension.ts and GossamerPanel.ts — SessionDetailPanel.ts and diffUtils.ts were never compiled, causing blank diff views. Fixed by changing to include: ['src/**/*.ts'] with exclude: ['src/webview']"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "acquireVsCodeApi() can only be called once per webview context — stored as window.__vscodeApi and reused in vscodeApi.ts to prevent double-call errors"
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "onDidChangeViewState listener needed to call checkpointProvider.setSession() when e.webviewPanel.active — without this the checkpoint sidebar only updates on first open, not on tab switches"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "process.execPath points to VS Code's bundled Electron Node.js, not system Node. Must use execFileSync('which', ['node']) to get system Node for spawning server (avoids native module NODE_MODULE_VERSION mismatch)"
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "root must be an absolute path (resolve(__dirname, 'src/webview')) not relative — relative paths resolve from CWD at build time which differs when run via workspace"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "The gossamer server is a static singleton that survives panel disposal — only killed on extension deactivate. This enables minimize/restore without server restart and keeps file watchers alive"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "server_ready must be re-sent via onDidChangeViewState when panel becomes visible — webview reloads from scratch when dragged to a new window, resetting React state"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Scroll listener on Mantine ScrollArea viewport doesn't attach at [] effect time (ref is null). Check scroll position inline at the moment of the effect instead: el.scrollHeight - el.scrollTop - el.clientHeight \u003c 80"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Vite builds ESM output — script tag needs type='module', otherwise browser silently ignores the bundle and the panel appears blank"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "DB change detection replaced 500ms poll with fs.watch on .db, .db-wal, and parent dir (debounced 50ms). Shadow branch replaced 5s poll with fs.watch on .git/refs/ recursive + packed-refs (debounced 200ms). Both keep 30s fallback polls"
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "resourceUri must use absolute paths for SCM file color decorations — the relative paths from filesTouched need to be joined with the repo root (currentRepoPath)"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "Session checkpoints should be filtered to createdAt \u003c= last-log-event + 2min for completed sessions — otherwise Entire keeps tagging new commits to the same session ID post-completion, causing all branch history to appear under Session"
+        }
+      ],
+      "workflow": [
+        "Git worktrees have completely separate file copies — edits in the main repo do NOT sync to gossamer-testing; must explicitly cp changed files then rebuild in the worktree",
+        "When running extension via F5, add preLaunchTask to .vscode/launch.json so the extension builds automatically on a fresh clone",
+        "VS Code auxiliary windows (standalone popped-out panels) have no sidebar or activity bar — TreeView cannot be projected there, only webview-embedded UI works",
+        "VS Code's native vscode.diff only accepts Uri objects — use a TextDocumentContentProvider with a custom scheme for in-memory content (no temp files needed, inherently read-only)",
+        "VS Code TimelineProvider shows flat items only with no nested children — not suitable for file-tree-per-checkpoint display; native TreeView is richer for this use case",
+        "The gossamer.vsix and bundled-server/ are generated artifacts and should not be committed to git",
+        "StreamableHTTPServerTransport with sessionIdGenerator: undefined enables stateless MCP mode for simple POST-based tool calls — can be embedded directly in the Express server"
+      ]
+    },
+    "friction": [
+      "Server running from gossamer-testing/dist not gossamer/dist caused many 'why isn't my change working' debugging cycles — no automatic sync between worktree and main repo",
+      "native module NODE_MODULE_VERSION mismatch (better-sqlite3 compiled for system Node 141, VS Code uses Electron Node 140) — required spawning server as child process instead of importing Prisma directly",
+      "tsconfig.extension.json only included 2 files explicitly — SessionDetailPanel.ts and diffUtils.ts silently not compiled, causing blank diff views with no error",
+      "acquireVsCodeApi() double-call error was subtle — the minimize button inline script and React app both called it, failing silently",
+      "Prisma schema push created a stray ~/.gossamer/gossamer.db instead of using per-repo databases — required manual deletion and ALTER TABLE ADD COLUMN on the correct DBs",
+      "custom-title rename events are NOT in shadow/checkpoint branches — discovering this required extensive grep through JSONL files before finding them in ~/.claude/projects/",
+      "Vite builds ESM output but VS Code webview HTML needs type='module' on the script tag — without it the panel loads blank with no console error in the webview",
+      "Session color information is not stored anywhere in Claude's files — cannot be read even though the UI displays it"
+    ],
+    "open_items": [
+      "Session color-coding in the sessions list — not stored anywhere in Claude Code's files yet, may be planned feature",
+      "gossamer.vsix and packages/vscode/bundled-server/ should be added to .gitignore since they're generated artifacts",
+      "The toggle panel keybinding (Ctrl+K G) may not fire when the webview has keyboard focus — needs investigation",
+      "Named session display in sessions table was tabled (session was renamed to 'gossamer-vscode' mid-discussion but the feature request was deferred)",
+      "The .gossamer/ worktree directory inside repos shows as untracked in git status — README recommends adding to .gitignore but individual repos need to do this themselves",
+      "Image rendering only works for sessions indexed after the schema migration; older sessions need manual re-sync to pick up images already in checkpoint branches",
+      "MCP server stdio wrapper (dist/mcp.js) still requires manual --port flag if using it outside the VS Code extension context",
+      "install-mcp.mjs script only handles ~/.claude.json and ~/.codex/config.yaml — other MCP-compatible clients not covered"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-07T13:30:37.401456Z",
+    "agent_lines": 61,
+    "agent_removed": 34,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 61,
+    "total_lines_changed": 95,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

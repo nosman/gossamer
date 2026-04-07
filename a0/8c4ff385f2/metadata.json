@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "a08c4ff385f2",
+  "strategy": "manual-commit",
+  "branch": "mcp",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".vscode/launch.json",
+    ".vscode/tasks.json",
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a0/8c4ff385f2/0/metadata.json",
+      "transcript": "/a0/8c4ff385f2/0/full.jsonl",
+      "content_hash": "/a0/8c4ff385f2/0/content_hash.txt",
+      "prompt": "/a0/8c4ff385f2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5425,
+    "cache_creation_tokens": 4196756,
+    "cache_read_tokens": 117963045,
+    "output_tokens": 545915,
+    "api_call_count": 1179
+  }
+}
