@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "941e7540931c",
+  "strategy": "manual-commit",
+  "branch": "gossamer-test",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "package-lock.json",
+    "packages/vscode/bundled-server/serve.js",
+    "scripts/package-vsix.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/1e7540931c/0/metadata.json",
+      "transcript": "/94/1e7540931c/0/full.jsonl",
+      "content_hash": "/94/1e7540931c/0/content_hash.txt",
+      "prompt": "/94/1e7540931c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 25426,
+    "cache_read_tokens": 202371,
+    "output_tokens": 1825,
+    "api_call_count": 10
+  }
+}
