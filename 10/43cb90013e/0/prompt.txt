@@ -546,3 +546,7 @@ Write a script to bundle this locally into a vscode extension that i can load (n
 ---
 
 git add packages/vscode
+
+---
+
+commit and push the staged files
