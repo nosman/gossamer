@@ -132,6 +132,23 @@ export class CheckpointTreeProvider
         const log = await fetchJson<{ entries: BranchLogEntry[] }>(
           `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(sessionInfo.cwd)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
         );
+
+        // Build a message map from ALL branch-log entries before dedup, so session
+        // checkpoints missing a commit message can fall back to the branch-log value.
+        const branchMessageMap = new Map<string, string>();
+        const branchHashMap    = new Map<string, string>();
+        for (const entry of log.entries) {
+          if (entry.commitMessage) branchMessageMap.set(entry.checkpointId, entry.commitMessage);
+          if (entry.commitHash)    branchHashMap.set(entry.checkpointId, entry.commitHash);
+        }
+
+        // Enrich session checkpoints that have a null commit message.
+        sessionCheckpoints = sessionCheckpoints.map((cp) => ({
+          ...cp,
+          commitMessage: cp.commitMessage ?? branchMessageMap.get(cp.checkpointId) ?? null,
+          commitHash:    cp.commitHash    ?? branchHashMap.get(cp.checkpointId)    ?? null,
+        }));
+
         const seen = new Set<string>(sessionIds);
         for (const entry of log.entries) {
           if (!seen.has(entry.checkpointId)) {
@@ -254,7 +271,7 @@ export class CheckpointTreeProvider
       const lines: string[] = [];
       lines.push(`Checkpoint: ${cp.checkpointId}`);
       if (cp.createdAt) lines.push(`Created:    ${new Date(cp.createdAt).toLocaleString()}`);
-      if (cp.commitHash) lines.push(`Commit:     ${cp.commitHash}`);
+      if (cp.commitHash) lines.push(`Commit:     ${cp.commitHash}${cp.commitMessage ? `  ${cp.commitMessage}` : ""}`);
 
       const s = cp.summary;
       if (s) {
@@ -277,8 +294,6 @@ export class CheckpointTreeProvider
         if (s.workflowLearnings.length > 0) {
           lines.push("", section("Workflow Learnings", s.workflowLearnings.map((w) => `• ${w}`).join("\n")));
         }
-      } else if (cp.commitMessage) {
-        lines.push("", section("Commit Message", cp.commitMessage));
       }
 
       if (cp.filesTouched.length > 0) {
