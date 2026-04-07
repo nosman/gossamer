@@ -172,7 +172,9 @@ Make sure the Entire CLI is installed and you're logged in before starting Gossa
 
 Gossamer is built on a simple principle: your AI sessions are yours. No telemetry, no cloud sync, no third-party storage. Everything stays local by default.
 
-- **Search index and database** are stored in a single SQLite file per repo at `~/.gossamer/<YOUR_REPO>.db` — on your machine, readable with any SQLite tool, deletable whenever you want.
+- **Configuration** lives at `~/.gossamer/config.json`. It is created automatically the first time you open a repo in Gossamer, and stores the list of registered repos, their database paths, and the server port. You can edit it by hand.
+- **SQLite database** — each repo gets its own database at `~/.gossamer/repos/<name>.db` (where `<name>` is the repo's folder name). Readable with any SQLite tool, deletable whenever you want.
+- **Git worktree** — Gossamer creates a `.gossamer/checkpoints/` directory inside each repo root. This is a git worktree used to read the `entire/checkpoints/v1` branch without switching branches. Add `.gossamer/` to your `.gitignore` to keep it out of `git status`.
 - **Session history** is stored in your local Git repository. Push it to your own remote to back it up or share it across machines — on your terms, using infrastructure you already control.
 - **The server is local.** Gossamer's backend runs on `localhost` and never opens an external connection. The Electron app talks only to that local server.
 
