@@ -317,6 +317,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   const initialLoadDone = useRef(false);
   const matchTerms = HIGHLIGHT_TERMS;
   const agentLabel = session?.agent ?? "Claude";
+  const userInfo = session?.gitUserName ? { name: session.gitUserName } : undefined;
 
   async function load() {
     try {
@@ -424,7 +425,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             if (item.kind === "claudeTurn") {
               return <ClaudeTurnCard key={i} toolGroups={item.toolGroups} stop={item.stop} matchTerms={matchTerms} agentLabel={agentLabel} />;
             }
-            return <EventItem key={i} event={item.event} matchTerms={matchTerms} agentLabel={agentLabel} />;
+            return <EventItem key={i} event={item.event} user={userInfo} matchTerms={matchTerms} agentLabel={agentLabel} />;
           })}
         </Box>
       </ScrollArea>
