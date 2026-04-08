@@ -102,20 +102,27 @@ export class CheckpointTreeProvider
       fetchJson<Checkpoint[]>(
         `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
       ).catch(() => [] as Checkpoint[]),
-      fetchJson<{ cwd: string; branch: string | null; updatedAt: string; isLive: boolean }>(
+      fetchJson<{ cwd: string; repoRoot: string | null; branch: string | null; updatedAt: string; isLive: boolean }>(
         `http://localhost:${port}/api/sessions/${encodeURIComponent(sessionId)}`,
-      ).catch(() => ({ cwd: "", branch: null, updatedAt: "", isLive: false })),
+      ).catch(() => ({ cwd: "", repoRoot: null, branch: null, updatedAt: "", isLive: false })),
     ]);
 
-    if (sessionInfo.cwd) this.currentRepoPath = sessionInfo.cwd;
+    // Prefer repoRoot (the server's known local path for this repo) over the
+    // session's stored cwd, which may be from a different machine or empty
+    // (e.g. when the first event is a permission-mode event with no cwd).
+    const repoPath = sessionInfo.repoRoot ?? sessionInfo.cwd;
+    if (repoPath) this.currentRepoPath = repoPath;
 
     // For completed sessions, restrict "Session" to checkpoints that were created
     // during the agent's active run (at or before the last log event, plus a small
     // buffer for indexing lag). Post-session commits tagged to the same session ID
     // by Entire are excluded here and will appear in Branch History instead.
+    // Skip the filter when updatedAt is missing or clearly invalid (e.g. epoch
+    // fallback from sessions whose LogEvents haven't been indexed yet).
     let sessionCheckpoints = allSessionCheckpoints;
-    if (!sessionInfo.isLive && sessionInfo.updatedAt) {
-      const cutoff = new Date(new Date(sessionInfo.updatedAt).getTime() + 2 * 60 * 1000);
+    const updatedMs = sessionInfo.updatedAt ? new Date(sessionInfo.updatedAt).getTime() : 0;
+    if (!sessionInfo.isLive && updatedMs > 1_000_000_000_000) {
+      const cutoff = new Date(updatedMs + 2 * 60 * 1000);
       sessionCheckpoints = allSessionCheckpoints.filter(
         (cp) => !cp.createdAt || new Date(cp.createdAt) <= cutoff,
       );
@@ -127,10 +134,10 @@ export class CheckpointTreeProvider
 
     let branchCheckpoints: Checkpoint[] = [];
     try {
-      if (sessionInfo.cwd && sessionInfo.branch) {
+      if (repoPath && sessionInfo.branch) {
         this.currentBranch = sessionInfo.branch;
         const log = await fetchJson<{ entries: BranchLogEntry[] }>(
-          `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(sessionInfo.cwd)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
+          `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(repoPath)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
         );
 
         // Build a message map from ALL branch-log entries before dedup, so session

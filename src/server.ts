@@ -246,15 +246,22 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         return;
       }
 
-      // Min/max LogEvent timestamps per session
-      const times = await db.logEvent.groupBy({
-        by: ["sessionId"],
-        where: { sessionId: { in: allIds }, timestamp: { not: null } },
-        _min: { timestamp: true },
-        _max: { timestamp: true },
-      });
+      // Min/max LogEvent timestamps per session (raw SQL avoids Prisma groupBy
+      // DateTime serialisation issues on SQLite where _max can return null).
+      const timeRows = allIds.length > 0
+        ? await db.$queryRawUnsafe<{ sessionId: string; startedAt: string | null; updatedAt: string | null }[]>(
+            `SELECT sessionId, MIN(timestamp) AS startedAt, MAX(timestamp) AS updatedAt
+             FROM LogEvent
+             WHERE sessionId IN (${allIds.map(() => "?").join(",")}) AND timestamp IS NOT NULL
+             GROUP BY sessionId`,
+            ...allIds,
+          )
+        : [];
       const timeMap = new Map(
-        times.map((r) => [r.sessionId!, { startedAt: r._min.timestamp, updatedAt: r._max.timestamp }])
+        timeRows.map((r) => [r.sessionId, {
+          startedAt: r.startedAt ? new Date(r.startedAt) : null,
+          updatedAt: r.updatedAt ? new Date(r.updatedAt) : null,
+        }])
       );
 
       // First cwd per session
@@ -332,7 +339,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/sessions/:id", async (req, res) => {
     try {
       const id = req.params.id;
-      const [latestMeta, shadow, firstEvent, lastEvent, latestSlugEvent] = await Promise.all([
+      const [latestMeta, shadow, firstCwdEvent, firstTimestampEvent, lastEvent, latestSlugEvent] = await Promise.all([
         db.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
           select: { branch: true, checkpointId: true, agent: true, summary: { select: { intent: true } } },
@@ -340,9 +347,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         }),
         db.shadowSession.findUnique({ where: { sessionId: id } }),
         db.logEvent.findFirst({
-          where: { sessionId: id },
+          where: { sessionId: id, cwd: { not: null } },
           orderBy: { id: "asc" },
-          select: { cwd: true, timestamp: true },
+          select: { cwd: true },
+        }),
+        db.logEvent.findFirst({
+          where: { sessionId: id, timestamp: { not: null } },
+          orderBy: { id: "asc" },
+          select: { timestamp: true },
         }),
         db.logEvent.findFirst({
           where: { sessionId: id, timestamp: { not: null } },
@@ -365,13 +377,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
             select: { gitUserName: true, gitUserEmail: true },
           })
         : null;
-      const startedAt = firstEvent?.timestamp ?? shadow?.createdAt ?? null;
+      const startedAt = firstTimestampEvent?.timestamp ?? shadow?.createdAt ?? null;
       const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
       res.json({
         sessionId:       id,
         startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
         updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
-        cwd:             firstEvent?.cwd ?? shadow?.cwd ?? "",
+        cwd:             firstCwdEvent?.cwd ?? shadow?.cwd ?? "",
         repoRoot:        repoDir ?? null,
         repoName:        repoName,
         parentSessionId: null,
@@ -817,11 +829,11 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
       // Look up the repo path for this session so we can read commit messages.
       // Fall back to all configured repos so messages show regardless of current workspace.
-      const shadow = await db.shadowSession.findUnique({
-        where:  { sessionId },
-        select: { cwd: true },
-      });
-      const primaryDir = shadow?.cwd ?? repoDir;
+      const [shadow, firstCwdEv] = await Promise.all([
+        db.shadowSession.findUnique({ where: { sessionId }, select: { cwd: true } }),
+        db.logEvent.findFirst({ where: { sessionId, cwd: { not: null } }, orderBy: { id: "asc" }, select: { cwd: true } }),
+      ]);
+      const primaryDir = repoDir ?? firstCwdEv?.cwd ?? shadow?.cwd;
       const candidateDirs = [
         primaryDir,
         ...readConfig().repos.map((r) => r.localPath).filter((p) => p !== primaryDir),
@@ -1062,7 +1074,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     const sessionId = req.params.id;
     const { cwd } = req.body as { cwd?: string };
     try {
-      const safeCwd = (cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
+      const safeCwd = (repoDir ?? cwd ?? process.env.HOME ?? "/tmp").replace(/'/g, "'\\''");
       const safeId = sessionId.replace(/'/g, "");
       const script = [
         `tell application "Terminal"`,
@@ -1212,13 +1224,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         return;
       }
       // Preserve existing dbPath on re-onboard so we don't orphan an existing db.
-      // If this localPath is the repo the server is already serving, reuse the
-      // server's primary dbPath so existing indexed data remains visible.
+      // For new repos, always derive a per-repo DB path — never inherit the
+      // server's primary dbPath, which may be a legacy shared database.
       const existing = findRepo(localPath);
-      const resolvedDbPath =
-        existing?.dbPath
-        ?? (localPath === repoDir ? dbPath : null)
-        ?? defaultDbPath(name);
+      const resolvedDbPath = existing?.dbPath ?? defaultDbPath(name);
       const entry: RepoConfig = {
         name,
         remote: remote ?? "",

@@ -815,11 +815,15 @@ export async function indexAllShadowBranches(
       const fullJsonlContent = readBlobContent(repoPath, blobSha);
       const events = parseFullJsonl(fullJsonlContent);
 
-      // Extract session metadata from the first event that carries it.
-      const firstMeta = events.find((e) => e.sessionId || e.cwd || e.gitBranch);
-      const cwd       = firstMeta?.cwd       ?? null;
-      const gitBranch = firstMeta?.gitBranch ?? null;
-      const createdAt = firstMeta?.timestamp ? new Date(firstMeta.timestamp) : null;
+      // Extract session metadata from the first event that carries each field.
+      // Some early events (e.g. permission-mode) have sessionId but no cwd/branch,
+      // so we search for each field independently to avoid missing real values.
+      const cwdEvent    = events.find((e) => e.cwd);
+      const branchEvent = events.find((e) => e.gitBranch);
+      const timeEvent   = events.find((e) => e.timestamp);
+      const cwd       = cwdEvent?.cwd       ?? null;
+      const gitBranch = branchEvent?.gitBranch ?? null;
+      const createdAt = timeEvent?.timestamp ? new Date(timeEvent.timestamp) : null;
       const prompt    = readPromptFromBranch(repoPath, branch, sessionId);
       const newSeenShas = JSON.stringify([...seenShas, blobSha]);
 

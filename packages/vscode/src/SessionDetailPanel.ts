@@ -71,7 +71,8 @@ export class SessionDetailPanel {
           const agentEntry = msg.agent ? AGENT_CLI[msg.agent] : undefined;
           const bin        = agentEntry?.bin        ?? "claude";
           const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
-          const terminal = vscode.window.createTerminal({ name: title, cwd: msg.cwd || undefined });
+          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+          const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot ?? (msg.cwd || undefined) });
           terminal.show();
           terminal.sendText(`${bin} ${resumeFlag} ${msg.sessionId}`, true);
         }
