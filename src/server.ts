@@ -399,7 +399,11 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     try {
       const id = req.params.id;
       const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
-      const sdb = await resolveDb(qLocalPath, (d) => d.shadowSession.findUnique({ where: { sessionId: id }, select: { sessionId: true } }));
+      const sdb = await resolveDb(qLocalPath, async (d) =>
+        await d.shadowSession.findUnique({ where: { sessionId: id }, select: { sessionId: true } })
+        ?? await d.logEvent.findFirst({ where: { sessionId: id }, select: { id: true } })
+        ?? await d.checkpointSessionMetadata.findFirst({ where: { sessionId: id }, select: { id: true } }),
+      );
       if (!sdb) { res.status(404).json({ error: "Session not found" }); return; }
 
       const [latestMeta, shadow, firstCwdEvent, firstTimestampEvent, lastEvent, latestSlugEvent] = await Promise.all([
@@ -1311,11 +1315,13 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     }
   });
 
-  // GET /api/repos/current — return the config entry for the repo this server is running against
-  app.get("/api/repos/current", (_req, res) => {
+  // GET /api/repos/current — return the config entry for a given repo (or the server's startup repo)
+  app.get("/api/repos/current", (req, res) => {
     try {
-      const current = repoDir
-        ? readConfig().repos.find((r) => r.localPath === repoDir) ?? null
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const targetDir = qLocalPath ?? repoDir;
+      const current = targetDir
+        ? readConfig().repos.find((r) => r.localPath === targetDir) ?? null
         : null;
       res.json(current);
     } catch (err) {

@@ -482,7 +482,7 @@ export class GossamerPanel {
   }
 
   private async ensureRepoRegistered(): Promise<void> {
-    const current = await httpGetJson<unknown>(`http://localhost:${this.port}/api/repos/current`);
+    const current = await httpGetJson<unknown>(`http://localhost:${this.port}/api/repos/current?localPath=${encodeURIComponent(this.repoPath)}`);
     if (current !== null) return; // already registered
 
     const name = basename(this.repoPath);
