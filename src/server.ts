@@ -161,54 +161,27 @@ async function findManyInChunks<T>(
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
-export async function startServer(dbPath: string, port: number, repoDir?: string): Promise<void> {
+export async function startServer(port: number, repoDir?: string): Promise<void> {
   // Strip CLAUDECODE so spawned sessions are not blocked by nested-session detection
   delete process.env.CLAUDECODE;
 
-  let db = await getDb(dbPath);
+  // ── Per-repo DB registry ──────────────────────────────────────────────────
+  // Each configured repo gets its own SQLite DB + PrismaClient.  There is no
+  // "primary" DB — every endpoint resolves which DB to query via repo context.
 
-  // Ensure schema is applied on startup (handles fresh DBs and bundled VSIX where
-  // the repo-registration path hasn't run yet).
-  // If the DB file is corrupt, delete it and retry once.
-  try {
-    await pushSchema(db);
-    process.stderr.write(`[gossamer] schema ready: ${dbPath}\n`);
-  } catch (err) {
-    process.stderr.write(`[gossamer] schema push failed, deleting DB and retrying — ${err}\n`);
-    evictDb(dbPath);
-    try { (await import("fs")).unlinkSync(dbPath); } catch {}
-    try { (await import("fs")).unlinkSync(dbPath + "-wal"); } catch {}
-    try { (await import("fs")).unlinkSync(dbPath + "-shm"); } catch {}
-    db = await getDb(dbPath);
-    await pushSchema(db);
-    process.stderr.write(`[gossamer] schema ready (after retry): ${dbPath}\n`);
-  }
+  const dbRegistry = new Map<string, PrismaClient>();
 
-  // Ensure FTS table exists and is up-to-date on startup.
-  await setupLogContentFts(db);
-  try {
-    await syncLogContentFts(db);
-  } catch (err) {
-    // Non-fatal: LogContent table may not exist yet on a brand-new DB before first index.
-    process.stderr.write(`[gossamer] FTS sync skipped — ${err}\n`);
-  }
-
-  // Push schema to every configured repo DB (not just the primary one).
-  // This handles repos that were already in config.json but whose .db files
-  // are fresh or were deleted — without this, all indexers would fail with
-  // "table does not exist" errors.
-  // If the DB file is corrupt (e.g. macOS quarantine xattr, stale WAL), delete
-  // it, evict the cached Prisma client, and retry once with a clean file.
-  for (const repo of readConfig().repos) {
-    if (repo.dbPath === dbPath) continue; // already handled above
+  async function initRepoDb(repo: RepoConfig): Promise<void> {
     mkdirSync(dirname(repo.dbPath), { recursive: true });
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const repoDb = await getDb(repo.dbPath);
         await pushSchema(repoDb);
         await setupLogContentFts(repoDb);
+        try { await syncLogContentFts(repoDb); } catch { /* non-fatal */ }
+        dbRegistry.set(repo.dbPath, repoDb);
         process.stderr.write(`[gossamer] schema ready: ${repo.dbPath}\n`);
-        break;
+        return;
       } catch (err) {
         if (attempt === 0) {
           process.stderr.write(`[gossamer] schema push failed for ${repo.name}, deleting DB and retrying — ${err}\n`);
@@ -223,6 +196,41 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   }
 
+  for (const repo of readConfig().repos) {
+    await initRepoDb(repo);
+  }
+
+  /** All registered DB clients. */
+  function allDbs(): PrismaClient[] { return [...dbRegistry.values()]; }
+
+  /** Resolve the DB client for a repo by its local path. */
+  function dbForRepo(localPath: string): PrismaClient | null {
+    const repo = findRepoForPath(localPath);
+    return repo ? dbRegistry.get(repo.dbPath) ?? null : null;
+  }
+
+  /** Try each DB looking for a record — used as a fallback when no localPath is provided. */
+  async function findInDbs<T>(probe: (db: PrismaClient) => Promise<T | null>): Promise<{ db: PrismaClient; result: T } | null> {
+    for (const client of dbRegistry.values()) {
+      const result = await probe(client);
+      if (result) return { db: client, result };
+    }
+    return null;
+  }
+
+  /** Resolve DB from ?localPath query param, falling back to probing all DBs with a probe function. */
+  async function resolveDb(localPath: string | null, probe?: (db: PrismaClient) => Promise<unknown>): Promise<PrismaClient | null> {
+    if (localPath) {
+      const db = dbForRepo(localPath);
+      if (db) return db;
+    }
+    if (probe) {
+      const found = await findInDbs(probe);
+      if (found) return found.db;
+    }
+    return null;
+  }
+
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -232,105 +240,116 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   const repoName = repoDir ? basename(repoDir) : null;
 
   // GET /api/sessions — reconstructed from CheckpointSessionMetadata + ShadowSession
+  // Aggregates across ALL repo DBs.
   app.get("/api/sessions", async (_req, res) => {
     try {
-      // Latest checkpoint meta per sessionId (asc order so map always ends on latest)
-      const allMetas = await db.checkpointSessionMetadata.findMany({
-        select: {
-          sessionId: true,
-          checkpointId: true,
-          branch: true,
-          agent: true,
-          summary: { select: { intent: true } },
-        },
-        orderBy: { createdAt: "asc" },
-      });
+      const dbs = allDbs();
+
+      // Gather data from every repo DB in parallel.
+      const perDb = await Promise.all(dbs.map(async (rdb) => {
+        const [metas, shadows, archivedRows, logEventSessionRows] = await Promise.all([
+          rdb.checkpointSessionMetadata.findMany({
+            select: { sessionId: true, checkpointId: true, branch: true, agent: true, summary: { select: { intent: true } } },
+            orderBy: { createdAt: "asc" },
+          }),
+          rdb.shadowSession.findMany(),
+          rdb.archivedSession.findMany({ select: { sessionId: true } }),
+          rdb.logEvent.findMany({ distinct: ["sessionId"], where: { sessionId: { not: null } }, select: { sessionId: true } }),
+        ]);
+        return { rdb, metas, shadows, archivedRows, logEventSessionRows };
+      }));
+
+      // Merge checkpoint meta across all DBs
       const cpMap = new Map<string, { branch: string | null; intent: string | null; checkpointId: string; agent: string | null }>();
-      for (const m of allMetas) {
-        cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId, agent: m.agent ?? null });
+      const allCheckpointIds = new Set<string>();
+      for (const { metas } of perDb) {
+        for (const m of metas) {
+          cpMap.set(m.sessionId, { branch: m.branch, intent: m.summary?.intent ?? null, checkpointId: m.checkpointId, agent: m.agent ?? null });
+          allCheckpointIds.add(m.checkpointId);
+        }
       }
 
-      // Git user per checkpoint (from commit author stored at index time)
-      const allCheckpointIds = [...new Set(allMetas.map((m) => m.checkpointId))];
-      const cpUserRows = allCheckpointIds.length > 0
-        ? await db.checkpointMetadata.findMany({
-            where: { checkpointId: { in: allCheckpointIds } },
+      // Git user per checkpoint (from all DBs)
+      const cpUserMap = new Map<string, { gitUserName: string | null; gitUserEmail: string | null }>();
+      if (allCheckpointIds.size > 0) {
+        const ids = [...allCheckpointIds];
+        await Promise.all(dbs.map(async (rdb) => {
+          const rows = await rdb.checkpointMetadata.findMany({
+            where: { checkpointId: { in: ids } },
             select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
-          })
-        : [];
-      const cpUserMap = new Map(cpUserRows.map((r) => [r.checkpointId, r]));
+          });
+          for (const r of rows) cpUserMap.set(r.checkpointId, r);
+        }));
+      }
 
-      const shadows = await db.shadowSession.findMany();
-      const shadowMap = new Map(shadows.map((s) => [s.sessionId, s]));
+      // Merge shadows, archived, logEvent sessions
+      const shadowMap = new Map<string, (typeof perDb)[0]["shadows"][0]>();
+      const archivedSet = new Set<string>();
+      const knownIds = new Set<string>([...cpMap.keys()]);
+      for (const { shadows, archivedRows, logEventSessionRows } of perDb) {
+        for (const s of shadows) { shadowMap.set(s.sessionId, s); knownIds.add(s.sessionId); }
+        for (const r of archivedRows) archivedSet.add(r.sessionId);
+        for (const r of logEventSessionRows) { if (r.sessionId) knownIds.add(r.sessionId); }
+      }
 
       const showArchived = _req.query.archived === "1";
-      const archivedRows = await db.archivedSession.findMany({ select: { sessionId: true } });
-      const archivedSet = new Set(archivedRows.map((r) => r.sessionId));
-
-      // Also include sessions visible only from LogEvent (hook-written, not yet indexed)
-      const knownIds = new Set([...cpMap.keys(), ...shadows.map((s) => s.sessionId)]);
-      const logEventSessionRows = await db.logEvent.findMany({
-        distinct: ["sessionId"],
-        where: { sessionId: { not: null } },
-        select: { sessionId: true },
-      });
-      for (const r of logEventSessionRows) {
-        if (r.sessionId && !knownIds.has(r.sessionId)) knownIds.add(r.sessionId);
-      }
-
       const allIds = [...knownIds]
         .filter((id) => showArchived ? archivedSet.has(id) : !archivedSet.has(id));
-      if (allIds.length === 0) {
-        res.json([]);
-        return;
-      }
+      if (allIds.length === 0) { res.json([]); return; }
 
-      // Min/max LogEvent timestamps per session (raw SQL avoids Prisma groupBy
-      // DateTime serialisation issues on SQLite where _max can return null).
-      const timeRows = allIds.length > 0
-        ? await db.$queryRawUnsafe<{ sessionId: string; startedAt: string | null; updatedAt: string | null }[]>(
-            `SELECT sessionId, MIN(timestamp) AS startedAt, MAX(timestamp) AS updatedAt
-             FROM LogEvent
-             WHERE sessionId IN (${allIds.map(() => "?").join(",")}) AND timestamp IS NOT NULL
-             GROUP BY sessionId`,
-            ...allIds,
-          )
-        : [];
-      const timeMap = new Map(
-        timeRows.map((r) => [r.sessionId, {
-          startedAt: r.startedAt ? new Date(r.startedAt) : null,
-          updatedAt: r.updatedAt ? new Date(r.updatedAt) : null,
-        }])
-      );
+      // Timestamps, cwd, slug, parent — aggregate from all DBs
+      const timeMap = new Map<string, { startedAt: Date | null; updatedAt: Date | null }>();
+      const cwdMap  = new Map<string, string | null>();
+      const slugMap = new Map<string, string | null>();
+      const parentMap = new Map<string, string>();
+      const childMap  = new Map<string, string[]>();
 
-      // First cwd per session
-      const cwdRows = await db.logEvent.findMany({
-        where: { sessionId: { in: allIds }, cwd: { not: null } },
-        distinct: ["sessionId"],
-        orderBy: { id: "asc" },
-        select: { sessionId: true, cwd: true },
-      });
-      const cwdMap = new Map(cwdRows.map((e) => [e.sessionId!, e.cwd]));
+      await Promise.all(dbs.map(async (rdb) => {
+        const timeRows = allIds.length > 0
+          ? await rdb.$queryRawUnsafe<{ sessionId: string; startedAt: string | null; updatedAt: string | null }[]>(
+              `SELECT sessionId, MIN(timestamp) AS startedAt, MAX(timestamp) AS updatedAt
+               FROM LogEvent
+               WHERE sessionId IN (${allIds.map(() => "?").join(",")}) AND timestamp IS NOT NULL
+               GROUP BY sessionId`,
+              ...allIds,
+            )
+          : [];
+        for (const r of timeRows) {
+          const existing = timeMap.get(r.sessionId);
+          const s = r.startedAt ? new Date(r.startedAt) : null;
+          const u = r.updatedAt ? new Date(r.updatedAt) : null;
+          if (!existing) { timeMap.set(r.sessionId, { startedAt: s, updatedAt: u }); }
+          else {
+            if (s && (!existing.startedAt || s < existing.startedAt)) existing.startedAt = s;
+            if (u && (!existing.updatedAt || u > existing.updatedAt)) existing.updatedAt = u;
+          }
+        }
 
-      // Latest slug per session (last event that has one, i.e. the current name)
-      const slugRows = await db.logEvent.findMany({
-        where: { sessionId: { in: allIds }, slug: { not: null } },
-        orderBy: { id: "desc" },
-        distinct: ["sessionId"],
-        select: { sessionId: true, slug: true },
-      });
-      const slugMap = new Map(slugRows.map((e) => [e.sessionId!, e.slug]));
+        const cwdRows = await rdb.logEvent.findMany({
+          where: { sessionId: { in: allIds }, cwd: { not: null } },
+          distinct: ["sessionId"],
+          orderBy: { id: "asc" },
+          select: { sessionId: true, cwd: true },
+        });
+        for (const e of cwdRows) { if (e.sessionId && !cwdMap.has(e.sessionId)) cwdMap.set(e.sessionId, e.cwd); }
 
-      // Parent-child relationships from task checkpoints
-      const allParentRows = await db.sessionParent.findMany({
-        select: { childSessionId: true, parentSessionId: true },
-      });
-      const parentMap = new Map(allParentRows.map((r) => [r.childSessionId, r.parentSessionId]));
-      const childMap = new Map<string, string[]>();
-      for (const r of allParentRows) {
-        if (!childMap.has(r.parentSessionId)) childMap.set(r.parentSessionId, []);
-        childMap.get(r.parentSessionId)!.push(r.childSessionId);
-      }
+        const slugRows = await rdb.logEvent.findMany({
+          where: { sessionId: { in: allIds }, slug: { not: null } },
+          orderBy: { id: "desc" },
+          distinct: ["sessionId"],
+          select: { sessionId: true, slug: true },
+        });
+        for (const e of slugRows) { if (e.sessionId && !slugMap.has(e.sessionId)) slugMap.set(e.sessionId, e.slug); }
+
+        const parentRows = await rdb.sessionParent.findMany({
+          select: { childSessionId: true, parentSessionId: true },
+        });
+        for (const r of parentRows) {
+          parentMap.set(r.childSessionId, r.parentSessionId);
+          if (!childMap.has(r.parentSessionId)) childMap.set(r.parentSessionId, []);
+          childMap.get(r.parentSessionId)!.push(r.childSessionId);
+        }
+      }));
 
       const result: SessionResponse[] = allIds.map((sessionId) => {
         const cp     = cpMap.get(sessionId) ?? null;
@@ -339,13 +358,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         const startedAt = t?.startedAt ?? shadow?.createdAt ?? null;
         const updatedAt = t?.updatedAt ?? shadow?.createdAt ?? null;
         const cpUser = cp ? cpUserMap.get(cp.checkpointId) ?? null : null;
+        const cwd = cwdMap.get(sessionId) ?? shadow?.cwd ?? "";
         return {
           sessionId,
           startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
           updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
-          cwd:             cwdMap.get(sessionId) ?? shadow?.cwd ?? "",
-          repoRoot:        repoDir ?? null,
-          repoName:        basename(cwdMap.get(sessionId) ?? shadow?.cwd ?? "") || repoName,
+          cwd,
+          repoRoot:        findRepoForPath(cwd)?.localPath ?? repoDir ?? null,
+          repoName:        basename(cwd) || repoName,
           parentSessionId: parentMap.get(sessionId) ?? null,
           childSessionIds: childMap.get(sessionId) ?? [],
           gitUserName:     cpUser?.gitUserName ?? gitUser.name,
@@ -378,29 +398,33 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/sessions/:id", async (req, res) => {
     try {
       const id = req.params.id;
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.shadowSession.findUnique({ where: { sessionId: id }, select: { sessionId: true } }));
+      if (!sdb) { res.status(404).json({ error: "Session not found" }); return; }
+
       const [latestMeta, shadow, firstCwdEvent, firstTimestampEvent, lastEvent, latestSlugEvent] = await Promise.all([
-        db.checkpointSessionMetadata.findFirst({
+        sdb.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
           select: { branch: true, checkpointId: true, agent: true, summary: { select: { intent: true } } },
           orderBy: { createdAt: "desc" },
         }),
-        db.shadowSession.findUnique({ where: { sessionId: id } }),
-        db.logEvent.findFirst({
+        sdb.shadowSession.findUnique({ where: { sessionId: id } }),
+        sdb.logEvent.findFirst({
           where: { sessionId: id, cwd: { not: null } },
           orderBy: { id: "asc" },
           select: { cwd: true },
         }),
-        db.logEvent.findFirst({
+        sdb.logEvent.findFirst({
           where: { sessionId: id, timestamp: { not: null } },
           orderBy: { id: "asc" },
           select: { timestamp: true },
         }),
-        db.logEvent.findFirst({
+        sdb.logEvent.findFirst({
           where: { sessionId: id, timestamp: { not: null } },
           orderBy: { id: "desc" },
           select: { timestamp: true },
         }),
-        db.logEvent.findFirst({
+        sdb.logEvent.findFirst({
           where: { sessionId: id, slug: { not: null } },
           orderBy: { id: "desc" },
           select: { slug: true },
@@ -411,20 +435,21 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         return;
       }
       const cpMeta = latestMeta
-        ? await db.checkpointMetadata.findUnique({
+        ? await sdb.checkpointMetadata.findUnique({
             where: { checkpointId: latestMeta.checkpointId },
             select: { gitUserName: true, gitUserEmail: true },
           })
         : null;
+      const cwd = firstCwdEvent?.cwd ?? shadow?.cwd ?? "";
       const startedAt = firstTimestampEvent?.timestamp ?? shadow?.createdAt ?? null;
       const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
       res.json({
         sessionId:       id,
         startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
         updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
-        cwd:             firstCwdEvent?.cwd ?? shadow?.cwd ?? "",
-        repoRoot:        repoDir ?? null,
-        repoName:        repoName,
+        cwd,
+        repoRoot:        findRepoForPath(cwd)?.localPath ?? repoDir ?? null,
+        repoName:        basename(cwd) || repoName,
         parentSessionId: null,
         childSessionIds: [],
         gitUserName:     cpMeta?.gitUserName ?? gitUser.name,
@@ -447,7 +472,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // GET /api/sessions/:id/overview
   app.get("/api/sessions/:id/overview", async (req, res) => {
     try {
-      const overview = await db.interactionOverview.findUnique({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.interactionOverview.findUnique({ where: { sessionId: req.params.id } }));
+      if (!sdb) { res.status(404).json({ error: "No overview for this session" }); return; }
+      const overview = await sdb.interactionOverview.findUnique({
         where: { sessionId: req.params.id },
       });
       if (!overview) {
@@ -470,7 +498,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // GET /api/v2/sessions/:id/log-events
   app.get("/api/v2/sessions/:id/log-events", async (req, res) => {
     try {
-      const events = await db.logEvent.findMany({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.logEvent.findFirst({ where: { sessionId: req.params.id }, select: { id: true } }));
+      if (!sdb) { res.json([]); return; }
+      const events = await sdb.logEvent.findMany({
         where:   { sessionId: req.params.id },
         orderBy: { timestamp: "asc" },
         include: {
@@ -538,7 +569,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/sessions/:sessionId/checkpoints/:checkpointId/log-events", async (req, res) => {
     try {
       const { sessionId, checkpointId } = req.params;
-      const events = await db.logEvent.findMany({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.logEvent.findFirst({ where: { sessionId }, select: { id: true } }));
+      if (!sdb) { res.json([]); return; }
+      const events = await sdb.logEvent.findMany({
         where: {
           sessionId,
           sessionLink: {
@@ -646,60 +680,60 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
 
   const V2_SESSION_ORDER = { createdAt: "desc" as const };
 
-  // GET /api/v2/checkpoints
+  // GET /api/v2/checkpoints — aggregates across all repo DBs
   app.get("/api/v2/checkpoints", async (_req, res) => {
     try {
-      const checkpoints = await db.checkpointMetadata.findMany({
-        include: {
-          tokenUsage: true,
-          filesTouched: { include: { filePath: true } },
-        },
-      });
+      const allResults: unknown[] = [];
+      const repos = readConfig().repos;
 
-      const checkpointIds = checkpoints.map((c) => c.checkpointId);
-
-      const sessions = await db.checkpointSessionMetadata.findMany({
-        where:   { checkpointId: { in: checkpointIds } },
-        orderBy: V2_SESSION_ORDER,
-        include: V2_SESSION_INCLUDE,
-      });
-
-      // Group sessions by checkpointId
-      const sessionsByCheckpoint = new Map<string, typeof sessions>();
-      for (const s of sessions) {
-        const arr = sessionsByCheckpoint.get(s.checkpointId) ?? [];
-        arr.push(s);
-        sessionsByCheckpoint.set(s.checkpointId, arr);
-      }
-
-      res.json(checkpoints.map((c) => {
-        const cpSessions = sessionsByCheckpoint.get(c.checkpointId) ?? [];
-        const summary = cpSessions.find((s) => s.summary)?.summary ?? null;
-        const latestCreatedAt = cpSessions
-          .filter((s): s is typeof s & { createdAt: Date } => s.createdAt !== null)
-          .map((s) => s.createdAt)
-          .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
-        return {
-          id:               c.id,
-          checkpointId:     c.checkpointId,
-          cliVersion:       c.cliVersion,
-          strategy:         c.strategy,
-          branch:           c.branch,
-          checkpointsCount: c.checkpointsCount,
-          createdAt:        latestCreatedAt?.toISOString() ?? null,
-          tokenUsage: c.tokenUsage ? {
-            inputTokens:         c.tokenUsage.inputTokens,
-            cacheCreationTokens: c.tokenUsage.cacheCreationTokens,
-            cacheReadTokens:     c.tokenUsage.cacheReadTokens,
-            outputTokens:        c.tokenUsage.outputTokens,
-            apiCallCount:        c.tokenUsage.apiCallCount,
-          } : null,
-          filesTouched:  c.filesTouched.map((f) => f.filePath.path),
-          sessionCount:  cpSessions.length,
-          localPath:     repoDir ?? null,
-          summary: summary ? mapV2Summary(summary) : null,
-        };
+      await Promise.all(allDbs().map(async (rdb) => {
+        const checkpoints = await rdb.checkpointMetadata.findMany({
+          include: { tokenUsage: true, filesTouched: { include: { filePath: true } } },
+        });
+        const checkpointIds = checkpoints.map((c) => c.checkpointId);
+        const sessions = await rdb.checkpointSessionMetadata.findMany({
+          where: { checkpointId: { in: checkpointIds } },
+          orderBy: V2_SESSION_ORDER,
+          include: V2_SESSION_INCLUDE,
+        });
+        const sessionsByCheckpoint = new Map<string, typeof sessions>();
+        for (const s of sessions) {
+          const arr = sessionsByCheckpoint.get(s.checkpointId) ?? [];
+          arr.push(s);
+          sessionsByCheckpoint.set(s.checkpointId, arr);
+        }
+        // Find the localPath for this DB
+        const repo = repos.find((r) => dbRegistry.get(r.dbPath) === rdb);
+        for (const c of checkpoints) {
+          const cpSessions = sessionsByCheckpoint.get(c.checkpointId) ?? [];
+          const summary = cpSessions.find((s) => s.summary)?.summary ?? null;
+          const latestCreatedAt = cpSessions
+            .filter((s): s is typeof s & { createdAt: Date } => s.createdAt !== null)
+            .map((s) => s.createdAt)
+            .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+          allResults.push({
+            id:               c.id,
+            checkpointId:     c.checkpointId,
+            cliVersion:       c.cliVersion,
+            strategy:         c.strategy,
+            branch:           c.branch,
+            checkpointsCount: c.checkpointsCount,
+            createdAt:        latestCreatedAt?.toISOString() ?? null,
+            tokenUsage: c.tokenUsage ? {
+              inputTokens:         c.tokenUsage.inputTokens,
+              cacheCreationTokens: c.tokenUsage.cacheCreationTokens,
+              cacheReadTokens:     c.tokenUsage.cacheReadTokens,
+              outputTokens:        c.tokenUsage.outputTokens,
+              apiCallCount:        c.tokenUsage.apiCallCount,
+            } : null,
+            filesTouched:  c.filesTouched.map((f) => f.filePath.path),
+            sessionCount:  cpSessions.length,
+            localPath:     repo?.localPath ?? null,
+            summary: summary ? mapV2Summary(summary) : null,
+          });
+        }
       }));
+      res.json(allResults);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -710,8 +744,8 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     try {
       const checkpointId = req.params.id;
       const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
-      const repo = qLocalPath ? findRepo(qLocalPath) : null;
-      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
+      const cdb = await resolveDb(qLocalPath, (d) => d.checkpointMetadata.findUnique({ where: { checkpointId }, select: { id: true } }));
+      if (!cdb) { res.status(404).json({ error: "Not found" }); return; }
       const checkpoint = await cdb.checkpointMetadata.findUnique({
         where: { checkpointId },
         include: {
@@ -757,9 +791,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     try {
       const checkpointId = req.params.id;
       const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const cdb = await resolveDb(qLocalPath, (d) => d.checkpointIdGitOidJoin.findFirst({ where: { checkpointId }, select: { checkpointId: true } }));
+      if (!cdb) { res.status(404).end(); return; }
       const repo = qLocalPath ? findRepo(qLocalPath) : null;
-      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
-      const cpLocalPath = repo ? repo.localPath : repoDir;
+      const cpLocalPath = repo?.localPath ?? repoDir;
       if (!cpLocalPath) { res.status(404).end(); return; }
       const join = await cdb.checkpointIdGitOidJoin.findFirst({
         where: { checkpointId },
@@ -781,9 +816,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     try {
       const checkpointId = req.params.id;
       const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const cdb = await resolveDb(qLocalPath, (d) => d.checkpointIdGitOidJoin.findFirst({ where: { checkpointId }, select: { checkpointId: true } }));
+      if (!cdb) { res.json([]); return; }
       const repo = qLocalPath ? findRepo(qLocalPath) : null;
-      const cdb = repo && repo.dbPath !== dbPath ? await getDb(repo.dbPath) : db;
-      const cpLocalPath = repo ? repo.localPath : repoDir;
+      const cpLocalPath = repo?.localPath ?? repoDir;
       if (!cpLocalPath) { res.json([]); return; }
       const join = await cdb.checkpointIdGitOidJoin.findFirst({
         where: { checkpointId },
@@ -810,25 +846,30 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const checkpointId = req.params.id;
       const filePath = typeof req.query.path === "string" ? req.query.path : null;
       const side = req.query.side === "before" ? "before" : "after";
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
       if (!filePath) { res.status(400).end(); return; }
-      const join = await db.checkpointIdGitOidJoin.findFirst({
+      const cdb = await resolveDb(qLocalPath, (d) => d.checkpointIdGitOidJoin.findFirst({ where: { checkpointId }, select: { checkpointId: true } }));
+      if (!cdb) { res.status(404).end(); return; }
+      const join = await cdb.checkpointIdGitOidJoin.findFirst({
         where: { checkpointId },
         select: { gitOid: true },
       });
       if (!join) { res.status(404).end(); return; }
       // Determine which repo contains this checkpoint's commit.
-      // Look up the session's cwd via CheckpointSessionMetadata → ShadowSession.
-      const sessionLink = await db.checkpointSessionMetadata.findFirst({
-        where: { checkpointId },
-        select: { sessionId: true },
-      });
-      let cpRepoDir = repoDir;
-      if (sessionLink) {
-        const shadow = await db.shadowSession.findUnique({
-          where: { sessionId: sessionLink.sessionId },
-          select: { cwd: true },
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      let cpRepoDir = repo?.localPath ?? repoDir;
+      if (!cpRepoDir) {
+        const sessionLink = await cdb.checkpointSessionMetadata.findFirst({
+          where: { checkpointId },
+          select: { sessionId: true },
         });
-        if (shadow?.cwd) cpRepoDir = shadow.cwd;
+        if (sessionLink) {
+          const shadow = await cdb.shadowSession.findUnique({
+            where: { sessionId: sessionLink.sessionId },
+            select: { cwd: true },
+          });
+          if (shadow?.cwd) cpRepoDir = shadow.cwd;
+        }
       }
       if (!cpRepoDir) { res.status(400).end(); return; }
       const ref = side === "before" ? `${join.gitOid}^:${filePath}` : `${join.gitOid}:${filePath}`;
@@ -850,7 +891,11 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   app.get("/api/v2/sessions/:id/checkpoints", async (req, res) => {
     try {
       const sessionId = req.params.id;
-      const sessionRows = await db.checkpointSessionMetadata.findMany({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.checkpointSessionMetadata.findFirst({ where: { sessionId }, select: { id: true } }));
+      if (!sdb) { res.json([]); return; }
+
+      const sessionRows = await sdb.checkpointSessionMetadata.findMany({
         where:   { sessionId },
         orderBy: { createdAt: "desc" },
         include: {
@@ -860,19 +905,18 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         },
       });
 
-      const gitOidRows = await db.checkpointIdGitOidJoin.findMany({
+      const gitOidRows = await sdb.checkpointIdGitOidJoin.findMany({
         where: { checkpointId: { in: sessionRows.map((s) => s.checkpointId) } },
         select: { checkpointId: true, gitOid: true },
       });
       const gitOidMap = new Map(gitOidRows.map((r) => [r.checkpointId, r.gitOid]));
 
       // Look up the repo path for this session so we can read commit messages.
-      // Fall back to all configured repos so messages show regardless of current workspace.
       const [shadow, firstCwdEv] = await Promise.all([
-        db.shadowSession.findUnique({ where: { sessionId }, select: { cwd: true } }),
-        db.logEvent.findFirst({ where: { sessionId, cwd: { not: null } }, orderBy: { id: "asc" }, select: { cwd: true } }),
+        sdb.shadowSession.findUnique({ where: { sessionId }, select: { cwd: true } }),
+        sdb.logEvent.findFirst({ where: { sessionId, cwd: { not: null } }, orderBy: { id: "asc" }, select: { cwd: true } }),
       ]);
-      const primaryDir = repoDir ?? firstCwdEv?.cwd ?? shadow?.cwd;
+      const primaryDir = qLocalPath ?? firstCwdEv?.cwd ?? shadow?.cwd ?? repoDir;
       const candidateDirs = [
         primaryDir,
         ...readConfig().repos.map((r) => r.localPath).filter((p) => p !== primaryDir),
@@ -932,7 +976,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       const repo = findRepoForPath(localPath);
       if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }
 
-      const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
+      const repoDb = dbRegistry.get(repo.dbPath) ?? await getDb(repo.dbPath);
 
       // Walk git log and collect checkpoint IDs in commit order
       const orderedIds: string[] = [];
@@ -1035,7 +1079,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       return;
     }
     try {
-      const updated = await db.openItem.update({
+      // Open items can be in any repo's DB — find which one has this ID
+      const oidb = await findInDbs((d) => d.openItem.findUnique({ where: { id }, select: { id: true } }));
+      if (!oidb) { res.status(404).json({ error: "Not found" }); return; }
+      const updated = await oidb.db.openItem.update({
         where: { id },
         data: {
           ...(status !== undefined ? { status } : {}),
@@ -1071,12 +1118,15 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         `end tell`,
       ].join("\n");
       execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
-      // Mark selected open items as in_progress
+      // Mark selected open items as in_progress (in the correct DB)
       if (openItemIds?.length) {
-        await db.openItem.updateMany({
-          where: { id: { in: openItemIds } },
-          data: { status: "in_progress" },
-        });
+        const spawnDb = cwd ? dbForRepo(cwd) : null;
+        if (spawnDb) {
+          await spawnDb.openItem.updateMany({
+            where: { id: { in: openItemIds } },
+            data: { status: "in_progress" },
+          });
+        }
       }
       res.json({ started: true });
     } catch (err) {
@@ -1088,7 +1138,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // POST /api/sessions/:id/archive — hide session from main listing
   app.post("/api/sessions/:id/archive", async (req, res) => {
     try {
-      await db.archivedSession.upsert({
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : (typeof req.body?.localPath === "string" ? req.body.localPath : null);
+      const sdb = await resolveDb(qLocalPath, (d) => d.shadowSession.findUnique({ where: { sessionId: req.params.id }, select: { sessionId: true } }));
+      if (!sdb) { res.status(404).json({ error: "Session not found" }); return; }
+      await sdb.archivedSession.upsert({
         where: { sessionId: req.params.id },
         create: { sessionId: req.params.id },
         update: {},
@@ -1102,7 +1155,10 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // DELETE /api/sessions/:id/archive — un-hide session
   app.delete("/api/sessions/:id/archive", async (req, res) => {
     try {
-      await db.archivedSession.deleteMany({ where: { sessionId: req.params.id } });
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      const sdb = await resolveDb(qLocalPath, (d) => d.archivedSession.findFirst({ where: { sessionId: req.params.id }, select: { sessionId: true } }));
+      if (!sdb) { res.status(404).json({ error: "Session not found" }); return; }
+      await sdb.archivedSession.deleteMany({ where: { sessionId: req.params.id } });
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -1128,40 +1184,54 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   });
 
-  // GET /api/search?q=TEXT[&limit=N]
+  // GET /api/search?q=TEXT[&limit=N] — searches across all repo DBs
   app.get("/api/search", async (req, res) => {
     const q     = typeof req.query.q     === "string" ? decodeURIComponent(req.query.q.trim()) : "";
     const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit)  : 50;
     if (!q) { res.status(400).json({ error: "q is required" }); return; }
     try {
-      const results = await searchLogContent(db, q, Math.min(limit, 200));
+      const maxPerDb = Math.min(limit, 200);
+      // Search all DBs and merge results
+      const allResults = (await Promise.all(allDbs().map(async (rdb) => {
+        try { return await searchLogContent(rdb, q, maxPerDb); }
+        catch { return []; } // FTS syntax error — skip this DB
+      }))).flat();
+
+      // Sort by rank (lower = better match) and limit
+      allResults.sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+      const results = allResults.slice(0, maxPerDb);
+
       const sessionIds = [...new Set(results.map((r) => r.sessionId))];
-      const sessionMetas = sessionIds.length > 0
-        ? await db.checkpointSessionMetadata.findMany({
+      // Gather user info from all DBs
+      const sessionUserMap = new Map<string, { gitUserName: string | null; gitUserEmail: string | null }>();
+      if (sessionIds.length > 0) {
+        await Promise.all(allDbs().map(async (rdb) => {
+          const metas = await rdb.checkpointSessionMetadata.findMany({
             where: { sessionId: { in: sessionIds } },
             select: { sessionId: true, checkpointId: true },
             distinct: ["sessionId"],
             orderBy: { createdAt: "desc" },
-          })
-        : [];
-      const cpIds = [...new Set(sessionMetas.map((m) => m.checkpointId))];
-      const cpUsers = cpIds.length > 0
-        ? await db.checkpointMetadata.findMany({
+          });
+          if (metas.length === 0) return;
+          const cpIds = [...new Set(metas.map((m) => m.checkpointId))];
+          const cpUsers = await rdb.checkpointMetadata.findMany({
             where: { checkpointId: { in: cpIds } },
             select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
-          })
-        : [];
-      const cpUserMap = new Map(cpUsers.map((r) => [r.checkpointId, r]));
-      const sessionUserMap = new Map(sessionMetas.map((m) => {
-        const u = cpUserMap.get(m.checkpointId);
-        return [m.sessionId, { gitUserName: u?.gitUserName ?? null, gitUserEmail: u?.gitUserEmail ?? null }];
-      }));
+          });
+          const cpUserMap = new Map(cpUsers.map((r) => [r.checkpointId, r]));
+          for (const m of metas) {
+            const u = cpUserMap.get(m.checkpointId);
+            if (u && !sessionUserMap.has(m.sessionId)) {
+              sessionUserMap.set(m.sessionId, { gitUserName: u.gitUserName, gitUserEmail: u.gitUserEmail });
+            }
+          }
+        }));
+      }
       res.json(results.map((r) => {
         const u = sessionUserMap.get(r.sessionId);
         return { ...r, gitUserName: u?.gitUserName ?? gitUser.name, gitUserEmail: u?.gitUserEmail ?? gitUser.email };
       }));
     } catch (err) {
-      // FTS5 MATCH errors (bad syntax) come back as exceptions
       res.status(400).json({ error: String(err) });
     }
   });
@@ -1189,8 +1259,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         let gitUserName: string | null = null;
         let gitUserEmail: string | null = null;
         try {
-          // Reuse the already-open primary db if this repo's dbPath matches
-          const repoDb = repo.dbPath === dbPath ? db : await getDb(repo.dbPath);
+          const repoDb = dbRegistry.get(repo.dbPath) ?? await getDb(repo.dbPath);
           const latest = await repoDb.checkpointMetadata.findFirst({
             orderBy: { id: "desc" },
             select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
@@ -1279,11 +1348,14 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       process.stderr.write(`repo onboard [${name}]: pushing schema to ${entry.dbPath}\n`);
       try {
         await pushSchema(repoDb);
+        await setupLogContentFts(repoDb);
         process.stderr.write(`repo onboard [${name}]: schema ready\n`);
       } catch (err) {
         // Non-fatal: schema may already be applied
         process.stderr.write(`repo onboard [${name}]: schema push warning — ${err}\n`);
       }
+      // Register in the live DB registry
+      dbRegistry.set(entry.dbPath, repoDb);
 
       // Kick off initial indexing in the background — don't block the response
       void indexCheckpointsForRepo(name, localPath, entry.dbPath);
@@ -1307,6 +1379,9 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
         res.status(400).json({ error: "localPath is required" });
         return;
       }
+      // Remove from live registry
+      const repo = findRepoForPath(localPath);
+      if (repo) dbRegistry.delete(repo.dbPath);
       removeRepo(localPath);
       res.status(204).end();
     } catch (err) {
@@ -1468,21 +1543,17 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
     }
   }
 
-  // Start watchers for the primary DB and all configured repos
-  const nameByDbPath = new Map(readConfig().repos.map((r) => [r.dbPath, r.name]));
-  startDbWatcher(dbPath, nameByDbPath.get(dbPath) ?? basename(dbPath));
+  // Start watchers for all configured repos
   for (const r of readConfig().repos) {
     startDbWatcher(r.dbPath, r.name);
     startGitWatcher(r.localPath, r.name, r.dbPath);
   }
 
-  // Fallback poll — catches any events missed by the file watchers (e.g. network mounts,
-  // platforms where fs.watch is unreliable, or DB files that didn't exist at startup).
+  // Fallback poll — catches any events missed by the file watchers
   const poller = setInterval(async () => {
     const repos = readConfig().repos;
-    const allDbPaths = [...new Set([dbPath, ...repos.map((r) => r.dbPath)])];
-    const labels = new Map([...nameByDbPath, ...repos.map((r): [string, string] => [r.dbPath, r.name])]);
-    await Promise.all(allDbPaths.map((p) => checkDbAndBroadcast(p, labels.get(p) ?? basename(p))));
+    const labels = new Map(repos.map((r): [string, string] => [r.dbPath, r.name]));
+    await Promise.all(repos.map((r) => checkDbAndBroadcast(r.dbPath, labels.get(r.dbPath) ?? r.name)));
   }, 30_000);
 
   // ── Per-repo indexer helpers ───────────────────────────────────────────────
@@ -1496,7 +1567,7 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
       try {
         execSync(`git -C ${JSON.stringify(localPath)} worktree prune`, { stdio: "pipe" });
         execSync(
-          `git -C ${JSON.stringify(localPath)} worktree add ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
+          `git -C ${JSON.stringify(localPath)} worktree add --detach ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
           { stdio: "pipe" },
         );
         process.stderr.write(`checkpoint indexer: worktree created at ${worktreePath}\n`);
