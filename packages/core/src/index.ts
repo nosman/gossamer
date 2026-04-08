@@ -1,4 +1,4 @@
-export { getDb } from "./db.js";
+export { getDb, evictDb } from "./db.js";
 export {
   parseFullJsonl,
   indexCheckpointV2,

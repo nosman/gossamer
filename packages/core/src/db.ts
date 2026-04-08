@@ -30,3 +30,16 @@ export async function getDb(dbPath: string): Promise<PrismaClient> {
   dbCache.set(abs, db);
   return db;
 }
+
+/**
+ * Remove a cached PrismaClient so the next `getDb()` call creates a fresh one.
+ * Useful when the underlying .db file was deleted and recreated.
+ */
+export function evictDb(dbPath: string): void {
+  const abs = resolve(dbPath);
+  const cached = dbCache.get(abs);
+  if (cached) {
+    cached.$disconnect().catch(() => {});
+    dbCache.delete(abs);
+  }
+}

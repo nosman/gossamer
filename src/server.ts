@@ -14,7 +14,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpServer } from "./mcp-server.js";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { getDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
+import { getDb, evictDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
 import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, type RepoConfig } from "./config.js";
 
@@ -77,10 +77,12 @@ const SCHEMA_SQL_PATH    = existsSync(SCHEMA_SQL_DEV) ? SCHEMA_SQL_DEV : SCHEMA_
 async function pushSchema(db: PrismaClient): Promise<void> {
   const sql = readFileSync(SCHEMA_SQL_PATH, "utf8");
   // Split on statement boundaries (semicolon + newline) and execute each one.
+  // Strip leading SQL comment lines (e.g. "-- CreateTable") from each chunk
+  // so that they don't prevent execution.
   const stmts = sql
     .split(/;\s*\n/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0 && !s.startsWith("--"));
+    .map((s) => s.replace(/^(\s*--.*\n)*/gm, "").trim())
+    .filter((s) => s.length > 0);
   for (const stmt of stmts) {
     await db.$executeRawUnsafe(stmt);
   }
@@ -163,16 +165,23 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   // Strip CLAUDECODE so spawned sessions are not blocked by nested-session detection
   delete process.env.CLAUDECODE;
 
-  const db = await getDb(dbPath);
+  let db = await getDb(dbPath);
 
   // Ensure schema is applied on startup (handles fresh DBs and bundled VSIX where
   // the repo-registration path hasn't run yet).
+  // If the DB file is corrupt, delete it and retry once.
   try {
     await pushSchema(db);
     process.stderr.write(`[gossamer] schema ready: ${dbPath}\n`);
   } catch (err) {
-    process.stderr.write(`[gossamer] schema push failed — ${err}\n`);
-    throw err;
+    process.stderr.write(`[gossamer] schema push failed, deleting DB and retrying — ${err}\n`);
+    evictDb(dbPath);
+    try { (await import("fs")).unlinkSync(dbPath); } catch {}
+    try { (await import("fs")).unlinkSync(dbPath + "-wal"); } catch {}
+    try { (await import("fs")).unlinkSync(dbPath + "-shm"); } catch {}
+    db = await getDb(dbPath);
+    await pushSchema(db);
+    process.stderr.write(`[gossamer] schema ready (after retry): ${dbPath}\n`);
   }
 
   // Ensure FTS table exists and is up-to-date on startup.
@@ -182,6 +191,36 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   } catch (err) {
     // Non-fatal: LogContent table may not exist yet on a brand-new DB before first index.
     process.stderr.write(`[gossamer] FTS sync skipped — ${err}\n`);
+  }
+
+  // Push schema to every configured repo DB (not just the primary one).
+  // This handles repos that were already in config.json but whose .db files
+  // are fresh or were deleted — without this, all indexers would fail with
+  // "table does not exist" errors.
+  // If the DB file is corrupt (e.g. macOS quarantine xattr, stale WAL), delete
+  // it, evict the cached Prisma client, and retry once with a clean file.
+  for (const repo of readConfig().repos) {
+    if (repo.dbPath === dbPath) continue; // already handled above
+    mkdirSync(dirname(repo.dbPath), { recursive: true });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const repoDb = await getDb(repo.dbPath);
+        await pushSchema(repoDb);
+        await setupLogContentFts(repoDb);
+        process.stderr.write(`[gossamer] schema ready: ${repo.dbPath}\n`);
+        break;
+      } catch (err) {
+        if (attempt === 0) {
+          process.stderr.write(`[gossamer] schema push failed for ${repo.name}, deleting DB and retrying — ${err}\n`);
+          evictDb(repo.dbPath);
+          try { (await import("fs")).unlinkSync(repo.dbPath); } catch {}
+          try { (await import("fs")).unlinkSync(repo.dbPath + "-wal"); } catch {}
+          try { (await import("fs")).unlinkSync(repo.dbPath + "-shm"); } catch {}
+        } else {
+          process.stderr.write(`[gossamer] schema push failed for ${repo.name} after retry — ${err}\n`);
+        }
+      }
+    }
   }
 
   const app = express();
@@ -1570,7 +1609,13 @@ export async function startServer(dbPath: string, port: number, repoDir?: string
   });
   process.stderr.write(`MCP server: listening at http://localhost:${port}/mcp\n`);
 
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
+    httpServer.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        process.stderr.write(`[gossamer] FATAL: port ${port} is already in use. Kill the existing process or choose a different port in ~/.gossamer/config.json.\n`);
+      }
+      reject(err);
+    });
     httpServer.listen(port, () => {
       process.stderr.write(`claude-hook-handler serve: listening on http://localhost:${port}\n`);
       resolve();

@@ -253,11 +253,27 @@ export class GossamerPanel {
       .catch((err) => this.panel.webview.postMessage({ type: "server_error", error: String(err) }));
   }
 
-  private spawnServer() {
+  private async spawnServer() {
     // Reuse existing static server if already running on the same port
     if (GossamerPanel.server && GossamerPanel.serverPort === this.port) {
       console.log("[Gossamer] reusing existing server on port", this.port);
       return;
+    }
+
+    // Kill any orphaned server from a previous VS Code session that is still
+    // holding the port.  Without this, the new spawn fails with EADDRINUSE.
+    if (await probeServer(this.port)) {
+      console.log("[Gossamer] killing orphaned server on port", this.port);
+      try {
+        execFileSync("lsof", ["-ti", `tcp:${this.port}`], { encoding: "utf8" })
+          .trim().split(/\s+/)
+          .filter(Boolean)
+          .forEach((pid) => { try { process.kill(Number(pid), "SIGTERM"); } catch {} });
+        // Give the old process a moment to release the port
+        await new Promise((r) => setTimeout(r, 500));
+      } catch {
+        // lsof may fail if nothing is found — proceed anyway
+      }
     }
 
     if (!existsSync(SERVE_SCRIPT)) {
