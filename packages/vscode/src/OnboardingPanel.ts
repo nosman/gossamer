@@ -56,7 +56,7 @@ export class OnboardingPanel {
     this.panel.webview.html = this.getHtml(this.currentStep());
     this.panel.webview.onDidReceiveMessage((msg: { type: string }) => {
       if (msg.type === "check") this.refresh();
-      if (msg.type === "install_entire") this.runInTerminal("brew install entire/tap/entire");
+      if (msg.type === "install_entire") this.runInTerminal("brew install entireio/tap/entire");
       if (msg.type === "configure_entire") this.runConfigureInWorkspace();
     });
     this.panel.onDidDispose(() => {
@@ -232,7 +232,7 @@ export class OnboardingPanel {
         Gossamer requires the <strong>Entire CLI</strong> to capture and index your coding sessions.
         Install it with Homebrew:
       </p>
-      <code>brew install entire/tap/entire</code>
+      <code>brew install entireio/tap/entire</code>
       <div class="actions">
         <button id="btn-install">Open terminal with install command</button>
         <button id="btn-check" class="secondary">Check again</button>
