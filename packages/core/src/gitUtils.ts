@@ -22,6 +22,8 @@ export async function findCommitForCheckpoint(
         branch: b,
         fields: ["hash", "subject", "body", "authorName", "authorEmail"] as const,
         number: 10_000,
+        nameStatus: false,
+        execOptions: { maxBuffer: 100 * 1024 * 1024 },
       });
     } catch {
       continue;

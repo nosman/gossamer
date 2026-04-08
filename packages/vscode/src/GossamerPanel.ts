@@ -532,7 +532,7 @@ export class GossamerPanel {
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}">window.__GOSSAMER_PORT__ = ${port};</script>
+  <script nonce="${nonce}">window.__GOSSAMER_PORT__ = ${port}; window.__GOSSAMER_REPO_PATH__ = ${JSON.stringify(this.repoPath)};</script>
   <script nonce="${nonce}" type="module" src="${scriptUri}"></script>
 </body>
 </html>`;

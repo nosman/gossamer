@@ -2,10 +2,11 @@
 // The port is injected by GossamerPanel into window.__GOSSAMER_PORT__.
 
 declare global {
-  interface Window { __GOSSAMER_PORT__: number; }
+  interface Window { __GOSSAMER_PORT__: number; __GOSSAMER_REPO_PATH__?: string; }
 }
 
 const port = () => window.__GOSSAMER_PORT__;
+const repoPath = () => window.__GOSSAMER_REPO_PATH__ ?? "";
 const API_BASE = () => `http://localhost:${port()}/api`;
 const WS_URL   = () => `ws://localhost:${port()}`;
 
@@ -32,19 +33,24 @@ export interface Session {
 }
 
 export async function fetchSessions(includeArchived = false): Promise<Session[]> {
-  const qs  = includeArchived ? "?archived=1" : "";
+  const params = new URLSearchParams();
+  if (includeArchived) params.set("archived", "1");
+  if (repoPath()) params.set("localPath", repoPath());
+  const qs = params.toString() ? `?${params}` : "";
   const res = await fetch(`${API_BASE()}/sessions${qs}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Session[]>;
 }
 
 export async function archiveSession(sessionId: string): Promise<void> {
-  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" });
+  const lp = repoPath() ? `?localPath=${encodeURIComponent(repoPath())}` : "";
+  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(sessionId)}/archive${lp}`, { method: "POST" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
 export async function unarchiveSession(sessionId: string): Promise<void> {
-  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(sessionId)}/archive`, { method: "DELETE" });
+  const lp = repoPath() ? `?localPath=${encodeURIComponent(repoPath())}` : "";
+  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(sessionId)}/archive${lp}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
@@ -94,7 +100,8 @@ export interface LogEventItem {
 }
 
 export async function fetchSession(id: string): Promise<Session> {
-  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(id)}`);
+  const lp = repoPath() ? `?localPath=${encodeURIComponent(repoPath())}` : "";
+  const res = await fetch(`${API_BASE()}/sessions/${encodeURIComponent(id)}${lp}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Session>;
 }
@@ -114,13 +121,15 @@ export interface Checkpoint {
 }
 
 export async function fetchCheckpoints(sessionId: string): Promise<Checkpoint[]> {
-  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`);
+  const lp = repoPath() ? `?localPath=${encodeURIComponent(repoPath())}` : "";
+  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints${lp}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Checkpoint[]>;
 }
 
 export async function fetchLogEvents(id: string): Promise<LogEventItem[]> {
-  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(id)}/log-events`);
+  const lp = repoPath() ? `?localPath=${encodeURIComponent(repoPath())}` : "";
+  const res = await fetch(`${API_BASE()}/v2/sessions/${encodeURIComponent(id)}/log-events${lp}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<LogEventItem[]>;
 }

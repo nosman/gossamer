@@ -243,6 +243,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
   // Aggregates across ALL repo DBs.
   app.get("/api/sessions", async (_req, res) => {
     try {
+      const qLocalPath = typeof _req.query.localPath === "string" ? _req.query.localPath : null;
+      const sortDir = qLocalPath ?? repoDir;
       const dbs = allDbs();
 
       // Gather data from every repo DB in parallel.
@@ -383,8 +385,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       });
 
       result.sort((a, b) => {
-        const aLocal = repoDir ? (a.cwd === repoDir || a.cwd.startsWith(repoDir + "/") ? 0 : 1) : 1;
-        const bLocal = repoDir ? (b.cwd === repoDir || b.cwd.startsWith(repoDir + "/") ? 0 : 1) : 1;
+        const aLocal = sortDir ? (a.cwd === sortDir || a.cwd.startsWith(sortDir + "/") ? 0 : 1) : 1;
+        const bLocal = sortDir ? (b.cwd === sortDir || b.cwd.startsWith(sortDir + "/") ? 0 : 1) : 1;
         if (aLocal !== bLocal) return aLocal - bLocal;
         return b.updatedAt.localeCompare(a.updatedAt);
       });
