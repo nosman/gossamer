@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "74010c9d8e1e",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T05:26:29.259439Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "packages/vscode/LICENSE.txt",
+    "packages/vscode/bundled-server/serve.js"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "24c217c8d37c",
+  "token_usage": {
+    "input_tokens": 311,
+    "cache_creation_tokens": 787700,
+    "cache_read_tokens": 34840972,
+    "output_tokens": 93513,
+    "api_call_count": 263
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Fix multiple bugs in the Gossamer VS Code extension: orphaned server processes causing EADDRINUSE errors, missing database schema causing table-not-found errors, checkpoints not showing in the treeview, sessions not being sorted by current workspace, and live session updates not appearing.",
+    "outcome": "Fixed orphaned server process handling (kill via lsof before spawning), fixed pushSchema silently executing 0 statements (comment-line filter bug), added per-repo DB schema push at startup with retry-on-corruption, replaced single primary DB with a per-repo DB registry across all endpoints, fixed gitlog maxBuffer overflow that prevented git OID mappings, fixed session sorting to use requesting workspace's localPath, added MIT license to repo and VSIX bundle.",
+    "learnings": {
+      "repo": [
+        "Each repo has its own SQLite DB at ~/.gossamer/repos/\u003crepo-name\u003e.db — there is no primary/secondary hierarchy, all repos are peers",
+        "pushSchema splits schema.sql on ';\\n' but every chunk starts with '-- CreateTable' comments, so the old filter (!s.startsWith('--')) silently discarded all 56 statements",
+        "The gitlog npm package defaults to nameStatus:true which appends --name-status to git log, causing maxBuffer overflow on large repos with 10k commits and silently swallowing all git OID mappings",
+        "Checkpoint commits live on entire/checkpoints/v1 branch with 'Checkpoint:' trailers, but findCommitForCheckpoint searches feature branches for 'Entire-Checkpoint:' trailers — these are actually different things that happen to both exist",
+        "Shadow branch refs are loose files under .git/refs/heads/entire/ — fs.watch on that dir correctly detects new sessions",
+        "The Entire CLI session-start hook runs (creates metadata dir + prompt.txt) but the ongoing event tracking (full.jsonl + shadow branch commits) has been broken for ~3 weeks in cosmos-graphql",
+        "macOS com.apple.provenance xattr on SQLite DB files causes 'disk I/O error' — affected gossamer-test.db",
+        "getDb() caches Prisma clients by path, so deleting a corrupt DB file doesn't help within the same process — evictDb() is needed before retry",
+        "git worktree add fails with 'branch already used by worktree' when two repos share the same entire/checkpoints/v1 branch — fix is --detach flag",
+        "The server was using a single 'db' (primary Prisma client) for most endpoints, bound to the server startup --repo-dir. Sessions in other repos would return empty results"
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema(db) only ran on primary DB at startup — secondary repo DBs were never schema-initialized"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1574,
+          "end_line": 1574,
+          "finding": "httpServer.listen(port) had no EADDRINUSE error handler — silent crash on port conflict"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer() only checked in-memory GossamerPanel.server static variable — orphaned processes from crashed sessions held the port undetected"
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "findCommitForCheckpoint used gitlog with default nameStatus:true, causing maxBuffer overflow on large repos — fix: nameStatus:false + maxBuffer:100MB"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 144,
+          "end_line": 144,
+          "finding": "saveGitOidMapping catch block swallows ALL errors silently — maxBuffer error was caught here and zero git OID mappings were stored"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 494,
+          "end_line": 496,
+          "finding": "saveGitOidMapping called with meta.branch from root metadata.json and repoPath — correct, but gitlog overflow prevented it from ever finding commits"
+        },
+        {
+          "path": "packages/vscode/src/webview/api.ts",
+          "finding": "None of the webview API calls passed ?localPath= — all endpoint DB resolution was done by probing all DBs in insertion order rather than directly"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints used bare 'db' (primary Prisma client) — sessions in other repos returned empty arrays"
+        }
+      ],
+      "workflow": [
+        "When pushSchema silently does nothing, check the SQL statement filter logic — comments in SQL files can defeat startsWith checks",
+        "Test schema push with an actual SQLite file early rather than relying on compile-time correctness",
+        "maxBuffer overflow in child_process execFile is silently caught by generic catch blocks — always log the error type/message in catch handlers",
+        "Use --detach when adding git worktrees that might share branch names across multiple repos",
+        "fs.watch on .git/refs/heads/entire/ correctly detects new shadow branch commits — the indexer trigger chain works"
+      ]
+    },
+    "friction": [
+      "pushSchema bug required 4+ iterations to diagnose: first the comment filter was wrong, then the compiled vs source discrepancy, then the macOS xattr disk I/O error on gossamer-test.db masked success on primary DB",
+      "gitlog maxBuffer overflow was caught silently with a generic catch, making it appear as if saveGitOidMapping was running correctly but producing 0 results — required manual stderr debugging to find",
+      "The 'adopt orphaned server' approach was tried first and caused 'error loading sessions' — should have killed and respawned immediately",
+      "resolveDb probe for GET /api/sessions/:id only checked shadowSession table, missing sessions that existed only in checkpointSessionMetadata or logEvent",
+      "The Entire CLI background event tracking has been silently broken for ~3 weeks in cosmos-graphql — session-start hook runs but no full.jsonl or shadow branch commits are written"
+    ],
+    "open_items": [
+      "Entire CLI broken in cosmos-graphql: session-start hook runs but ongoing event tracking (full.jsonl writes, shadow branch commits, checkpoint commits) is not functioning — needs separate investigation",
+      "Gossamer could index sessions from .entire/metadata/ on disk as a fallback for sessions where Entire hasn't committed a shadow branch yet",
+      "GET /api/repos/current still has a potential issue — it now accepts ?localPath= but ensureRepoRegistered flow could still trigger unnecessary re-registrations",
+      "The restart path in GossamerPanel kills the in-memory process but doesn't handle orphaned servers from previous VSCode sessions — partial fix applied but not comprehensive",
+      "resolveDb fallback probe across all DBs works but could be slow with many repos — consider adding localPath to session records so they can be resolved directly",
+      "DELETE /api/repos should evict from dbRegistry — added but needs testing",
+      "No test coverage for the per-repo DB registry — all validation was done via manual curl tests"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T05:25:43.944487Z",
+    "agent_lines": 19,
+    "agent_removed": 0,
+    "human_added": 2,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 23,
+    "total_lines_changed": 23,
+    "agent_percentage": 82.6086956521739,
+    "metric_version": 2
+  }
+}
