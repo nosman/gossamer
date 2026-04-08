@@ -1,0 +1,73 @@
+When i start the server, i get 
+                ^
+extensionHostProcess.js:624
+
+extensionHostProcess.js:624
+PrismaClientKnownRequestError: 
+extensionHostProcess.js:624
+Invalid `prisma.$executeRawUnsafe()` invocation:
+extensionHostProcess.js:624
+2
+
+extensionHostProcess.js:624
+Raw query failed. Code: `SQLITE_ERROR`. Message: `no such table: LogContent`
+extensionHostProcess.js:624
+    at zr.handleRequestError (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50279:17)
+extensionHostProcess.js:624
+    at zr.handleAndLogRequestError (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50265:16)
+extensionHostProcess.js:624
+    at zr.request (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50256:16)
+extensionHostProcess.js:624
+    at async a (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50649:21)
+extensionHostProcess.js:624
+    at async startServer (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:78794:3)
+extensionHostProcess.js:624
+    at async file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:80067:1 {
+extensionHostProcess.js:624
+  code: 'P2010',
+
+---
+
+Are the sql table definitions being pushed to every database for every repo we track?
+
+---
+
+When i run the extension in the debugging host, i get the same table missing error. How do we initialize the database?
+
+---
+
+It's a syntax exception 
+PrismaClientKnownRequestError: 
+extensionHostProcess.js:624
+Invalid `prisma.$executeRawUnsafe()` invocation:
+extensionHostProcess.js:624
+2
+
+extensionHostProcess.js:624
+near "┌─────────────────────────────────────────────────────────┐": syntax error
+extensionHostProcess.js:624
+    at zr.handleRequestError (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50279:17)
+extensionHostProcess.js:624
+    at zr.handleAndLogRequestError (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50265:16)
+extensionHostProcess.js:624
+    at zr.request (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50256:16)
+extensionHostProcess.js:624
+    at async a (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:50649:21)
+extensionHostProcess.js:624
+    at async pushSchema (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:78772:5)
+extensionHostProcess.js:624
+    at async startServer (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:78795:5)
+extensionHostProcess.js:624
+    at async file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:80083:1 {
+extensionHostProcess.js:624
+  code: 'SQLITE_ERROR',
+extensionHostProcess.js:624
+  meta: undefined,
+extensionHostProcess.js:624
+  clientVersion: '7.4.2'
+extensionHostProcess.js:624
+}
+extensionHostProcess.js:624
+
+extensionHostProcess.js:624
+Node.js v24.13.1
