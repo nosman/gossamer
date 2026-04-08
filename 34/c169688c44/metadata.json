@@ -3,7 +3,7 @@
   "checkpoint_id": "34c169688c44",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 8,
   "files_touched": [
     "packages/core/src/indexer.ts",
     "packages/vscode/bundled-server/serve.js",
@@ -18,13 +18,19 @@
       "transcript": "/34/c169688c44/0/full.jsonl",
       "content_hash": "/34/c169688c44/0/content_hash.txt",
       "prompt": "/34/c169688c44/0/prompt.txt"
+    },
+    {
+      "metadata": "/34/c169688c44/1/metadata.json",
+      "transcript": "/34/c169688c44/1/full.jsonl",
+      "content_hash": "/34/c169688c44/1/content_hash.txt",
+      "prompt": "/34/c169688c44/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7,
-    "cache_creation_tokens": 9636,
-    "cache_read_tokens": 49229,
-    "output_tokens": 213,
-    "api_call_count": 3
+    "input_tokens": 167,
+    "cache_creation_tokens": 395103,
+    "cache_read_tokens": 14082829,
+    "output_tokens": 52449,
+    "api_call_count": 146
   }
 }

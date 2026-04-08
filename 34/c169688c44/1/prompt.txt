@@ -1,0 +1,29 @@
+Gossamer encodes the full repo path in the session object, meaning that if i save a session from one computer and then pull it to another computer where the repo is at a different path, it won't let me resume the session. When restoring a session, assume it's from the current workspace root, not the absolute path.
+
+---
+
+Next issue is that i don't see the sessions in the main panel showing updatedAt dates correctly. Sessions that i'm currently working on show the correct chat history but not an updated timestamp. Some other ones in a different repo aren't showing updated chat histories at all after i clicked resume.
+
+---
+
+Keep going where you left off
+
+---
+
+this is probably a similar issue then- the checkpoints treeview menu is showing nothing or missing data for me
+
+---
+
+I still don't see the checkpoints information in the sidebar
+
+---
+
+I don't see checkpoints still. Either session ones or branch-history.
+
+---
+
+The new serious problem is how did hook-handler.db even become a filename? We absolutely should not be using that, let alone using the same db for two different repos/
+
+---
+
+Where does defaultDBPath go?

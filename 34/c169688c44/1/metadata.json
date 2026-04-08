@@ -1,0 +1,127 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "34c169688c44",
+  "session_id": "a6b29cec-611c-4d9a-b089-99eb1647096a",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T02:52:02.0394Z",
+  "branch": "main",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "packages/core/src/indexer.ts",
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "src/serve.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "347d7d91ccf7",
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 385467,
+    "cache_read_tokens": 14033600,
+    "output_tokens": 52236,
+    "api_call_count": 143
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Fix cross-machine session portability in Gossamer: sessions saved on one computer should resume correctly on another where the repo lives at a different absolute path. Also fix related UI issues with stale timestamps, missing checkpoint data, and incorrect database path defaults.",
+    "outcome": "Fixed session resume to use current workspace root instead of stored cwd, fixed checkpoint tree provider to use server-side repoRoot, fixed shadow indexer and session API to skip permission-mode events when extracting cwd/branch/timestamp, fixed session list timestamps via raw SQL, and fixed the default DB path to be per-repo instead of a shared hook-handler.db.",
+    "learnings": {
+      "repo": [
+        "Claude CLI now emits a `permission-mode` event as the very first JSONL event — it has a sessionId but no cwd, gitBranch, or timestamp. Any code that finds the 'first event' by id or by `e.sessionId || e.cwd || e.gitBranch` will incorrectly match this no-op event.",
+        "Session API returns `repoRoot` (set from server's repoDir) which is the reliable cross-machine path, while `cwd` comes from LogEvents and can be null/empty due to permission-mode events.",
+        "Both repos (cosmos-graphql and gossamer) were sharing the same hook-handler.db because serve.ts defaulted to ~/.claude/hook-handler.db and POST /api/repos inherited that path into config.",
+        "defaultDbPath() in src/config.ts generates ~/.gossamer/repos/\u003cname\u003e.db with unsafe chars replaced by underscores.",
+        "CheckpointTreeProvider skips branch-log fetch entirely when sessionInfo.cwd is falsy — so null cwd from the permission-mode bug caused the entire Checkpoints sidebar to be empty.",
+        "Prisma 7 groupBy._max on DateTime with SQLite can return null/incorrect values due to TEXT storage format — raw SQL queryRawUnsafe is needed for reliable timestamp aggregation.",
+        "The cutoff filter in CheckpointTreeProvider uses updatedAt to exclude post-session checkpoints — when updatedAt falls back to epoch (1970), every checkpoint gets filtered out."
+      ],
+      "code": [
+        {
+          "path": "packages/core/src/indexer.ts",
+          "finding": "events.find((e) =\u003e e.sessionId || e.cwd || e.gitBranch) matched permission-mode events (which have sessionId) before finding events with actual cwd/gitBranch. Fixed to search for each field independently."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 342,
+          "finding": "findFirst orderBy: {id: 'asc'} returned permission-mode event (null cwd). Fixed with separate queries filtering for non-null cwd and non-null timestamp."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 229,
+          "end_line": 243,
+          "finding": "Prisma groupBy._max for DateTime unreliable on SQLite. Replaced with raw SQL: SELECT sessionId, MIN(timestamp) AS startedAt, MAX(timestamp) AS updatedAt FROM LogEvent WHERE sessionId IN (?) AND timestamp IS NOT NULL GROUP BY sessionId"
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 110,
+          "finding": "currentRepoPath was set from sessionInfo.cwd (stored path, possibly from another machine). Fixed to use sessionInfo.repoRoot with cwd as fallback."
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 133,
+          "finding": "Branch-log API call passed sessionInfo.cwd as localPath — findRepoForPath() would fail if path doesn't match current machine. Fixed to use repoRoot."
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "line": 121,
+          "finding": "Cutoff filter uses updatedAt. When updatedAt is epoch (due to timestamp bug), cutoff becomes ~1970 and all checkpoints are filtered out. Fixed by skipping filter when updatedAt \u003c 1_000_000_000_000 ms (pre-Sept 2001)."
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 74,
+          "finding": "Terminal cwd for resume used msg.cwd (stored path). Fixed to use vscode.workspace.workspaceFolders[0].uri.fsPath with stored cwd as fallback."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1077,
+          "finding": "Resume endpoint used session's stored cwd. Fixed to use repoDir (server's known local path) with fallback chain: repoDir ?? cwd ?? HOME ?? /tmp"
+        },
+        {
+          "path": "src/serve.ts",
+          "line": 14,
+          "finding": "Hardcoded default DB path was ~/.claude/hook-handler.db (shared across all repos). Fixed to use defaultDbPath(basename(repoDir)) for per-repo isolation."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1232,
+          "finding": "POST /api/repos inherited server's dbPath when registering new repos, permanently baking hook-handler.db into config. Fixed to always use defaultDbPath(name) for new repos."
+        }
+      ],
+      "workflow": [
+        "Edits to files were silently lost multiple times during the session — the assistant had to re-apply several changes after discovering grep showed them missing. This suggests a file-system conflict or the editor reloading files from disk.",
+        "The built extension in dist/ was stale (last built Apr 7 22:22) — running extension used old code, making it hard to distinguish bugs from unbuilt changes.",
+        "When APIs return correct data but the UI shows nothing, check client-side guard conditions (truthy checks on empty strings, cutoff filters) before assuming the server is broken."
+      ]
+    },
+    "friction": [
+      "Multiple edits were silently lost during the session — the assistant had to rediscover and re-apply changes to SessionDetailPanel.ts, server.ts (raw SQL fix), CheckpointTreeProvider.ts, and the resume endpoint at least once each.",
+      "The running VS Code extension was using a stale dist/ build, making it impossible to test fixes without a rebuild step that was never completed.",
+      "Debugging was complicated by three separate root causes (stored cwd, permission-mode event, shared DB) producing similar symptoms (empty UI, wrong paths).",
+      "The Prisma groupBy._max SQLite DateTime serialization issue is a silent failure — it returns null instead of erroring, causing fallback to session start time."
+    ],
+    "open_items": [
+      "Existing repos in ~/.gossamer/config.json that still point to hook-handler.db need manual migration — update config and re-index to give each repo its own DB.",
+      "The built VS Code extension (dist/) was never rebuilt with the fixes — user needs to run a build step before changes take effect in the running extension.",
+      "Shadow sessions with null cwd/gitBranch already stored in the DB won't be retroactively fixed — a re-index of existing sessions may be needed.",
+      "The `repoRoot` field on the session API response is set from server's repoDir — if the server is started without a known repo (edge case), repoRoot could still be null and the fallback to cwd would trigger the old bug.",
+      "No migration path documented for users with multiple repos sharing hook-handler.db to split them into per-repo databases."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T02:51:21.176909Z",
+    "agent_lines": 42,
+    "agent_removed": 59,
+    "human_added": 26,
+    "human_modified": 92,
+    "human_removed": 0,
+    "total_committed": 129,
+    "total_lines_changed": 219,
+    "agent_percentage": 46.118721461187214,
+    "metric_version": 2
+  }
+}
