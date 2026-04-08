@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "ffe2a257eb8b",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T05:47:31.63235Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "LICENSE.txt",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "32b32d986581",
+  "token_usage": {
+    "input_tokens": 341,
+    "cache_creation_tokens": 796498,
+    "cache_read_tokens": 40267156,
+    "output_tokens": 96785,
+    "api_call_count": 287
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Fix a series of bugs in the Gossamer VS Code extension: server port conflicts, missing database schema, checkpoints not showing in the treeview, multi-repo DB architecture, and several UI/UX issues.",
+    "outcome": "Fixed all major issues: server orphan detection and cleanup, pushSchema comment-filter bug that silently dropped all SQL statements, per-repo DB registry replacing the single primary DB, gitlog maxBuffer overflow preventing checkpoint-to-commit mapping, session sorting by workspace, and several UI fixes including homebrew install command, MIT license, and git username display.",
+    "learnings": {
+      "repo": [
+        "Each repo has its own SQLite DB under ~/.gossamer/repos/\u003cname\u003e.db — there is no primary/secondary hierarchy, all DBs are equal peers.",
+        "Shadow branches are written by the Entire CLI (not Gossamer) under refs/heads/entire/\u003cHEAD-short\u003e-\u003chash\u003e. Gossamer only indexes what Entire writes.",
+        "Checkpoint commits live on entire/checkpoints/v1 branch with 'Checkpoint:' in the subject; feature branch commits get 'Entire-Checkpoint:' trailers in the body.",
+        "The dbCache in packages/core/src/db.ts caches Prisma clients by path — a corrupt/empty DB that gets deleted still returns the broken cached client unless evictDb() is called.",
+        "The gitlog npm package defaults to nameStatus: true (adds --name-status to git log), which causes stdout maxBuffer overflow on large repos with many commits, silently killing checkpoint-to-gitOid mapping.",
+        "macOS com.apple.provenance extended attribute can block SQLite I/O, causing 'disk I/O error' that masquerades as a schema/table issue.",
+        "git worktree add fails with 'already used by worktree' when two repos try to check out the same branch — fixed with --detach flag.",
+        "The Entire CLI hooks (session-start, user-prompt-submit, stop, session-end) are configured per-project in .claude/settings.json, not globally."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called for the primary DB at startup, not for all configured repos in the config."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "pushSchema split schema.sql on ';\\n' then filtered chunks with !s.startsWith('--'), but every chunk in schema.sql starts with '-- CreateTable', so all 56 statements were silently discarded."
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "findCommitForCheckpoint used gitlog with nameStatus not disabled, causing maxBuffer overflow on large repos. Fixed by adding nameStatus: false and execOptions: { maxBuffer: 100MB }."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer guard only checked the in-memory GossamerPanel.server static variable — orphaned server processes from crashed VS Code sessions would hold the port, causing EADDRINUSE on next activation."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints queried the single primary 'db' variable, returning empty for sessions in any other repo's DB."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "GET /api/repos/current only matched against server startup repoDir, always returning null for other workspaces, causing spurious re-registration on every window activation."
+        },
+        {
+          "path": "packages/vscode/src/webview/api.ts",
+          "finding": "None of the webview API calls passed ?localPath=, so all session/log/checkpoint requests had to probe all DBs sequentially instead of resolving directly."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 427,
+          "end_line": 427,
+          "finding": "EventItem was rendered without a user prop, so the human label was always hardcoded to 'You' even though session.gitUserName was available."
+        },
+        {
+          "path": "packages/vscode/src/OnboardingPanel.ts",
+          "line": 59,
+          "end_line": 59,
+          "finding": "Homebrew tap command was 'entire/tap/entire' instead of 'entireio/tap/entire' — wrong tap org name."
+        }
+      ],
+      "workflow": [
+        "When pushSchema silently does nothing, the SQLite file is still created (header only, 4096 bytes) giving a false impression that initialization succeeded.",
+        "Compiled dist/ can be outdated when investigating bugs — always rebuild before testing to ensure fixes are actually in play.",
+        "Use 'sqlite3 \u003cdb\u003e .tables' to directly verify schema state rather than trusting application logs.",
+        "The gitlog npm package's maxBuffer issue surfaces as silent null returns from findCommitForCheckpoint, not as thrown errors, because the catch in saveGitOidMapping swallows everything.",
+        "Testing pushSchema in isolation (node --input-type=module) can succeed while the compiled server fails due to different code paths or caching."
+      ]
+    },
+    "friction": [
+      "Multiple iterations on pushSchema fix due to not catching the comment-filter bug before shipping — the fix appeared correct in isolation but the root cause was different from what was diagnosed.",
+      "The 'adopting orphaned server' approach was shipped first but immediately caused 'error loading sessions' because the stale server served a different repo — required a second fix to kill-and-respawn.",
+      "Silent error swallowing in saveGitOidMapping (catch block with no logging) made the gitlog maxBuffer bug invisible for weeks.",
+      "macOS com.apple.provenance xattr on gossamer-test.db caused a 'disk I/O error' that looked identical to a schema problem, sending diagnosis down the wrong path.",
+      "The dbCache in getDb meant deleting a corrupt DB file wasn't enough — the cached broken Prisma client kept being returned, requiring evictDb() to be added and exported.",
+      "The Entire CLI stopped writing shadow branches and checkpoints ~3 weeks ago — no new session data available for testing live update flow."
+    ],
+    "open_items": [
+      "Entire CLI is not writing new shadow branches or checkpoint commits for cosmos-graphql (~3 weeks of inactivity) — root cause unknown, likely the background watcher process died silently.",
+      "Live session updates for cosmos-graphql not verifiable because Entire CLI isn't producing new data — the Gossamer indexing chain was confirmed working but end-to-end update flow untested.",
+      "GET /api/sessions/:id probe only checks shadowSession table — sessions that exist only via checkpointSessionMetadata or logEvent may still not be found in some edge cases.",
+      "The restart() method in GossamerPanel doesn't wait for the old server to die before spawning a new one — potential race condition on rapid restarts.",
+      "Gossamer has no fallback to show sessions that exist as files on disk (.entire/metadata/) but haven't been committed to a shadow branch yet.",
+      "Only 9 of 17 expected gitOid mappings were created for cosmos-graphql after the maxBuffer fix — remaining 8 may exceed the 10,000 commit limit or have other issues.",
+      "The single 'db' variable removal from startServer() means serve.ts no longer passes dbPath — the startup schema push now relies entirely on the config file having all repos, which may miss the repo passed via --repo-dir if it isn't in config yet."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T05:46:42.642498Z",
+    "agent_lines": 23,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 23,
+    "total_lines_changed": 24,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
