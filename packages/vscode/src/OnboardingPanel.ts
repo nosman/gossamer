@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
-import { existsSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { join, basename } from "path";
 import { spawnSync } from "child_process";
 
-type Step = "install-entire" | "configure-entire" | "done";
+type Step = "install-entire" | "configure-entire" | "configure-checkpoint-remote" | "done";
 
 function checkEntireInstalled(): boolean {
   const r = spawnSync("which", ["entire"], { encoding: "utf8" });
@@ -16,6 +17,16 @@ function checkEntireConfigured(workspaceFolders: readonly vscode.WorkspaceFolder
     .find((p) => existsSync(join(p, ".entire", "settings.json")));
 }
 
+function checkCheckpointRemoteConfigured(repoPath: string): boolean {
+  try {
+    const settings = join(repoPath, ".entire", "settings.json");
+    const json = JSON.parse(readFileSync(settings, "utf8"));
+    return !!json?.strategy_options?.checkpoint_remote;
+  } catch {
+    return false;
+  }
+}
+
 export class OnboardingPanel {
   private static instance: OnboardingPanel | undefined;
 
@@ -23,6 +34,7 @@ export class OnboardingPanel {
   private readonly onEntireDetected: (repoPath: string) => void;
   private readonly context: vscode.ExtensionContext;
   private watcher: vscode.Disposable | undefined;
+  private checkpointRemoteSkipped = false;
 
   static createOrShow(
     context: vscode.ExtensionContext,
@@ -54,10 +66,16 @@ export class OnboardingPanel {
     );
 
     this.panel.webview.html = this.getHtml(this.currentStep());
-    this.panel.webview.onDidReceiveMessage((msg: { type: string }) => {
+    this.panel.webview.onDidReceiveMessage((msg: { type: string; repoRef?: string }) => {
       if (msg.type === "check") this.refresh();
       if (msg.type === "install_entire") this.runInTerminal("brew install entire/tap/entire");
       if (msg.type === "configure_entire") this.runConfigureInWorkspace();
+      if (msg.type === "configure_checkpoint_remote") this.runConfigureCheckpointRemote(msg.repoRef ?? "");
+      if (msg.type === "create_local_checkpoint_repo") this.runCreateLocalCheckpointRepo();
+      if (msg.type === "skip_checkpoint_remote") {
+        this.checkpointRemoteSkipped = true;
+        this.refresh();
+      }
     });
     this.panel.onDidDispose(() => {
       this.watcher?.dispose();
@@ -71,6 +89,9 @@ export class OnboardingPanel {
     if (!checkEntireInstalled()) return "install-entire";
     const configured = checkEntireConfigured(vscode.workspace.workspaceFolders);
     if (!configured) return "configure-entire";
+    if (!this.checkpointRemoteSkipped && !checkCheckpointRemoteConfigured(configured)) {
+      return "configure-checkpoint-remote";
+    }
     return "done";
   }
 
@@ -88,17 +109,34 @@ export class OnboardingPanel {
   private runInTerminal(cmd: string): void {
     const terminal = vscode.window.createTerminal("Gossamer Setup");
     terminal.show();
-    terminal.sendText(cmd, false); // don't auto-run; let user review and press Enter
+    terminal.sendText(cmd, false);
   }
 
   private runConfigureInWorkspace(): void {
     const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const terminal = vscode.window.createTerminal({
-      name: "Gossamer Setup",
-      cwd: ws,
-    });
+    const terminal = vscode.window.createTerminal({ name: "Gossamer Setup", cwd: ws });
     terminal.show();
     terminal.sendText("entire configure", false);
+  }
+
+  private runConfigureCheckpointRemote(repoRef: string): void {
+    if (!repoRef.trim()) return;
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const terminal = vscode.window.createTerminal({ name: "Gossamer Setup", cwd: ws });
+    terminal.show();
+    terminal.sendText(`entire enable --checkpoint-remote ${repoRef.trim()}`, false);
+  }
+
+  private runCreateLocalCheckpointRepo(): void {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const repoName = ws ? basename(ws) : "checkpoints";
+    const localRepoPath = join(homedir(), ".gossamer", "checkpoints", `${repoName}.git`);
+    const terminal = vscode.window.createTerminal({ name: "Gossamer Setup", cwd: ws });
+    terminal.show();
+    terminal.sendText(
+      `git init --bare ${JSON.stringify(localRepoPath)} && entire enable --checkpoint-remote ${JSON.stringify(localRepoPath)}`,
+      false,
+    );
   }
 
   private getHtml(step: Step): string {
@@ -107,7 +145,9 @@ export class OnboardingPanel {
 
     const stepContent = step === "install-entire"
       ? this.stepInstallEntire()
-      : this.stepConfigureEntire();
+      : step === "configure-entire"
+      ? this.stepConfigureEntire()
+      : this.stepConfigureCheckpointRemote();
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -129,7 +169,7 @@ export class OnboardingPanel {
       min-height: 100vh;
     }
     .card {
-      max-width: 520px;
+      max-width: 560px;
       width: 100%;
       padding: 40px 32px;
     }
@@ -174,6 +214,39 @@ export class OnboardingPanel {
       white-space: pre;
       margin: 0 0 22px;
     }
+    .options {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+    .option {
+      border: 1px solid var(--vscode-panel-border);
+      border-radius: 4px;
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.1s;
+    }
+    .option:hover { border-color: var(--vscode-button-background); }
+    .option.selected { border-color: var(--vscode-button-background); background: var(--vscode-list-activeSelectionBackground, rgba(255,255,255,0.05)); }
+    .option-title { font-weight: 600; margin-bottom: 3px; }
+    .option-desc { font-size: 12px; color: var(--vscode-descriptionForeground); }
+    .input-row {
+      display: none;
+      margin-top: 10px;
+    }
+    .input-row.visible { display: flex; gap: 8px; }
+    input[type="text"] {
+      flex: 1;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+      border-radius: 2px;
+      padding: 5px 8px;
+      font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px;
+    }
+    input[type="text"]:focus { outline: 1px solid var(--vscode-focusBorder); }
     .actions {
       display: flex;
       gap: 8px;
@@ -210,17 +283,52 @@ export class OnboardingPanel {
     document.getElementById('btn-check')?.addEventListener('click', () => vscode.postMessage({ type: 'check' }));
     document.getElementById('btn-install')?.addEventListener('click', () => vscode.postMessage({ type: 'install_entire' }));
     document.getElementById('btn-configure')?.addEventListener('click', () => vscode.postMessage({ type: 'configure_entire' }));
+    document.getElementById('btn-skip-remote')?.addEventListener('click', () => vscode.postMessage({ type: 'skip_checkpoint_remote' }));
+
+    // Checkpoint remote option selection
+    const optGithub = document.getElementById('opt-github');
+    const optLocal  = document.getElementById('opt-local');
+    const inputRow  = document.getElementById('github-input-row');
+    const btnRemote = document.getElementById('btn-configure-remote');
+
+    if (optGithub && optLocal) {
+      optGithub.addEventListener('click', () => {
+        optGithub.classList.add('selected');
+        optLocal.classList.remove('selected');
+        inputRow.classList.add('visible');
+        btnRemote.textContent = 'Open terminal with command';
+        btnRemote.dataset.action = 'github';
+      });
+      optLocal.addEventListener('click', () => {
+        optLocal.classList.add('selected');
+        optGithub.classList.remove('selected');
+        inputRow.classList.remove('visible');
+        btnRemote.textContent = 'Open terminal with command';
+        btnRemote.dataset.action = 'local';
+      });
+      btnRemote?.addEventListener('click', () => {
+        const action = btnRemote.dataset.action;
+        if (action === 'github') {
+          const ref = document.getElementById('github-ref-input').value.trim();
+          if (!ref) { document.getElementById('github-ref-input').focus(); return; }
+          vscode.postMessage({ type: 'configure_checkpoint_remote', repoRef: ref });
+        } else if (action === 'local') {
+          vscode.postMessage({ type: 'create_local_checkpoint_repo' });
+        }
+      });
+    }
   </script>
 </body>
 </html>`;
   }
 
-  private stepIndicator(active: 1 | 2): string {
-    const s1 = active === 1 ? "active" : "done";
-    const s2 = active === 2 ? "active" : "";
+  private stepIndicator(active: 1 | 2 | 3): string {
+    const cls = (n: number) =>
+      n < active ? "done" : n === active ? "active" : "";
     return `<div class="steps">
-      <div class="step-dot ${s1}"></div>
-      <div class="step-dot ${s2}"></div>
+      <div class="step-dot ${cls(1)}"></div>
+      <div class="step-dot ${cls(2)}"></div>
+      <div class="step-dot ${cls(3)}"></div>
     </div>`;
   }
 
@@ -262,6 +370,39 @@ entire configure</code>
       </div>
       <p class="note">
         Gossamer will open automatically once Entire is configured.
+      </p>`;
+  }
+
+  private stepConfigureCheckpointRemote(): string {
+    const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+    const repoName = ws ? basename(ws) : "my-project";
+    const localPath = `~/.gossamer/checkpoints/${repoName}.git`;
+    return `
+      ${this.stepIndicator(3)}
+      <h1>Step 3 — Checkpoint backup (optional)</h1>
+      <p class="subtitle">
+        Entire can push your checkpoint branch to a <strong>separate repo</strong>, keeping
+        your AI session history private or backed up independently of your main codebase.
+      </p>
+      <div class="options">
+        <div class="option" id="opt-github">
+          <div class="option-title">Use a GitHub repo</div>
+          <div class="option-desc">Push checkpoints to a private GitHub repo you control.</div>
+          <div class="input-row" id="github-input-row">
+            <input type="text" id="github-ref-input" placeholder="github:owner/repo" spellcheck="false" />
+          </div>
+        </div>
+        <div class="option" id="opt-local">
+          <div class="option-title">Create a local backup repo</div>
+          <div class="option-desc">Store checkpoints in a bare git repo at <code style="display:inline;padding:1px 4px;border-radius:3px">${localPath}</code> — no remote required.</div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="btn-configure-remote" data-action="">Open terminal with command</button>
+        <button id="btn-skip-remote" class="secondary">Skip for now</button>
+      </div>
+      <p class="note">
+        You can configure this later with <code style="display:inline;padding:1px 4px;border-radius:3px">entire enable --checkpoint-remote &lt;ref&gt;</code>.
       </p>`;
   }
 }
