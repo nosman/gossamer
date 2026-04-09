@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "a05e65da00b3",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-09T04:11:45.578924Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/vscode/src/GossamerPanel.ts",
+    "src/config.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "5b938e592b85",
+  "token_usage": {
+    "input_tokens": 386,
+    "cache_creation_tokens": 1091393,
+    "cache_read_tokens": 42305617,
+    "output_tokens": 108390,
+    "api_call_count": 325
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Fix a series of bugs in the Gossamer VS Code extension: server port conflicts, missing database schema, checkpoint treeview not showing, multi-repo DB architecture, and add new features (checkpoint remote support, MIT license, UI improvements).",
+    "outcome": "Successfully fixed all reported bugs including EADDRINUSE orphan server handling, pushSchema silently discarding all SQL statements, per-repo DB client architecture replacing a single primary DB, gitlog maxBuffer overflow killing checkpoint git OID mappings, and added checkpoint remote (bare clone) support with auto-detection from .entire/settings.json.",
+    "learnings": {
+      "repo": [
+        "Each repo has its own SQLite DB at ~/.gossamer/repos/\u003cname\u003e.db — there is no primary/hierarchy among DBs, they are all peers.",
+        "pushSchema splits schema.sql on ';\\n' but every chunk starts with '-- CreateTable' comments, so the old filter '!s.startsWith(\"--\")' silently discarded all 56 CREATE TABLE statements.",
+        "The gitlog npm package defaults to nameStatus:true which appends --name-status to git log; on large repos (9000+ commits) this causes ERR_CHILD_PROCESS_STDIO_MAXBUFFER, silently caught, resulting in 0 git OID mappings and no branch history in the treeview.",
+        "Checkpoint commits live on entire/checkpoints/v1 branch with 'Checkpoint:' in subject, but feature branch commits have 'Entire-Checkpoint:' trailers — findCommitForCheckpoint searches feature branches for 'Entire-Checkpoint:' which is correct.",
+        "macOS com.apple.provenance extended attribute on DB files causes SQLite 'disk I/O error'; the fix is to evict cached Prisma client, delete the file, and retry.",
+        "The git worktree for entire/checkpoints/v1 must use --detach to avoid 'branch already used by worktree' errors when multiple repos share the same branch name.",
+        "Shadow branch refs are loose files under .git/refs/heads/entire/ — the fs.watch on .git/refs/ fires immediately on ref updates, enabling real-time indexing.",
+        "Entire.io checkpoint_remote config is in .entire/settings.json under strategy_options.checkpoint_remote.repo; the full git URL must be derived from the main repo's push remote to determine SSH vs HTTPS protocol.",
+        "The dbRegistry (Map\u003cdbPath, PrismaClient\u003e) pattern with allDbs()/dbForRepo()/resolveDb() helpers cleanly replaces the single 'db' variable across ~20 endpoints.",
+        "GET /api/repos/current was workspace-unaware — it only matched the server's startup repoDir, causing every other workspace to get null and re-register on every activation."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called for the primary DB at startup, not for all configured repo DBs — shadow/checkpoint indexers failed with 'table does not exist' for secondary repos."
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 144,
+          "end_line": 144,
+          "finding": "catch block in saveGitOidMapping swallows ALL errors silently, masking the maxBuffer overflow from gitlog."
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "findCommitForCheckpoint uses gitlog with nameStatus defaulting to true — must pass nameStatus:false and execOptions:{maxBuffer: 100MB} to avoid overflow on large repos."
+        },
+        {
+          "path": "packages/vscode/src/webview/api.ts",
+          "finding": "None of the webview API calls passed ?localPath= query param, so resolveDb() always probed all DBs sequentially instead of going directly to the right one."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 427,
+          "end_line": 427,
+          "finding": "EventItem rendered without user prop, so human turns always showed 'You' instead of the git username from session.gitUserName."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints used bare 'db' (primary client) — returned [] for sessions in any other repo's DB."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer() guard only checked in-memory GossamerPanel.server static variable — orphaned server processes from previous VS Code sessions caused EADDRINUSE on reload."
+        }
+      ],
+      "workflow": [
+        "When a SQLite DB shows 'schema ready' in logs but tables don't exist, check if the SQL file is being parsed correctly — comment-filtering on split chunks is a subtle failure mode.",
+        "Always test pushSchema against a real SQLite file with a Node script before trusting it works; Prisma $executeRawUnsafe is silent on empty statement arrays.",
+        "Use 'nameStatus: false' with the gitlog npm package for any large repo search — the default --name-status flag blows the maxBuffer on repos with many commits.",
+        "When introducing a Map-based registry to replace a singleton, update POST and DELETE handlers immediately to maintain registry consistency on dynamic add/remove.",
+        "macOS xattrs (com.apple.provenance) can corrupt SQLite files — always add retry-with-evict logic when creating DBs programmatically.",
+        "For git worktrees shared across repos, always use --detach to avoid branch locking conflicts."
+      ]
+    },
+    "friction": [
+      "pushSchema fix required three iterations because the root cause (comment filter discarding all chunks) was masked by a second issue (macOS xattr disk I/O error on gossamer-test.db) — both had to be fixed independently.",
+      "The gitlog maxBuffer failure was completely silent — the catch in saveGitOidMapping consumed the error, making diagnosis require manual Node.js testing with process.execFile to observe the actual exception.",
+      "Entire CLI stopped writing shadow branch commits ~3 weeks before the session — all live-update debugging was blocked because the root data source wasn't generating new data.",
+      "The 'no primary DB' refactor touched ~20 endpoints across ~600 lines of server.ts, requiring careful read-before-edit of each section to avoid missing references.",
+      "resolveDb probe for GET /api/sessions/:id only checked shadowSession, missing sessions that exist only in checkpointSessionMetadata or logEvent — required a follow-up fix."
+    ],
+    "open_items": [
+      "Entire CLI not writing new shadow branch commits for cosmos-graphql since ~3 weeks ago — needs investigation into whether the Entire background watcher process died or hooks are silently failing.",
+      "GET /api/sessions and checkpoint endpoints still only query a single repo's DB when no ?localPath= is provided and the session isn't found via probe — could be slow with many repos.",
+      "Gossamer has no fallback to show sessions that exist only on disk (.entire/metadata/) but have no shadow branch commits — orphaned sessions are invisible.",
+      "The checkpoint remote bare clone path uses a sanitized repo name from the URL — if two repos have the same name (different orgs), they'd collide in ~/.gossamer/checkpoint-repos/.",
+      "Live session updates from cosmos-graphql still unverified end-to-end because Entire CLI isn't writing new data — the indexing chain was confirmed working via simulation but not with real Entire output.",
+      "The 'Claude Code' agent label in SessionDetail is already dynamic (uses session.agent), but it's unclear if all agent types are correctly set during indexing."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-09T04:10:53.518763Z",
+    "agent_lines": 90,
+    "agent_removed": 7,
+    "human_added": 51,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 141,
+    "total_lines_changed": 155,
+    "agent_percentage": 62.58064516129033,
+    "metric_version": 2
+  }
+}
