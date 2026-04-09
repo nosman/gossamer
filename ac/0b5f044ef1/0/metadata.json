@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "ac0b5f044ef1",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-09T03:07:11.789085Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "src/config.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "9dbb39f9cac8",
+  "token_usage": {
+    "input_tokens": 5578,
+    "cache_creation_tokens": 4515172,
+    "cache_read_tokens": 130703141,
+    "output_tokens": 619205,
+    "api_call_count": 1308
+  },
+  "session_metrics": {
+    "turn_count": 153
+  },
+  "summary": {
+    "intent": "Refactor gossamer from an Electron desktop app into a VS Code extension to reduce install friction and improve context-switching between editing and viewing Claude Code sessions.",
+    "outcome": "A fully functional VS Code extension was built with sessions list, session detail view, native checkpoint tree sidebar, MCP server embedded at /mcp, search via QuickPick with FTS, image rendering, agent-aware labels and commands, VSIX packaging script, onboarding flow, and checkpoint remote support.",
+    "learnings": {
+      "repo": [
+        "Each repo gets its own SQLite DB at ~/.gossamer/repos/\u003cname\u003e.db; config at ~/.gossamer/config.json",
+        "The gossamer server runs from gossamer-testing/dist/serve.js (worktree), NOT gossamer/dist/serve.js — changes to main repo must be synced and rebuilt in the worktree",
+        "Entire.io writes session data to entire/checkpoints/v1 branch and shadow branches; gossamer reads and indexes these into SQLite",
+        "Custom session titles from /rename are stored as custom-title events in ~/.claude/projects/\u003cencoded-path\u003e/*.jsonl, NOT in the checkpoint/shadow branches",
+        "Session slugs (auto-generated) are on LogEvent.slug; custom titles require reading Claude's local JSONL files directly",
+        "The .gossamer/checkpoints/ worktree directory is created inside each repo by ensureWorktree() — should be added to .gitignore",
+        "Entire.io only PUSHES to the checkpoint remote — it never fetches; Gossamer must fetch before indexing to get commits from other machines",
+        "CheckpointIdGitOidJoin table maps checkpointId to gitOid; session cwd must be looked up to find the correct git repo for git show operations",
+        "better-sqlite3 native module compiled against different Node.js version than VS Code's bundled Node; server must be spawned as child process using system node",
+        "The schema.sql approach (prisma migrate diff --from-empty) allows schema application without the Prisma CLI in bundled VSIX; all statements need IF NOT EXISTS"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is a static singleton that survives panel disposal; getConfiguredPort() reads ~/.gossamer/config.json; SERVE_SCRIPT uses existsSync fallback for bundled vs dev mode"
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "onDidChangeViewState listener calls checkpointProvider.setSession() when panel becomes active — required for sidebar to update on tab switch"
+        },
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Must use include: [\"src/**/*.ts\"] not individual files — missing files were never compiled causing silent runtime failures"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 15,
+          "finding": "acquireVsCodeApi() can only be called once; stored as window.__vscodeApi and reused to prevent duplicate call errors"
+        },
+        {
+          "path": "packages/vscode/vite.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "root and outDir must be absolute paths using resolve(__dirname, ...) — relative paths resolve to CWD when run via workspace -w flag"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "schema.sql parsing bug: splitting on ';' leaves '-- CreateTable' comment prefixes which were incorrectly filtered; must strip comments from each chunk before executing"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "indexAllCheckpointsV2 reads checkpoint files via readdirSync/readFileSync on a worktree; the worktree working tree does NOT auto-update when Entire commits via plumbing — must git reset --hard before reading"
+        }
+      ],
+      "workflow": [
+        "VS Code webview panels reload completely when dragged to a new window; must re-send server_ready via onDidChangeViewState",
+        "VS Code's TreeView resourceUri only applies SCM decorations with absolute file paths — relative paths silently produce no decoration",
+        "esbuild can bundle the server but native modules (better-sqlite3, node-pty, bindings, file-uri-to-path, node-addon-api) must be externalized and copied manually",
+        "VS Code webview CSP must include img-src data: https: http: for base64 image rendering",
+        "Vite ESM output requires type=\"module\" on the script tag in the webview HTML — missing this causes silent no-op",
+        "Git worktrees cannot checkout the same branch in two places; create a new branch for the testing worktree"
+      ]
+    },
+    "friction": [
+      "gossamer-testing worktree has independent file copies — every change requires manual sync (cp) + rebuild, causing repeated 'still seeing old behavior' debugging loops",
+      "Server process survival across panel disposal made restart non-obvious; had to add explicit gossamer.restartServer command",
+      "Prisma CLI (62MB) cannot be bundled in VSIX; required generating schema.sql at build time as workaround",
+      "schema.sql comment stripping bug caused fresh install failure after the fix was supposedly applied",
+      "acquireVsCodeApi() called-once constraint caused blank panel when minimize button inline script and React app both tried to call it",
+      "tsconfig.extension.json only listing specific files meant new files (SessionDetailPanel.ts, diffUtils.ts) were silently never compiled",
+      "Server NODE_MODULE_VERSION mismatch (141 vs 140) required spawning via system node instead of VS Code's bundled node",
+      "Content provider approach for diffs was abandoned due to URI encoding fragility — switched to temp files then back to in-memory provider",
+      "Tab title showed slug instead of customTitle after server rebuild because webview JS in gossamer-testing was stale",
+      "Accidentally made Electron app changes when user wanted VS Code extension changes"
+    ],
+    "open_items": [
+      "Session color (set by user in Claude Code UI) is not stored anywhere accessible — cannot be surfaced in Gossamer",
+      "Session name from /rename only detected via ~/.claude/projects JSONL scanning — won't work for sessions on other machines where those files don't exist",
+      "ALTER TABLE migrations not handled — schema.sql IF NOT EXISTS approach won't add new columns to existing DBs",
+      "gossamer-testing worktree sync is manual — a script or git hook would reduce friction significantly",
+      "Multi-repo support in sessions list: sessions from different repos are shown in a flat list with cwd as the differentiator",
+      "Shadow branch indexing not triggered by checkpoint git watcher for all repos — only the configured repoDir triggers the watcher",
+      "Codex and Gemini CLI resume flags (--session vs --resume) are hardcoded guesses; need verification from actual CLI docs",
+      "Onboarding checkpoint remote step: the 'skip' flag resets on panel reopen — user could be repeatedly prompted",
+      "gossamer.vsix should be in .gitignore — was accidentally committed",
+      "MCP server HTTP transport is stateless — no session persistence between tool calls"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-09T03:06:15.921864Z",
+    "agent_lines": 97,
+    "agent_removed": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 97,
+    "total_lines_changed": 105,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

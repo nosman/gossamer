@@ -1,0 +1,132 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "f12c21fc0ca1",
+  "session_id": "2474efcb-1330-4287-8b24-98d39fc9ece5",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-09T02:25:56.735467Z",
+  "branch": "mcp",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/vscode/src/OnboardingPanel.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "9f0f073c81a7",
+  "token_usage": {
+    "input_tokens": 5517,
+    "cache_creation_tokens": 4461317,
+    "cache_read_tokens": 124304042,
+    "output_tokens": 595148,
+    "api_call_count": 1259
+  },
+  "session_metrics": {
+    "turn_count": 148
+  },
+  "summary": {
+    "intent": "Refactor Gossamer from an Electron desktop app into a VS Code extension to reduce install friction (auto-detect .entire/settings.json instead of manual repo registration) and improve context-switching between editing code and viewing Claude Code sessions.",
+    "outcome": "A fully functional VS Code extension was built with sessions list, session detail view with images and markdown, native checkpoint tree sidebar with diff support, embedded MCP server at /mcp, QuickPick search with FTS, VSIX packaging script, agent-aware labels/commands, onboarding flow with Entire CLI detection, and checkpoint remote configuration step.",
+    "learnings": {
+      "repo": [
+        "Each repo in ~/.gossamer/config.json has its own SQLite DB at ~/.gossamer/repos/\u003cname\u003e.db; the server is per-workspace, not global",
+        "Custom titles from /rename are stored as 'custom-title' events in ~/.claude/projects/.../*.jsonl, NOT in shadow or checkpoint branches — slug on LogEvent never changes",
+        "Images are stored as base64 in full.jsonl files on the entire/checkpoints/v1 branch; imageData and imageMediaType must be explicitly extracted during indexing",
+        "The .gossamer/checkpoints/ directory inside repos is a git worktree created by ensureWorktree() — intentional but pollutes git status; add to .gitignore",
+        "Session checkpoints on shadow branch represent what the agent actually did; Entire continues tagging new commits to the same session ID after the agent stops — use updatedAt+2min cutoff for Session view",
+        "The gossamer-testing worktree has its own file copies that must be synced manually from the main repo and rebuilt independently",
+        "Entire.io stores agent name in CheckpointSessionMetadata.agent; color selection is in-memory only and not persisted anywhere",
+        "The server must run on system Node.js (not VS Code's bundled Electron Node.js) due to better-sqlite3 native module version mismatch (NODE_MODULE_VERSION 140 vs 141)"
+      ],
+      "code": [
+        {
+          "path": "packages/vscode/tsconfig.extension.json",
+          "line": 1,
+          "end_line": 10,
+          "finding": "Originally listed only extension.ts and GossamerPanel.ts in 'include', causing SessionDetailPanel.ts and diffUtils.ts to never compile — fix by using 'src/**/*.ts' with webview excluded"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Server is a static singleton (static server, static serverPort) that survives panel disposal; use process.kill(0) on child process to check liveness; getSystemNode() uses 'which node' not process.execPath"
+        },
+        {
+          "path": "packages/vscode/src/webview/vscodeApi.ts",
+          "line": 1,
+          "end_line": 15,
+          "finding": "acquireVsCodeApi() can only be called once — store as window.__vscodeApi in the HTML page script, then vscodeApi.ts checks for it first before calling acquireVsCodeApi()"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 68,
+          "end_line": 90,
+          "finding": "pushSchema() originally used Prisma CLI (PRISMA_BIN pointing to node_modules/.bin/prisma) which doesn't exist in bundled VSIX; replaced with schema.sql applied via raw SQL"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 151,
+          "end_line": 165,
+          "finding": "startServer() calls syncLogContentFts() which queries LogContent table — on fresh DB with no schema, this throws 'no such table: LogContent' crashing the server before ensureRepoRegistered() runs"
+        },
+        {
+          "path": "packages/core/prisma/schema.sql",
+          "line": 1,
+          "end_line": 5,
+          "finding": "SQL parsing bug: splitting on ';' leaves lines starting with '-- CreateTable' comments; filter must strip comments per-line within each statement, not discard entire statements starting with '--'"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "initialLoadDone ref required to distinguish initial render from live updates for auto-scroll; scroll position check (scrollHeight - scrollTop - clientHeight \u003c 80) must be inline at effect time, not in a separate scroll listener on Mantine ScrollArea viewport"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 200,
+          "end_line": 250,
+          "finding": "panel.onDidChangeViewState must re-send server_ready when panel becomes visible — webview reloads when moved to new window and waits for the message again"
+        }
+      ],
+      "workflow": [
+        "VS Code webview panels reload when dragged to a new window — any state-dependent initialization (server_ready signals, acquireVsCodeApi) must be re-sent on onDidChangeViewState",
+        "Vite ESM output requires type='module' on the script tag in webview HTML; VS Code CSP needs explicit img-src data: for base64 images and connect-src for the server port",
+        "esbuild can bundle all pure-JS deps for VSIX; native .node files (better-sqlite3, node-pty plus their loaders bindings/file-uri-to-path/node-addon-api) must be copied separately — Prisma engines (62MB) are too large to bundle",
+        "Generate schema.sql via 'prisma migrate diff --from-empty --to-schema ... --script' and commit it; apply with raw SQL at startup instead of invoking Prisma CLI — safe to re-apply with IF NOT EXISTS",
+        "For VS Code TreeDataProvider: resourceUri must use absolute paths (join repoPath + relativePath) for SCM decorations to work; ViewColumn.Beside opens to the right of currently active panel",
+        "Chord keybindings (Ctrl+K G) are the safest extension convention — avoid Cmd+Shift+letter which conflicts with VS Code core",
+        "The gossamer-testing worktree pattern requires: edit in main repo, cp changed files to worktree, rebuild there — the workflow is fragile; consider a watch+copy script"
+      ]
+    },
+    "friction": [
+      "gossamer-testing worktree required constant manual file syncing and independent rebuilds — every code change needed cp + npm run build in the worktree",
+      "Server kept running stale compiled code; required explicit restart via new 'Gossamer: Restart Server' command; not discoverable",
+      "tsconfig.extension.json only including 2 files caused silent compilation failures — no error, just missing .js files at runtime",
+      "Schema SQL parsing bug (-- comments causing all statements to be discarded) caused 'no such table' errors on fresh install that were hard to diagnose",
+      "Prisma CLI too large (62MB with engines) to bundle in VSIX; required replacing runtime prisma db push with pre-generated schema.sql",
+      "VS Code's process.execPath points to Electron's node, not system node — better-sqlite3 version mismatch was the root cause of blank webview with no obvious error",
+      "Multiple rounds of 'images not rendering' debugging before tracing to: (1) webview CSP missing img-src data:, (2) imageData column not in schema, (3) Prisma client not regenerated, (4) server running stale code from gossamer-testing",
+      "npm workspace name 'gossamer-vscode' vs '-w packages/vscode' caused confusing build errors",
+      "acquireVsCodeApi() double-call crashed the webview silently — no error message, just a broken minimize button"
+    ],
+    "open_items": [
+      "Toggle panel keybinding (Ctrl+K G chord) does not work when the webview has keyboard focus — needs investigation or alternative approach",
+      "Future schema column additions need explicit ALTER TABLE migrations; IF NOT EXISTS CREATE TABLE approach only handles fresh installs, not upgrades with new columns",
+      "gossamer.vsix removed from git but packages/vscode/bundled-server/serve.js is still tracked — should add both to .gitignore and note in README that these are generated artifacts",
+      "The gossamer-testing worktree sync workflow is error-prone; consider a watch script that auto-copies changed files from main repo to worktree on save",
+      "Session color data (VS Code-style colored sessions) not stored anywhere by Claude Code yet — feature not implementable until entire.io persists it",
+      "OnboardingPanel has an unused 'context' field stored on this — minor TS warning to clean up",
+      "The 'Rewind to Checkpoint' command uses process.kill(pid, 0) to detect running agents — only works for Claude Code sessions tracked in ~/.claude/sessions/*.json; other agents (Gemini, Codex) not detected"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-09T02:24:37.702485Z",
+    "agent_lines": 157,
+    "agent_removed": 16,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 157,
+    "total_lines_changed": 173,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
