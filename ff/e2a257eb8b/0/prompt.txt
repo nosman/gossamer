@@ -1,0 +1,49 @@
+Next problem: we didn't actually fix the checkpoints treeview issue- namely, that checkpoints aren't showing at all. Please be thorough and explore all avenues. Make sure the suggestions you make are correct. Also, there is no notion of a primary db in this project- each repo has its own db, they is no heirarchy.
+
+---
+
+Yes, you have to instantiate different db clients for each repo. please fix that
+
+---
+
+I'm seeing this in the debug logs:  checkpoint indexer: failed to create worktree for /Users/stsoucas/gossamer-test — Error: Command failed: git -C "/Users/stsoucas/gossamer-test" worktree add "/Users/stsoucas/gossamer-test/.gossamer/checkpoints" entire/checkpoints/v1
+
+---
+
+I'm opening gossamer in another repo, ~/cosmos/cosmos-graphql. It detects the session, but thinks we're on a different branch other than the checked out branch. The chat history also doesn't seem to be updated. does the file watcher and updater correctly look for changes across all repos?
+
+---
+
+what's this sessions' name?
+
+---
+
+Now it doesn't even seem like this current session is updating.....
+
+---
+
+For the cosmos-graphql repo, i still don't see an updated convsersation. I also don't see a branchHistory section in the checkpoints treeView
+
+---
+
+More issues: main sessions table does not sort based on current workspace repo. Sessions in the cosmos-graphql repo still don't seem to be picking up on new messages when i resume the session from gossamer
+
+---
+
+I created a new session in cosmos-graphl and no new session showed up in the sessions window. I ran entire configure and it said entire was already enabled in the repo. A new session should show up in gossamer as well, right?
+
+---
+
+Last task of the night: add the MIT license to this project as LICENSE.txt and make sure it gets bundled into the vsix file
+
+---
+
+One more: on onboarding when asking the user to install entire, you didn't put the right homebrew command. it's this: brew install entireio/tap/entire
+
+---
+
+The first word in mine: entireio. The first word in yours: entire. That is not the same
+
+---
+
+In the sessionDetails page, is the "claude code" name hardcoded? Also, instead of writing "you" can you write the git username? make sure that it shows the actual username in the entireio logs

@@ -1,0 +1,9 @@
+Next problem: we didn't actually fix the checkpoints treeview issue- namely, that checkpoints aren't showing at all. Please be thorough and explore all avenues. Make sure the suggestions you make are correct. Also, there is no notion of a primary db in this project- each repo has its own db, they is no heirarchy.
+
+---
+
+Yes, you have to instantiate different db clients for each repo. please fix that
+
+---
+
+I'm seeing this in the debug logs:  checkpoint indexer: failed to create worktree for /Users/stsoucas/gossamer-test — Error: Command failed: git -C "/Users/stsoucas/gossamer-test" worktree add "/Users/stsoucas/gossamer-test/.gossamer/checkpoints" entire/checkpoints/v1

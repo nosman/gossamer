@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "a2d00bab922d",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T04:54:51.840393Z",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "packages/core/src/gitUtils.ts",
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/webview/api.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "eb8b0f515b9d",
+  "token_usage": {
+    "input_tokens": 290,
+    "cache_creation_tokens": 576892,
+    "cache_read_tokens": 31749714,
+    "output_tokens": 89984,
+    "api_call_count": 248
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Fix multiple issues in the Gossamer VS Code extension: server port conflicts on reload, missing database schema on startup, checkpoints not showing in treeview, and multi-repo session/DB isolation.",
+    "outcome": "Fixed all identified issues: orphaned server detection/kill, pushSchema bug (silently discarding all SQL statements), per-repo DB registry replacing a single primary DB, gitOid mapping failures due to maxBuffer overflow, and workspace-aware session sorting with localPath propagation throughout the API.",
+    "learnings": {
+      "repo": [
+        "Each repo has its own SQLite DB with no hierarchy — there is no 'primary' DB concept; the server must aggregate across all repo DBs.",
+        "The pushSchema function split schema.sql on ';\\n' and then filtered chunks starting with '--', but every chunk in schema.sql starts with a '-- CreateTable' comment, silently discarding all 56 CREATE TABLE statements.",
+        "The git OID mapping (saveGitOidMapping) was silently failing because gitlog defaults to nameStatus:true (--name-status), causing maxBuffer overflow on large repos; errors were swallowed by a bare catch.",
+        "Checkpoint commits live on entire/checkpoints/v1 branch but also have Entire-Checkpoint: trailers on feature branches; findCommitForCheckpoint searches feature branches correctly.",
+        "The worktree add command for checkpoints must use --detach to avoid 'branch already used by worktree' errors when multiple repos share the same entire/checkpoints/v1 branch.",
+        "macOS com.apple.provenance extended attribute on .db files causes SQLite disk I/O errors; getDb caches the broken Prisma client, requiring evictDb + file deletion + retry.",
+        "The dbRegistry (Map\u003cdbPath, PrismaClient\u003e) pattern with allDbs(), dbForRepo(), and resolveDb() probe is the correct architecture for multi-repo support.",
+        "resolveDb probes all DBs when no localPath is provided, but the /api/sessions/:id probe was too narrow (only checked shadowSession, missing checkpointSessionMetadata and logEvent tables).",
+        "The git fs.watch fires on loose ref file changes under .git/refs/heads/entire/; packed refs would not trigger it.",
+        "Live session updates depend entirely on the Entire CLI writing new shadow branch commits; Gossamer's watcher/indexer/broadcast chain works correctly."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called for the primary DB passed via CLI args, not for all configured repos — secondary repo DBs never got schema applied at startup."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1574,
+          "end_line": 1574,
+          "finding": "httpServer.listen(port) had no EADDRINUSE error handler, causing silent crashes when port was already in use."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer guard only checked in-memory GossamerPanel.server static variable, not the actual port — orphaned processes from crashed sessions caused EADDRINUSE."
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 144,
+          "end_line": 144,
+          "finding": "saveGitOidMapping catch block swallows ALL errors silently, including maxBuffer overflow from gitlog."
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 494,
+          "end_line": 496,
+          "finding": "saveGitOidMapping called with meta.branch from root metadata.json; only skipped if already in mappedCheckpointIds set."
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 31,
+          "end_line": 31,
+          "finding": "findCommitForCheckpoint was using gitlog with default nameStatus:true, causing maxBuffer exceeded on repos with 10k commits; fix: nameStatus:false + maxBuffer:100MB."
+        },
+        {
+          "path": "packages/vscode/src/webview/api.ts",
+          "finding": "No API calls passed localPath, so all session-specific endpoints fell back to probing all DBs; now passes window.__GOSSAMER_REPO_PATH__ injected per workspace."
+        }
+      ],
+      "workflow": [
+        "When a fix 'works' in isolation (node --input-type=module test) but fails in production, check compiled dist/ output and run tests against the actual dist/server.js.",
+        "Use lsof to find and kill processes holding a port before respawning; adopted servers are often stale/serving wrong repo.",
+        "Verify SQLite DB table existence with sqlite3 .tables before concluding pushSchema worked.",
+        "Test gitlog output size with raw git log commands before assuming the npm package works — maxBuffer is a common silent failure mode.",
+        "fs.watch on .git/refs/ works for loose refs but would miss packed refs; Entire CLI uses loose refs so this is fine for now."
+      ]
+    },
+    "friction": [
+      "pushSchema silently discarded all 56 SQL statements for multiple sessions before root cause was found — the comment filter bug was non-obvious.",
+      "macOS com.apple.provenance xattr caused SQLite disk I/O errors that only appeared for the gossamer-test DB, not the primary one, making it hard to reproduce.",
+      "getDb caches broken Prisma clients, requiring evictDb export from core/db.ts — cache eviction wasn't originally designed in.",
+      "gitlog maxBuffer overflow was caught by a bare catch in saveGitOidMapping, resulting in 0 git OID mappings with no error logged anywhere.",
+      "The resolveDb probe for /api/sessions/:id only checked shadowSession, causing sessions that exist only in checkpointSessionMetadata to return 404.",
+      "The 'primary DB' concept was baked deeply into server.ts with the bare `db` variable used in ~15+ endpoints, requiring systematic replacement.",
+      "Resumed sessions not showing new messages turned out to be an Entire CLI issue (not writing new shadow branch commits), not a Gossamer bug — significant investigation time spent on a non-issue."
+    ],
+    "open_items": [
+      "Live session updates for cosmos-graphql don't work because Entire CLI isn't writing new shadow branch commits when sessions are resumed — needs investigation on the Entire CLI side.",
+      "resolveDb probes all DBs sequentially when no localPath is provided — could be slow with many repos; consider adding session-to-repo index.",
+      "The restart method in GossamerPanel doesn't wait for the old server to fully die before spawning a new one — potential race condition.",
+      "Only 9 of 17 possible git OID mappings were created for cosmos-graphql even after the maxBuffer fix — some commits may be beyond the 10,000 limit or on branches not searched.",
+      "The /api/repos/current endpoint was fixed to accept ?localPath= but ensureRepoRegistered behavior when repo is already registered (duplicate POST) should be verified as idempotent.",
+      "Sessions endpoint aggregates across all DBs but has no pagination — could be slow with many repos and sessions.",
+      "The checkpoint worktree uses --detach which is correct, but stale worktrees from previous sessions may need cleanup on startup."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T04:54:06.420671Z",
+    "agent_lines": 19,
+    "agent_removed": 10,
+    "human_added": 4,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 27,
+    "total_lines_changed": 37,
+    "agent_percentage": 78.37837837837837,
+    "metric_version": 2
+  }
+}

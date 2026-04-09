@@ -1,0 +1,92 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "464d22c0ee3c",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T04:01:45.40639Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "src/serve.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "888d12ae0663",
+  "checkpoint_transcript_start": 221,
+  "transcript_lines_at_start": 221,
+  "token_usage": {
+    "input_tokens": 102,
+    "cache_creation_tokens": 95802,
+    "cache_read_tokens": 10134180,
+    "output_tokens": 44567,
+    "api_call_count": 84
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix checkpoints not showing in the VSCode treeview, then refactor the server to use per-repo DB clients instead of a single primary DB.",
+    "outcome": "Checkpoints treeview was fixed (root cause was stale server running pre-schema-fix code with empty tables). Server was refactored to use a dbRegistry with allDbs(), dbForRepo(), and resolveDb() helpers. A secondary worktree creation bug was also fixed using --detach.",
+    "learnings": {
+      "repo": [
+        "Each repo has its own SQLite DB — there is no primary/hierarchy DB concept. The server must aggregate across all repo DBs for list endpoints.",
+        "The checkpoint worktree branch is entire/checkpoints/v1. Multiple repos can share this branch name, so worktree add must use --detach to avoid 'branch already used' conflicts.",
+        "The CheckpointTreeProvider.ts only populates when setSession() is called from a session detail panel — it is not a global tree.",
+        "The server is started via serve.ts with --repo-dir, which previously determined the single 'primary' db. This concept has been removed.",
+        "pushSchema bugs caused empty tables — stale server processes from before schema fixes can silently return empty arrays, masking data that actually exists."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "Old endpoint used bare `db` (single primary Prisma client) for checkpoint queries — replaced with resolveDb() pattern"
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "dbRegistry (Map\u003cdbPath, PrismaClient\u003e) built at startup from all configured repos. allDbs() returns all clients, dbForRepo(localPath) resolves a specific repo's client, resolveDb(localPath, probe) falls back to probing all DBs."
+        },
+        {
+          "path": "src/server.ts",
+          "finding": "worktree add command changed to include --detach flag to avoid branch-lock conflicts when multiple repos share the same checkpoint branch name"
+        },
+        {
+          "path": "src/serve.ts",
+          "finding": "Simplified: no longer computes or passes dbPath to startServer. Signature is now startServer(port, repoDir)."
+        },
+        {
+          "path": "packages/vscode/src/CheckpointTreeProvider.ts",
+          "finding": "setSession() must be called (triggered by opening a session detail panel) before checkpoints appear in the tree"
+        }
+      ],
+      "workflow": [
+        "When an API returns empty arrays unexpectedly, check whether the running server process is stale (pre-dating a schema migration) — restart the server before debugging the query logic.",
+        "Building both the core server and the VSCode extension after schema/server changes is necessary to confirm end-to-end correctness.",
+        "Using curl to test API endpoints directly is an effective way to confirm data is flowing before debugging the UI layer."
+      ]
+    },
+    "friction": [
+      "The root cause of the treeview issue was a stale server process with empty tables, not the query logic — this was misleading and required empirical DB state checks to diagnose.",
+      "The user had to explicitly clarify there is no primary DB concept; the original code architecture assumed one, requiring a significant refactor.",
+      "The worktree creation error (branch already used) only surfaced at runtime when a second repo sharing the same branch was indexed — not caught at build time."
+    ],
+    "open_items": [
+      "The /api/sessions/:id and /api/v2/sessions/:id/* endpoints require a ?localPath= query param for DB resolution — the VSCode extension may need updating to pass this param when opening session details.",
+      "The resolveDb() probe-all-DBs fallback (used when ?localPath= is absent) may be slow at scale with many repos — consider caching session-to-repo mappings.",
+      "POST /api/repos and DELETE /api/repos now maintain dbRegistry, but it's unclear if the indexer/watcher lifecycle is fully synchronized with registry add/evict on dynamic repo changes."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T04:01:18.819051Z",
+    "agent_lines": 323,
+    "agent_removed": 259,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 323,
+    "total_lines_changed": 582,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

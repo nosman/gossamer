@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "f0a160cf61c4",
+  "strategy": "manual-commit",
+  "branch": "gossamer-test",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/core/prisma/schema.sql",
+    "packages/vscode/bundled-server/schema.sql",
+    "packages/vscode/bundled-server/serve.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/a160cf61c4/0/metadata.json",
+      "transcript": "/f0/a160cf61c4/0/full.jsonl",
+      "content_hash": "/f0/a160cf61c4/0/content_hash.txt",
+      "prompt": "/f0/a160cf61c4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 46301,
+    "cache_read_tokens": 1037569,
+    "output_tokens": 5836,
+    "api_call_count": 31
+  }
+}

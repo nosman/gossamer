@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "ffe2a257eb8b",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "LICENSE.txt",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/e2a257eb8b/0/metadata.json",
+      "transcript": "/ff/e2a257eb8b/0/full.jsonl",
+      "content_hash": "/ff/e2a257eb8b/0/content_hash.txt",
+      "prompt": "/ff/e2a257eb8b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 341,
+    "cache_creation_tokens": 796498,
+    "cache_read_tokens": 40267156,
+    "output_tokens": 96785,
+    "api_call_count": 287
+  }
+}

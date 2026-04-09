@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "d60d5e42d99f",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-08T04:27:01.094815Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/src/GossamerPanel.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "dc149b51c000",
+  "token_usage": {
+    "input_tokens": 218,
+    "cache_creation_tokens": 345339,
+    "cache_read_tokens": 18793267,
+    "output_tokens": 71569,
+    "api_call_count": 182
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Fix a series of bugs in the Gossamer VS Code extension: server port conflicts on reload, missing database tables on startup, checkpoints not showing in the treeview, and live session updates not working across multiple repos.",
+    "outcome": "Resolved server orphan detection (kill-then-spawn instead of adopt), fixed pushSchema silently executing 0 statements due to comment-line filtering, migrated from a single 'primary' DB to a per-repo DB registry, and fixed several endpoint/watcher issues for multi-repo support. Server was not running at session end, so live update verification was incomplete.",
+    "learnings": {
+      "repo": [
+        "pushSchema splits schema.sql on ';\\n' but every chunk starts with '-- CreateTable', so the old !s.startsWith('--') filter silently discarded all 56 statements — DBs were created but had zero tables.",
+        "The server previously used a single 'db' Prisma client bound to the startup --repo-dir; each repo has its own DB with no hierarchy, requiring a dbRegistry (Map\u003cdbPath, PrismaClient\u003e) with allDbs(), dbForRepo(), and resolveDb() helpers.",
+        "getDb() in packages/core/src/db.ts caches Prisma clients by path — a corrupt/empty DB (e.g. macOS com.apple.provenance xattr causing disk I/O errors) would cache a broken client and never recover without evictDb().",
+        "Git worktrees for checkpoints use 'entire/checkpoints/v1' branch; multiple repos sharing the same branch ref fail with 'already used by worktree' — fixed with --detach flag.",
+        "GET /api/repos/current only matched against the server's startup repoDir, so opening the extension in any other workspace always returned null, triggering redundant re-registration.",
+        "The shadow indexer writes session events to branches named entire/\u003cshort-sha\u003e-\u003csuffix\u003e; the branch IS updated incrementally with each new message, even mid-session."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "Original pushSchema only ran on the primary DB passed via CLI args; secondary repo DBs in config were never schema-initialized at startup."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints used bare 'db' (primary client) instead of resolveDb, so sessions in other repos returned empty arrays."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 402,
+          "end_line": 402,
+          "finding": "resolveDb probe for /api/sessions/:id only checked shadowSession table, missing sessions that only exist in checkpointSessionMetadata or logEvent."
+        },
+        {
+          "path": "packages/core/src/db.ts",
+          "finding": "Added evictDb() export to allow cache eviction when a corrupt DB needs to be deleted and recreated within the same process."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer() guard only checked in-memory GossamerPanel.server; orphaned server processes from crashed sessions held the port, causing EADDRINUSE on next activation."
+        },
+        {
+          "path": "packages/vscode/src/webview/api.ts",
+          "finding": "fetchSession, fetchLogEvents, fetchCheckpoints never passed ?localPath= — all relied on resolveDb probe fallback across all DBs."
+        }
+      ],
+      "workflow": [
+        "When a pushSchema-style migration silently succeeds (no error thrown) but tables don't exist, check the SQL parsing/filtering logic before assuming the SQL file or Prisma client is broken.",
+        "Testing with 'node --input-type=module' against source files can mask issues in compiled dist output — always test the actual compiled artifact when debugging build-time bugs.",
+        "macOS extended attributes (com.apple.provenance) can cause SQLite disk I/O errors; a retry-with-delete pattern is needed for robust DB initialization.",
+        "For multi-repo servers, aggregate endpoints (sessions list, checkpoints list, search) must fan out to all DB clients and merge results; session-specific endpoints should accept a localPath hint to avoid probing all DBs."
+      ]
+    },
+    "friction": [
+      "Three separate root causes were stacked (comment filter, no secondary schema push, corrupt DB xattr) making the 'no tables' bug appear to reoccur after each fix — required deep empirical testing to isolate each layer.",
+      "The 'adopt orphaned server' approach was tried first before realizing adopted servers serve stale/wrong repo data, requiring a full revert to kill-then-spawn.",
+      "resolveDb probe fallback works but is slow with 3+ DBs and masks misconfiguration — localPath param is optional in the API but should be strongly encouraged.",
+      "Server was left running in test state at end of session, causing the 'no updates' complaint — stale process from earlier curl testing."
+    ],
+    "open_items": [
+      "Webview API calls (fetchSession, fetchLogEvents, fetchCheckpoints) do not pass ?localPath= — they rely on resolveDb probe which works but is inefficient; the webview should propagate localPath from the session object once it's fetched.",
+      "The server still has a conceptual repoDir from serve.ts startup even though the DB hierarchy was removed — serve.ts passes repoDir for watcher/indexer startup but the distinction between 'startup repo' and 'all repos' is still implicit.",
+      "No HTTP shutdown endpoint exists on the server — killing orphaned processes requires lsof/SIGTERM from the extension host, which is fragile on non-macOS platforms.",
+      "The restart() method in GossamerPanel kills the in-memory process but doesn't wait for port release before spawning — same orphan race condition as the original bug, just less common.",
+      "Sessions API and branch detection: currently active sessions show the branch from when they were indexed, not the live checked-out branch — a separate /api/repos/status endpoint exists for live branch but is not surfaced per-session in the UI."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-08T04:26:18.655856Z",
+    "agent_lines": 0,
+    "agent_removed": 6,
+    "human_added": 197,
+    "human_modified": 205,
+    "human_removed": 0,
+    "total_committed": 209,
+    "total_lines_changed": 408,
+    "agent_percentage": 1.4705882352941175,
+    "metric_version": 2
+  }
+}

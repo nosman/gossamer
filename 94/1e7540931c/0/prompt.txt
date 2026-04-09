@@ -1,0 +1,19 @@
+when i run gossamer in my the vscode extension host, i get: 
+
+an issue
+
+---
+
+Error: Dynamic require of "path" is not supported
+extensionHostProcess.js:624
+    at file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:12:9
+extensionHostProcess.js:624
+    at node_modules/depd/index.js (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:41:20)
+extensionHostProcess.js:624
+    at __require2 (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:15:50)
+extensionHostProcess.js:624
+    at node_modules/body-parser/index.js (file:///Users/stsoucas/gossamer-test/packages/vscode/bundled-server/serve.js:20528:21)
+
+---
+
+yes
