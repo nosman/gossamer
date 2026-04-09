@@ -11,6 +11,7 @@ import { EventItem } from "../components/EventItem";
 import { ToolGroupItem, type ToolUseData } from "../components/ToolGroupItem";
 import { MarkdownView } from "../components/MarkdownView";
 import { TimeAgo } from "../components/TimeAgo";
+import { agentColor, agentMantineColor } from "../agentColors";
 
 // ── Types (mirrors Electron app's api.ts) ─────────────────────────────────────
 
@@ -234,6 +235,8 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const color = agentColor(agentLabel);
+  const badgeColor = agentMantineColor(agentLabel);
 
   return (
     <Box style={{
@@ -241,19 +244,19 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
       gap: 10,
       padding: "5px 12px",
       paddingLeft: 10,
-      borderLeft: "2px solid var(--mantine-color-orange-5)",
+      borderLeft: `2px solid ${color}`,
       borderBottom: "1px solid var(--vscode-panel-border)",
       alignItems: "flex-start",
     }}>
       <Text
         size="xs"
         fw={600}
-        style={{ width: 80, flexShrink: 0, paddingTop: 2, color: "var(--mantine-color-orange-5)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+        style={{ width: 80, flexShrink: 0, paddingTop: 2, color, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
       >
         {agentLabel}
       </Text>
       <Box style={{ flex: 1, minWidth: 0 }}>
-        {reason && <Badge color="orange" size="xs" variant="light" mb={4}>{reason}</Badge>}
+        {reason && <Badge color={badgeColor} size="xs" variant="light" mb={4}>{reason}</Badge>}
         {!thinking && hasRedactedThinking && (
           <Text size="xs" c="dimmed" fs="italic" mb={4}>thinking (redacted)</Text>
         )}

@@ -3,6 +3,7 @@ import { Box, Badge, Group, Text, Collapse, Avatar } from "@mantine/core";
 import type { Event } from "../api";
 import { MarkdownView } from "./MarkdownView";
 import { TimeAgo } from "./TimeAgo";
+import { agentColor, agentMantineColor } from "../agentColors";
 
 export interface UserInfo {
   name: string;
@@ -98,16 +99,18 @@ function AssistantCard({ event, matchTerms, agentLabel }: { event: Event; matchT
   const d = data(event);
   const msg = str(d.last_assistant_message);
   const reason = str(d.reason);
+  const color = agentColor(agentLabel);
+  const badgeColor = agentMantineColor(agentLabel);
   return (
     <MessageRow
-      accentColor="var(--mantine-color-orange-5)"
+      accentColor={color}
       label={agentLabel ?? "Claude"}
-      labelColor="var(--mantine-color-orange-5)"
+      labelColor={color}
       timestamp={event.timestamp}
       blocked={event.blocked}
     >
       <Box>
-        {reason && <Badge color="orange" size="xs" variant="light" mb={4}>{reason}</Badge>}
+        {reason && <Badge color={badgeColor} size="xs" variant="light" mb={4}>{reason}</Badge>}
         {msg && (matchTerms?.length ? (
           <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
             {applyHighlight(msg, matchTerms)}
