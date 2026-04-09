@@ -10,13 +10,13 @@ import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { postToExtension } from "../vscodeApi";
 
 const SESSION_COLUMNS: { label: string; width: number }[] = [
-  { label: "Intent",     width: COL_WIDTHS.intent          },
   { label: "Name",       width: COL_WIDTHS.sessionId       },
-  { label: "Updated",    width: COL_WIDTHS.updated         },
   { label: "Branch",     width: COL_WIDTHS.branch          },
   { label: "Repo",       width: COL_WIDTHS.repo            },
-  { label: "Parent",     width: COL_WIDTHS.parentSessionId },
+  { label: "Updated",    width: COL_WIDTHS.updated         },
   { label: "User",       width: COL_WIDTHS.user            },
+  { label: "Intent",     width: COL_WIDTHS.intent          },
+  { label: "Parent",     width: COL_WIDTHS.parentSessionId },
   { label: "Started",    width: COL_WIDTHS.started         },
   { label: "",           width: COL_WIDTHS.actions         },
 ];

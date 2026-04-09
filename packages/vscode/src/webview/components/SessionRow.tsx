@@ -88,40 +88,32 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
 
   return (
     <Table.Tr onClick={onPress} style={{ cursor: "pointer" }}>
-        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
+        <CopyCell copyValue={session.sessionId} width={COL_WIDTHS.sessionId}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
             <Tooltip label={dot.label} withArrow position="left" openDelay={300}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: dot.color, flexShrink: 0 }} />
             </Tooltip>
-            <Text size="sm" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{intent}</Text>
+            {session.customTitle ? (
+              <Tooltip label={shortId} withArrow openDelay={300}>
+                <Text ff="monospace" size="sm" fw={600} c="indigo"
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >{session.customTitle}</Text>
+              </Tooltip>
+            ) : session.slug ? (
+              <Tooltip label={shortId} withArrow openDelay={300}>
+                <Text ff="monospace" size="sm" c="dimmed"
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                >{session.slug}</Text>
+              </Tooltip>
+            ) : (
+              <Text ff="monospace" size="sm" c="dimmed">{shortId}</Text>
+            )}
             {session.isLive && (
               <Badge size="xs" color="orange" variant="light" style={{ flexShrink: 0 }}>
                 live
               </Badge>
             )}
           </div>
-        </CopyCell>
-
-        <CopyCell copyValue={session.sessionId} width={COL_WIDTHS.sessionId}>
-          {session.customTitle ? (
-            <Tooltip label={shortId} withArrow openDelay={300}>
-              <Text ff="monospace" size="sm" fw={600} c="indigo"
-                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-              >{session.customTitle}</Text>
-            </Tooltip>
-          ) : session.slug ? (
-            <Tooltip label={shortId} withArrow openDelay={300}>
-              <Text ff="monospace" size="sm" c="dimmed"
-                style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-              >{session.slug}</Text>
-            </Tooltip>
-          ) : (
-            <Text ff="monospace" size="sm" c="dimmed">{shortId}</Text>
-          )}
-        </CopyCell>
-
-        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
-          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
         </CopyCell>
 
         <CopyCell copyValue={session.branch ?? ""} width={COL_WIDTHS.branch}>
@@ -133,6 +125,34 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
         <CopyCell copyValue={session.repoName ?? ""} width={COL_WIDTHS.repo}>
           <Text size="sm" c={session.repoName ? undefined : "dimmed"}>
             {session.repoName ?? "—"}
+          </Text>
+        </CopyCell>
+
+        <CopyCell copyValue={absoluteTime(session.updatedAt)} width={COL_WIDTHS.updated}>
+          <Text size="sm" c="dimmed">{relativeTime(session.updatedAt)}</Text>
+        </CopyCell>
+
+        <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>
+          {session.gitUserEmail ? (
+            <Anchor
+              size="sm"
+              href={`mailto:${session.gitUserEmail}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {session.gitUserName ?? session.gitUserEmail}
+            </Anchor>
+          ) : (
+            <Text size="sm" c={session.gitUserName ? undefined : "dimmed"}>
+              {session.gitUserName ?? "—"}
+            </Text>
+          )}
+        </CopyCell>
+
+        <CopyCell copyValue={intent} width={COL_WIDTHS.intent}>
+          <Text size="sm" c={session.intent || session.summary || session.prompt ? undefined : "dimmed"}
+            style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {intent}
           </Text>
         </CopyCell>
 
@@ -151,22 +171,6 @@ export function SessionRow({ session, onPress, onArchive, isArchived, onParentPr
             <Text ff="monospace" size="sm" c="blue">{shortParent}</Text>
           ) : (
             <Text size="sm" c="dimmed">—</Text>
-          )}
-        </CopyCell>
-
-        <CopyCell copyValue={session.gitUserEmail ?? session.gitUserName ?? ""} width={COL_WIDTHS.user}>
-          {session.gitUserEmail ? (
-            <Anchor
-              size="sm"
-              href={`mailto:${session.gitUserEmail}`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              {session.gitUserName ?? session.gitUserEmail}
-            </Anchor>
-          ) : (
-            <Text size="sm" c={session.gitUserName ? undefined : "dimmed"}>
-              {session.gitUserName ?? "—"}
-            </Text>
           )}
         </CopyCell>
 
