@@ -7,6 +7,7 @@ export {
   indexAllCheckpointsV2,
   indexAllCheckpoints,
   indexAllShadowBranches,
+  indexLiveSessions,
 } from "./indexer.js";
 export type { FullJsonlEvent } from "./indexer.js";
 export {

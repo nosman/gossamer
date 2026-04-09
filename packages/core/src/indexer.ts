@@ -864,6 +864,94 @@ export async function indexAllShadowBranches(
 }
 
 /**
+ * Index live session transcripts directly from `.entire/metadata/<sessionId>/full.jsonl`.
+ *
+ * Entire writes these files while a session is active, before committing them to
+ * a shadow branch. Reading them directly lets us show brand-new sessions in the UI
+ * within seconds instead of waiting for the shadow-branch commit (which can take
+ * minutes, since Entire only commits at checkpoint boundaries).
+ *
+ * Change detection uses the file's (mtimeMs, size) pair — cheap to check and
+ * reliable for append-only transcripts. Stored in the `seenBlobShas` field of
+ * ShadowSession as the synthetic tag `live:<mtimeMs>:<size>` so it doesn't collide
+ * with real git blob SHAs.
+ */
+export async function indexLiveSessions(
+  db: PrismaClient,
+  repoPath: string,
+): Promise<{ sessions: number }> {
+  const metadataDir = join(repoPath, ".entire", "metadata");
+  if (!existsSync(metadataDir)) return { sessions: 0 };
+
+  let totalSessions = 0;
+  let sessionDirs: string[];
+  try {
+    sessionDirs = readdirSync(metadataDir).filter((name) => {
+      try { return statSync(join(metadataDir, name)).isDirectory(); }
+      catch { return false; }
+    });
+  } catch { return { sessions: 0 }; }
+
+  for (const sessionId of sessionDirs) {
+    const jsonlPath = join(metadataDir, sessionId, "full.jsonl");
+    if (!existsSync(jsonlPath)) continue;
+
+    let stat;
+    try { stat = statSync(jsonlPath); }
+    catch { continue; }
+
+    const liveTag = `live:${Math.floor(stat.mtimeMs)}:${stat.size}`;
+
+    // Skip if we've already indexed this exact (mtime, size) version.
+    const existing = await db.shadowSession.findUnique({ where: { sessionId } });
+    const seenShas: string[] = existing ? (JSON.parse(existing.seenBlobShas) as string[]) : [];
+    if (seenShas.includes(liveTag)) continue;
+
+    let fullJsonlContent: string;
+    try { fullJsonlContent = readFileSync(jsonlPath, "utf8"); }
+    catch { continue; }
+
+    const events = parseFullJsonl(fullJsonlContent);
+    if (events.length === 0) continue;
+
+    // Extract session metadata from the first event that carries each field.
+    const cwdEvent    = events.find((e) => e.cwd);
+    const branchEvent = events.find((e) => e.gitBranch);
+    const timeEvent   = events.find((e) => e.timestamp);
+    const cwd       = cwdEvent?.cwd       ?? null;
+    const gitBranch = branchEvent?.gitBranch ?? null;
+    const createdAt = timeEvent?.timestamp ? new Date(timeEvent.timestamp) : null;
+
+    // Read the live prompt file if present (live sibling of `prompt.txt`).
+    let prompt: string | null = null;
+    const promptPath = join(metadataDir, sessionId, "prompt.txt");
+    if (existsSync(promptPath)) {
+      try { prompt = readFileSync(promptPath, "utf8").trim(); } catch { /* ignore */ }
+    }
+
+    // Append the new tag to seenBlobShas so subsequent unchanged scans are no-ops.
+    const newSeenShas = JSON.stringify([...seenShas, liveTag]);
+
+    const shadowSession = await db.shadowSession.upsert({
+      where:  { sessionId },
+      create: { sessionId, branch: "live", seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
+      update: { seenBlobShas: newSeenShas, prompt: prompt ?? existing?.prompt ?? null, cwd: cwd ?? existing?.cwd ?? null, gitBranch: gitBranch ?? existing?.gitBranch ?? null, createdAt: createdAt ?? existing?.createdAt ?? null },
+    });
+
+    const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id);
+    process.stderr.write(`live indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from disk\n`);
+    totalSessions++;
+  }
+
+  if (totalSessions > 0) {
+    await setupLogContentFts(db);
+    await syncLogContentFts(db);
+  }
+
+  return { sessions: totalSessions };
+}
+
+/**
  * Read task checkpoint files from a shadow branch and store parent→child session
  * relationships in the SessionParent table.
  *

@@ -14,7 +14,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { createMcpServer } from "./mcp-server.js";
 import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
-import { getDb, evictDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
+import { getDb, evictDb, indexAllCheckpointsV2, indexAllShadowBranches, indexLiveSessions, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
 import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, checkpointRepoPath, type RepoConfig } from "./config.js";
 
@@ -1374,10 +1374,12 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       // Kick off initial indexing in the background — don't block the response
       void indexCheckpointsForRepo(name, localPath, entry.dbPath);
       void indexShadowsForRepo(name, localPath, entry.dbPath);
+      void indexLiveForRepo(name, localPath, entry.dbPath);
 
       // Start file/git watchers for the newly registered repo
       startDbWatcher(entry.dbPath, name);
       startGitWatcher(localPath, name, entry.dbPath);
+      startLiveWatcher(localPath, name, entry.dbPath);
 
       res.status(201).json(entry);
     } catch (err) {
@@ -1461,8 +1463,10 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
 
   const dbFileWatchers  = new Map<string, FSWatcher[]>();
   const gitRefWatchers  = new Map<string, FSWatcher[]>();
+  const liveMetaWatchers = new Map<string, FSWatcher[]>();
   const dbDebounceTimers  = new Map<string, ReturnType<typeof setTimeout>>();
   const gitDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const liveDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   async function checkDbAndBroadcast(p: string, label: string): Promise<void> {
     try {
@@ -1557,10 +1561,47 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     }
   }
 
+  /**
+   * Watch `.entire/metadata/` for changes to `full.jsonl` files and index them
+   * directly from disk. This surfaces brand-new sessions within ~300ms instead
+   * of waiting for Entire to commit them to a shadow branch (which can take
+   * minutes, since commits happen only at checkpoint boundaries).
+   */
+  function startLiveWatcher(localPath: string, repoName: string, repoDdPath: string): void {
+    if (liveMetaWatchers.has(localPath)) return;
+    const metaDir = join(localPath, ".entire", "metadata");
+    if (!existsSync(metaDir)) return;
+    const watchers: FSWatcher[] = [];
+
+    const trigger = () => {
+      const existing = liveDebounceTimers.get(localPath);
+      if (existing) clearTimeout(existing);
+      liveDebounceTimers.set(localPath, setTimeout(() => {
+        liveDebounceTimers.delete(localPath);
+        void indexLiveForRepo(repoName, localPath, repoDdPath);
+      }, 300));
+    };
+
+    try {
+      watchers.push(fsWatch(metaDir, { recursive: true }, (_evt, filename) => {
+        // Only react to transcript file writes to avoid thrash from tmp files.
+        if (!filename) { trigger(); return; }
+        const name = String(filename);
+        if (name.endsWith("full.jsonl") || name.endsWith("prompt.txt")) trigger();
+      }));
+    } catch { /* recursive watch unsupported — fall back to polling */ }
+
+    if (watchers.length > 0) {
+      liveMetaWatchers.set(localPath, watchers);
+      process.stderr.write(`live watcher: watching ${metaDir}\n`);
+    }
+  }
+
   // Start watchers for all configured repos
   for (const r of readConfig().repos) {
     startDbWatcher(r.dbPath, r.name);
     startGitWatcher(r.localPath, r.name, r.dbPath);
+    startLiveWatcher(r.localPath, r.name, r.dbPath);
   }
 
   // Fallback poll — catches any events missed by the file watchers
@@ -1690,6 +1731,19 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     }
   }
 
+  async function indexLiveForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
+    try {
+      const repoDb = await getDb(repoDdPath);
+      const { sessions } = await indexLiveSessions(repoDb, localPath);
+      if (sessions > 0) {
+        process.stderr.write(`live indexer [${name}]: indexed ${sessions} live session(s)\n`);
+        broadcast();
+      }
+    } catch (err) {
+      process.stderr.write(`live indexer [${name}]: error — ${err}\n`);
+    }
+  }
+
   // ── Checkpoint auto-indexer — all repos, every 30s ────────────────────────
 
   const runAllCheckpoints = async () => {
@@ -1716,6 +1770,21 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
   const shadowPoller = setInterval(runAllShadows, 30_000);
   process.stderr.write(`shadow indexer: git watchers active, fallback poll every 30s\n`);
 
+  // ── Live session indexer — reads .entire/metadata/ directly from disk ──────
+  // This catches new sessions seconds after they start, well before Entire
+  // commits them to a shadow branch.
+
+  const runAllLive = async () => {
+    const repos = readConfig().repos;
+    await Promise.all(repos.map((r) => indexLiveForRepo(r.name, r.localPath, r.dbPath)));
+  };
+
+  void runAllLive();
+  // fs.watch on macOS can drop events for files written by other processes,
+  // so poll every 3s as a safety net — reads are cheap (mtime+size comparison).
+  const livePoller = setInterval(runAllLive, 3_000);
+  process.stderr.write(`live indexer: fs watchers active, fallback poll every 3s\n`);
+
   // POST /api/sessions/sync — force immediate re-index of all shadow branches
   app.post("/api/sessions/sync", async (_req, res) => {
     try {
@@ -1732,8 +1801,10 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     clearInterval(poller);
     clearInterval(checkpointPoller);
     clearInterval(shadowPoller);
+    clearInterval(livePoller);
     for (const ws of dbFileWatchers.values()) for (const w of ws) w.close();
     for (const ws of gitRefWatchers.values()) for (const w of ws) w.close();
+    for (const ws of liveMetaWatchers.values()) for (const w of ws) w.close();
     void mcpTransport.close();
     httpServer.close();
     process.exit(0);
