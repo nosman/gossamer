@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { spawn, ChildProcess } from "child_process";
-import { watch, FSWatcher, existsSync, readFileSync } from "fs";
+import { watch, FSWatcher, existsSync, readFileSync, mkdirSync, createWriteStream, WriteStream } from "fs";
 import { join, resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 import { homedir } from "os";
@@ -21,6 +21,32 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BUNDLED_SERVE = resolve(__dirname, "../bundled-server/serve.js");
 const DEV_SERVE     = resolve(__dirname, "../../../dist/serve.js");
 const SERVE_SCRIPT  = existsSync(BUNDLED_SERVE) ? BUNDLED_SERVE : DEV_SERVE;
+
+const LOG_DIR  = join(homedir(), ".gossamer", "logs");
+const LOG_PATH = join(LOG_DIR, "server.log");
+
+/** Tail of the last ~16 KB of server stderr, for error reporting. */
+const STDERR_BUFFER_MAX = 16 * 1024;
+let stderrBuffer = "";
+function appendStderr(chunk: string) {
+  stderrBuffer += chunk;
+  if (stderrBuffer.length > STDERR_BUFFER_MAX) {
+    stderrBuffer = stderrBuffer.slice(-STDERR_BUFFER_MAX);
+  }
+}
+
+let logStream: WriteStream | undefined;
+function getLogStream(): WriteStream | undefined {
+  if (logStream) return logStream;
+  try {
+    mkdirSync(LOG_DIR, { recursive: true });
+    logStream = createWriteStream(LOG_PATH, { flags: "a" });
+    logStream.write(`\n=== Gossamer server started at ${new Date().toISOString()} ===\n`);
+    return logStream;
+  } catch {
+    return undefined;
+  }
+}
 
 // Maps the agent name (from CheckpointSessionMetadata.agent) to its CLI command.
 export const AGENT_CLI: Record<string, { bin: string; resumeFlag: string; renameCmd?: string }> = {
@@ -139,6 +165,8 @@ export class GossamerPanel {
   // Server is static so it survives panel disposal (minimize/restore)
   private static server: ChildProcess | undefined;
   private static serverPort: number | undefined;
+  /** Last server exit info — used to show a helpful error screen. */
+  private static lastExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
 
   private readonly panel: vscode.WebviewPanel;
   private readonly context: vscode.ExtensionContext;
@@ -183,6 +211,7 @@ export class GossamerPanel {
     const instance = GossamerPanel.instance;
     if (instance) {
       instance.serverReady = false;
+      instance.panel.webview.postMessage({ type: "server_starting" });
       instance.spawnServer();
       waitForServer(port)
         .then(() => instance.ensureRepoRegistered())
@@ -190,7 +219,7 @@ export class GossamerPanel {
           instance.serverReady = true;
           instance.panel.webview.postMessage({ type: "server_ready" });
         })
-        .catch((err) => instance.panel.webview.postMessage({ type: "server_error", error: String(err) }));
+        .catch((err) => instance.reportServerError(String(err)));
     } else {
       const nodeExec = getSystemNode();
       if (existsSync(SERVE_SCRIPT)) {
@@ -255,6 +284,14 @@ export class GossamerPanel {
         if (msg.type === "minimize") {
           GossamerPanel.minimize();
         }
+        if (msg.type === "restart_server") {
+          GossamerPanel.restart(this.repoPath);
+        }
+        if (msg.type === "open_log_file") {
+          vscode.workspace.openTextDocument(vscode.Uri.file(LOG_PATH))
+            .then((doc) => vscode.window.showTextDocument(doc, { preview: false }))
+            .then(undefined, (err) => vscode.window.showErrorMessage(`Failed to open log: ${err}`));
+        }
       },
       undefined,
       this.disposables,
@@ -271,7 +308,7 @@ export class GossamerPanel {
     waitForServer(this.port)
       .then(() => this.ensureRepoRegistered())
       .then(() => { this.serverReady = true; return this.panel.webview.postMessage({ type: "server_ready" }); })
-      .catch((err) => this.panel.webview.postMessage({ type: "server_error", error: String(err) }));
+      .catch((err) => this.reportServerError(String(err)));
   }
 
   private async spawnServer() {
@@ -300,12 +337,18 @@ export class GossamerPanel {
     if (!existsSync(SERVE_SCRIPT)) {
       const msg = `Gossamer server script not found at ${SERVE_SCRIPT}. Run \`npm run build\` in the gossamer repo root first.`;
       console.error("[Gossamer]", msg);
-      vscode.window.showErrorMessage(msg);
+      appendStderr(msg + "\n");
       return;
     }
 
     const nodeExec = getSystemNode();
     console.log(`[Gossamer] spawning: ${nodeExec} ${SERVE_SCRIPT} --repo-dir ${this.repoPath} --port ${this.port}`);
+
+    // Reset state for the new launch
+    stderrBuffer = "";
+    GossamerPanel.lastExit = undefined;
+    const log = getLogStream();
+    log?.write(`--- spawn ${new Date().toISOString()} pid=? repo=${this.repoPath} port=${this.port} ---\n`);
 
     const proc = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", this.repoPath, "--port", String(this.port)], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -313,25 +356,50 @@ export class GossamerPanel {
     });
 
     proc.stdout?.on("data", (d: Buffer) => {
-      console.log("[Gossamer server stdout]", d.toString().trim());
+      const text = d.toString();
+      console.log("[Gossamer server stdout]", text.trim());
+      log?.write(text);
     });
     proc.stderr?.on("data", (d: Buffer) => {
-      console.error("[Gossamer server stderr]", d.toString().trim());
+      const text = d.toString();
+      console.error("[Gossamer server stderr]", text.trim());
+      appendStderr(text);
+      log?.write(text);
     });
     proc.on("error", (err) => {
       console.error("[Gossamer] failed to spawn server:", err.message);
-      vscode.window.showErrorMessage(`Gossamer: failed to start server — ${err.message}`);
+      appendStderr(`spawn error: ${err.message}\n`);
+      GossamerPanel.instance?.reportServerError(`failed to start server — ${err.message}`);
     });
     proc.on("exit", (code, signal) => {
       console.log(`[Gossamer server] exited code=${code} signal=${signal}`);
+      log?.write(`--- exit code=${code} signal=${signal} at ${new Date().toISOString()} ---\n`);
+      GossamerPanel.lastExit = { code, signal };
       if (GossamerPanel.server === proc) {
         GossamerPanel.server = undefined;
         GossamerPanel.serverPort = undefined;
+        // If the panel was still waiting on this process, surface the crash
+        const instance = GossamerPanel.instance;
+        if (instance && !instance.serverReady) {
+          instance.reportServerError(`server exited before becoming ready (code=${code}, signal=${signal})`);
+        }
       }
     });
 
     GossamerPanel.server = proc;
     GossamerPanel.serverPort = this.port;
+  }
+
+  /** Send a rich server_error payload to the webview. */
+  private reportServerError(message: string): void {
+    this.panel.webview.postMessage({
+      type: "server_error",
+      error: message,
+      stderrTail: stderrBuffer,
+      logPath: LOG_PATH,
+      logExists: existsSync(LOG_PATH),
+      exit: GossamerPanel.lastExit ?? null,
+    });
   }
 
   private async openSearchQuickPick(): Promise<void> {

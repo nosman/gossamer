@@ -1,8 +1,39 @@
 import gitlog from "gitlog";
+import { execFile as execFileCb } from "child_process";
+import { promisify } from "util";
+
+const execFile = promisify(execFileCb);
 
 export function getCheckpointIdFromCommitMessage(message: string): string | null {
   const match = message.match(/^Entire-Checkpoint:\s*(\S+)$/m);
   return match ? match[1] : null;
+}
+
+/**
+ * Look up the author of a checkpoint commit on the `entire/checkpoints/v1` branch.
+ * The checkpoint worktree shares the object store with the bare/main repo, so
+ * `git log` inside `worktreePath` can see all checkpoint-branch commits.
+ *
+ * Each checkpoint commit has a subject like `Checkpoint: <id>`.
+ */
+export async function findCheckpointAuthor(
+  worktreePath: string,
+  checkpointId: string,
+): Promise<{ name: string; email: string } | null> {
+  try {
+    const { stdout } = await execFile(
+      "git",
+      ["-C", worktreePath, "log", "-1", "--format=%an%x00%ae", "--grep", `^Checkpoint: ${checkpointId}$`, "--all"],
+      { maxBuffer: 1024 * 1024 },
+    );
+    const line = stdout.trim();
+    if (!line) return null;
+    const [name, email] = line.split("\0");
+    if (!name && !email) return null;
+    return { name: name ?? "", email: email ?? "" };
+  } catch {
+    return null;
+  }
 }
 
 export async function findCommitForCheckpoint(

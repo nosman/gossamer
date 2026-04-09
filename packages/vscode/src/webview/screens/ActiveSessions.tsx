@@ -29,9 +29,17 @@ interface ActiveSessionsProps {
   onSessionPress: (sessionId: string, title: string) => void;
 }
 
+interface StartupErrorPayload {
+  message: string;
+  stderrTail: string;
+  logPath: string | null;
+  logExists: boolean;
+  exit: { code: number | null; signal: string | null } | null;
+}
+
 export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   const [startup, setStartup]       = useState<StartupState>("starting");
-  const [startupError, setStartupError] = useState<string | null>(null);
+  const [startupError, setStartupError] = useState<StartupErrorPayload | null>(null);
   const [sessions, setSessions]     = useState<Session[]>([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
@@ -42,9 +50,26 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   // Wait for the extension host to confirm the server is ready
   useEffect(() => {
     const handler = (event: MessageEvent) => {
-      const msg = event.data as { type: string; error?: string };
-      if (msg.type === "server_ready") setStartup("ready");
-      if (msg.type === "server_error") { setStartupError(msg.error ?? "Unknown error"); setStartup("error"); }
+      const msg = event.data as {
+        type: string;
+        error?: string;
+        stderrTail?: string;
+        logPath?: string;
+        logExists?: boolean;
+        exit?: { code: number | null; signal: string | null } | null;
+      };
+      if (msg.type === "server_starting") { setStartupError(null); setStartup("starting"); setLoading(true); }
+      if (msg.type === "server_ready") { setStartupError(null); setStartup("ready"); }
+      if (msg.type === "server_error") {
+        setStartupError({
+          message:    msg.error ?? "Unknown error",
+          stderrTail: msg.stderrTail ?? "",
+          logPath:    msg.logPath ?? null,
+          logExists:  msg.logExists ?? false,
+          exit:       msg.exit ?? null,
+        });
+        setStartup("error");
+      }
     };
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
@@ -100,11 +125,61 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   }
 
   if (startup === "error") {
+    const exitBlurb = startupError?.exit
+      ? ` (exit code ${startupError.exit.code ?? "null"}${startupError.exit.signal ? `, signal ${startupError.exit.signal}` : ""})`
+      : "";
     return (
       <Center style={{ flex: 1, padding: 24 }}>
-        <Alert color="red" title="Server failed to start" maw={480}>
-          <Text size="xs" c="dimmed">{startupError}</Text>
-        </Alert>
+        <Box maw={640} w="100%">
+          <Alert color="red" title="Gossamer server failed to start" mb={16}>
+            <Text size="sm" mb={8}>{startupError?.message ?? "Unknown error"}{exitBlurb}</Text>
+            {startupError?.stderrTail ? (
+              <Box
+                component="pre"
+                style={{
+                  margin: 0,
+                  padding: 10,
+                  maxHeight: 240,
+                  overflow: "auto",
+                  fontFamily: "var(--vscode-editor-font-family, monospace)",
+                  fontSize: 11,
+                  lineHeight: 1.5,
+                  background: "var(--vscode-textCodeBlock-background)",
+                  border: "1px solid var(--vscode-panel-border)",
+                  borderRadius: 4,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {startupError.stderrTail}
+              </Box>
+            ) : (
+              <Text size="xs" c="dimmed" fs="italic">No output captured from server.</Text>
+            )}
+          </Alert>
+          <Group gap={8}>
+            <Button
+              size="xs"
+              onClick={() => postToExtension({ type: "restart_server" })}
+            >
+              Restart server
+            </Button>
+            {startupError?.logExists && (
+              <Button
+                size="xs"
+                variant="default"
+                onClick={() => postToExtension({ type: "open_log_file" })}
+              >
+                Open log file
+              </Button>
+            )}
+          </Group>
+          {startupError?.logPath && (
+            <Text size="xs" c="dimmed" mt={8} ff="monospace">
+              Log: {startupError.logPath}
+            </Text>
+          )}
+        </Box>
       </Center>
     );
   }

@@ -393,9 +393,8 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             <ActionIcon variant="subtle" size="sm" onClick={onBack} title="Back to sessions">←</ActionIcon>
           )}
           <Text size="sm" fw={600} style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {session?.intent ?? session?.summary ?? session?.customTitle ?? session?.slug ?? title}
+            {session?.customTitle ?? session?.slug ?? title}
           </Text>
-          {session?.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
           <ActionIcon
             size="sm"
@@ -406,14 +405,25 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
         </Group>
         {session && (
           <Group px={12} pb={5} gap={16}>
+            {session.branch && <Text size="xs" ff="monospace" c="teal">{session.branch}</Text>}
+            {session.repoName && <Text size="xs" c="dimmed">{session.repoName}</Text>}
+            <Text size="xs" c="dimmed">updated <TimeAgo iso={session.updatedAt} /></Text>
+            {session.gitUserName && <Text size="xs" c="dimmed">{session.gitUserName}</Text>}
+          </Group>
+        )}
+        {session && (session.intent || session.cwd) && (
+          <Group px={12} pb={6} gap={16}>
+            {session.intent && (
+              <Text size="xs" c="dimmed" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                {session.intent}
+              </Text>
+            )}
+            <Text size="xs" c="dimmed">started <TimeAgo iso={session.startedAt} /></Text>
             {session.cwd && (
               <Text size="xs" c="dimmed" ff="monospace" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 320 }}>
                 {session.cwd}
               </Text>
             )}
-            {session.gitUserName && <Text size="xs" c="dimmed">{session.gitUserName}</Text>}
-            <Text size="xs" c="dimmed">started <TimeAgo iso={session.startedAt} /></Text>
-            <Text size="xs" c="dimmed">updated <TimeAgo iso={session.updatedAt} /></Text>
           </Group>
         )}
       </Box>

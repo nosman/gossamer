@@ -18,7 +18,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
 import type { PrismaClient } from "../prisma/generated/client/index.js";
-import { findCommitForCheckpoint } from "./gitUtils.js";
+import { findCommitForCheckpoint, findCheckpointAuthor } from "./gitUtils.js";
 import { setupLogContentFts, syncLogContentFts } from "./search.js";
 
 // ─── Raw shapes from the checkpoint files ─────────────────────────────────────
@@ -201,12 +201,20 @@ export async function indexCheckpointV2(
   const meta = JSON.parse(readFileSync(metaPath, "utf8")) as RootMeta;
 
   // Upsert CheckpointMetadata — create TokenUsage only on first insert
-  let checkpointMeta = await db.checkpointMetadata.findUnique({
+  const existingMeta = await db.checkpointMetadata.findUnique({
     where: { checkpointId },
-    select: { id: true },
+    select: { id: true, gitUserName: true, gitUserEmail: true },
   });
 
-  if (!checkpointMeta) {
+  // Look up the true author of this checkpoint from the checkpoint-branch commit.
+  // This is independent of the main-branch git history (which may not be reachable
+  // for checkpoints made by other users), so it works correctly across machines.
+  // Only look up if we don't already have an author on record — git log --grep is slow.
+  const needsAuthorLookup = !existingMeta?.gitUserName && !existingMeta?.gitUserEmail;
+  const author = needsAuthorLookup ? await findCheckpointAuthor(checkpointDir, checkpointId) : null;
+
+  let checkpointMeta: { id: number };
+  if (!existingMeta) {
     let tokenUsageId: number | null = null;
     if (meta.token_usage) tokenUsageId = await createTokenUsage(db, meta.token_usage);
     checkpointMeta = await db.checkpointMetadata.create({
@@ -216,6 +224,8 @@ export async function indexCheckpointV2(
         branch:           meta.branch            ?? null,
         strategy:         meta.strategy          ?? null,
         checkpointsCount: meta.checkpoints_count ?? 0,
+        gitUserName:      author?.name  || null,
+        gitUserEmail:     author?.email || null,
         tokenUsageId,
       },
       select: { id: true },
@@ -228,8 +238,10 @@ export async function indexCheckpointV2(
         branch:           meta.branch            ?? null,
         strategy:         meta.strategy          ?? null,
         checkpointsCount: meta.checkpoints_count ?? 0,
+        ...(author ? { gitUserName: author.name || null, gitUserEmail: author.email || null } : {}),
       },
     });
+    checkpointMeta = { id: existingMeta.id };
   }
 
   // files_touched → FilePath + join table
