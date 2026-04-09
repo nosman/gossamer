@@ -1642,12 +1642,18 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       }
 
       try {
-        // For bare repos, reset to the fetched remote ref; for standard repos, reset to local branch
-        const ref = checkpointRemoteUrl
-          ? `refs/remotes/origin/${CHECKPOINT_BRANCH}`
-          : `refs/heads/${CHECKPOINT_BRANCH}`;
-        await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard ${ref}`);
-      } catch { /* non-fatal */ }
+        // Bare checkpoint repos store fetched refs at refs/heads/* (no remotes namespace).
+        // Standard repos have refs/remotes/origin/* after fetch.
+        const resetRef = checkpointRemoteUrl
+          ? `refs/heads/${CHECKPOINT_BRANCH}`
+          : `refs/remotes/origin/${CHECKPOINT_BRANCH}`;
+        await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard ${resetRef}`);
+      } catch {
+        // Fallback to local branch ref (e.g. no remote configured)
+        try {
+          await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard refs/heads/${CHECKPOINT_BRANCH}`);
+        } catch { /* non-fatal */ }
+      }
 
       const repoDb = await getDb(repoDdPath);
       const { checkpoints } = await indexAllCheckpointsV2(repoDb, worktreePath, undefined, localPath);
