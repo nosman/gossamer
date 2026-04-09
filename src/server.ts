@@ -16,7 +16,7 @@ import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { getDb, evictDb, indexAllCheckpointsV2, indexAllShadowBranches, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
-import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, type RepoConfig } from "./config.js";
+import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, checkpointRepoPath, type RepoConfig } from "./config.js";
 
 // ─── Custom title cache (reads ~/.claude/projects/…/*.jsonl for /rename events) ──
 
@@ -1334,7 +1334,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
   // POST /api/repos — add or update a repo { name, remote, localPath }; dbPath is auto-derived
   app.post("/api/repos", async (req, res) => {
     try {
-      const { name, remote, localPath } = req.body as Partial<RepoConfig>;
+      const { name, remote, localPath, checkpointRemote } = req.body as Partial<RepoConfig>;
       if (!name || !localPath) {
         res.status(400).json({ error: "name and localPath are required" });
         return;
@@ -1349,6 +1349,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         remote: remote ?? "",
         localPath,
         dbPath: resolvedDbPath,
+        ...(checkpointRemote ? { checkpointRemote } : {}),
       };
       addRepo(entry);
       mkdirSync(dirname(entry.dbPath), { recursive: true });
@@ -1568,6 +1569,38 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
 
   const CHECKPOINT_BRANCH = "entire/checkpoints/v1";
 
+  /** Clone or fetch a bare repo for a checkpoint remote. Returns the bare repo path. */
+  async function ensureCheckpointRepo(repoName: string, checkpointRemote: string): Promise<string> {
+    const bareRepoPath = checkpointRepoPath(repoName);
+    if (!existsSync(bareRepoPath)) {
+      mkdirSync(dirname(bareRepoPath), { recursive: true });
+      process.stderr.write(`checkpoint indexer [${repoName}]: cloning checkpoint remote ${checkpointRemote}\n`);
+      await exec(`git clone --bare ${JSON.stringify(checkpointRemote)} ${JSON.stringify(bareRepoPath)}`, { timeout: 30_000 });
+    } else {
+      await exec(`git -C ${JSON.stringify(bareRepoPath)} fetch origin`, { timeout: 10_000 });
+    }
+    return bareRepoPath;
+  }
+
+  /** Create a worktree for the checkpoint branch from a bare checkpoint repo. */
+  async function ensureWorktreeFromBare(bareRepoPath: string, localPath: string): Promise<string> {
+    const worktreePath = join(localPath, ".gossamer", "checkpoints");
+    mkdirSync(join(localPath, ".gossamer"), { recursive: true });
+    if (!existsSync(worktreePath)) {
+      try {
+        execSync(`git -C ${JSON.stringify(bareRepoPath)} worktree prune`, { stdio: "pipe" });
+        execSync(
+          `git -C ${JSON.stringify(bareRepoPath)} worktree add --detach ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
+          { stdio: "pipe" },
+        );
+        process.stderr.write(`checkpoint indexer: worktree created at ${worktreePath} (from bare repo)\n`);
+      } catch (err) {
+        process.stderr.write(`checkpoint indexer: failed to create worktree from bare repo — ${err}\n`);
+      }
+    }
+    return worktreePath;
+  }
+
   async function ensureWorktree(localPath: string): Promise<string> {
     const worktreePath = join(localPath, ".gossamer", "checkpoints");
     mkdirSync(join(localPath, ".gossamer"), { recursive: true });
@@ -1589,14 +1622,33 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
   async function indexCheckpointsForRepo(name: string, localPath: string, repoDdPath: string): Promise<void> {
     process.stderr.write(`checkpoint indexer [${name}]: running\n`);
     try {
-      const worktreePath = await ensureWorktree(localPath);
+      const repo = findRepo(localPath);
+      const checkpointRemoteUrl = repo?.checkpointRemote;
+
+      let worktreePath: string;
+      if (checkpointRemoteUrl) {
+        const bareRepoPath = await ensureCheckpointRepo(name, checkpointRemoteUrl);
+        worktreePath = await ensureWorktreeFromBare(bareRepoPath, localPath);
+      } else {
+        worktreePath = await ensureWorktree(localPath);
+      }
+
       if (!existsSync(worktreePath)) return;
+
+      if (!checkpointRemoteUrl) {
+        try {
+          await exec(`git -C ${JSON.stringify(worktreePath)} fetch origin ${CHECKPOINT_BRANCH}`, { timeout: 10_000 });
+        } catch { /* remote unavailable — index local state */ }
+      }
+
       try {
-        await exec(`git -C ${JSON.stringify(worktreePath)} fetch origin ${CHECKPOINT_BRANCH}`, { timeout: 10_000 });
-      } catch { /* remote unavailable — index local state */ }
-      try {
-        await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard refs/heads/${CHECKPOINT_BRANCH}`);
+        // For bare repos, reset to the fetched remote ref; for standard repos, reset to local branch
+        const ref = checkpointRemoteUrl
+          ? `refs/remotes/origin/${CHECKPOINT_BRANCH}`
+          : `refs/heads/${CHECKPOINT_BRANCH}`;
+        await exec(`git -C ${JSON.stringify(worktreePath)} reset --hard ${ref}`);
       } catch { /* non-fatal */ }
+
       const repoDb = await getDb(repoDdPath);
       const { checkpoints } = await indexAllCheckpointsV2(repoDb, worktreePath, undefined, localPath);
       if (checkpoints > 0) {

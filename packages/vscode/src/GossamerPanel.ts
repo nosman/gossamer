@@ -30,6 +30,27 @@ export const AGENT_CLI: Record<string, { bin: string; resumeFlag: string; rename
 };
 const DEFAULT_AGENT_CLI = AGENT_CLI["Claude Code"];
 
+/**
+ * Read the checkpoint remote URL from `.entire/settings.json`.
+ * Derives the full git URL using the same protocol as the push remote.
+ */
+function readCheckpointRemote(repoPath: string, pushRemote: string): string | undefined {
+  try {
+    const raw = readFileSync(join(repoPath, ".entire", "settings.json"), "utf8");
+    const settings = JSON.parse(raw) as Record<string, unknown>;
+    const opts = settings?.strategy_options as Record<string, unknown> | undefined;
+    const cr = opts?.checkpoint_remote as { provider?: string; repo?: string } | undefined;
+    if (!cr?.repo) return undefined;
+    // Derive git URL using same protocol as push remote
+    if (pushRemote.startsWith("git@github.com:")) {
+      return `git@github.com:${cr.repo}.git`;
+    }
+    return `https://github.com/${cr.repo}.git`;
+  } catch {
+    return undefined;
+  }
+}
+
 // Use the system node, not VS Code's bundled Electron node
 function getSystemNode(): string {
   try {
@@ -492,11 +513,14 @@ export class GossamerPanel {
       remote = stdout.trim();
     } catch { /* no remote configured */ }
 
+    const checkpointRemote = readCheckpointRemote(this.repoPath, remote);
+
     console.log(`[Gossamer] registering repo: ${name} at ${this.repoPath}`);
     await httpPostJson(`http://localhost:${this.port}/api/repos`, {
       name,
       localPath: this.repoPath,
       remote,
+      ...(checkpointRemote ? { checkpointRemote } : {}),
     });
   }
 

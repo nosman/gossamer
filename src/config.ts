@@ -7,6 +7,7 @@ export interface RepoConfig {
   remote: string;
   localPath: string;
   dbPath: string;
+  checkpointRemote?: string;
 }
 
 export const DEFAULT_PORT = 3456;
@@ -72,4 +73,10 @@ export function findRepoForPath(fsPath: string): RepoConfig | undefined {
 export function defaultDbPath(name: string): string {
   const safe = name.replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(CONFIG_DIR, "repos", `${safe}.db`);
+}
+
+/** Path to the bare checkpoint repo clone: ~/.gossamer/checkpoint-repos/<safe-name>.git */
+export function checkpointRepoPath(repoName: string): string {
+  const safe = repoName.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return join(CONFIG_DIR, "checkpoint-repos", `${safe}.git`);
 }
