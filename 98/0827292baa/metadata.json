@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "980827292baa",
+  "strategy": "manual-commit",
+  "branch": "main",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "app/out/main/index.js",
+    "app/out/preload/index.js",
+    "app/out/renderer/assets/index-nlZmMpE2.js",
+    "app/out/renderer/index.html",
+    "src/server.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/98/0827292baa/0/metadata.json",
+      "transcript": "/98/0827292baa/0/full.jsonl",
+      "content_hash": "/98/0827292baa/0/content_hash.txt",
+      "prompt": "/98/0827292baa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5541,
+    "cache_creation_tokens": 4488077,
+    "cache_read_tokens": 126321679,
+    "output_tokens": 605711,
+    "api_call_count": 1277
+  }
+}
