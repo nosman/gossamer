@@ -235,8 +235,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
   app.use(cors());
   app.use(express.json());
 
-  // Resolve git user and repo name from repo config once at startup
-  const gitUser  = getGitUser(repoDir);
+  // Resolve repo name from repo config once at startup
   const repoName = repoDir ? basename(repoDir) : null;
 
   // GET /api/sessions — reconstructed from CheckpointSessionMetadata + ShadowSession
@@ -370,8 +369,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
           repoName:        basename(cwd) || repoName,
           parentSessionId: parentMap.get(sessionId) ?? null,
           childSessionIds: childMap.get(sessionId) ?? [],
-          gitUserName:     cpUser?.gitUserName ?? gitUser.name,
-          gitUserEmail:    cpUser?.gitUserEmail ?? gitUser.email,
+          gitUserName:     cpUser?.gitUserName || null,
+          gitUserEmail:    cpUser?.gitUserEmail || null,
           prompt:          shadow?.prompt ?? null,
           summary:         null,
           keywords:        [],
@@ -464,8 +463,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         repoName:        basename(cwd) || repoName,
         parentSessionId: null,
         childSessionIds: [],
-        gitUserName:     cpMeta?.gitUserName ?? gitUser.name,
-        gitUserEmail:    cpMeta?.gitUserEmail ?? gitUser.email,
+        gitUserName:     cpMeta?.gitUserName || null,
+        gitUserEmail:    cpMeta?.gitUserEmail || null,
         prompt:          shadow?.prompt ?? null,
         summary:         null,
         keywords:        [],
@@ -1241,7 +1240,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       }
       res.json(results.map((r) => {
         const u = sessionUserMap.get(r.sessionId);
-        return { ...r, gitUserName: u?.gitUserName ?? gitUser.name, gitUserEmail: u?.gitUserEmail ?? gitUser.email };
+        return { ...r, gitUserName: u?.gitUserName || null, gitUserEmail: u?.gitUserEmail || null };
       }));
     } catch (err) {
       res.status(400).json({ error: String(err) });
