@@ -384,9 +384,15 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         };
       });
 
+      // Sort sessions from the same repo first, matched by git remote
+      // so that the same repo on different machines (different cwds) sorts together.
+      const sortRepo = sortDir ? findRepoForPath(sortDir) : null;
+      const sortRemote = sortRepo?.remote ?? null;
       result.sort((a, b) => {
-        const aLocal = sortDir ? (a.cwd === sortDir || a.cwd.startsWith(sortDir + "/") ? 0 : 1) : 1;
-        const bLocal = sortDir ? (b.cwd === sortDir || b.cwd.startsWith(sortDir + "/") ? 0 : 1) : 1;
+        const aRepo = a.cwd ? findRepoForPath(a.cwd) : null;
+        const bRepo = b.cwd ? findRepoForPath(b.cwd) : null;
+        const aLocal = sortRemote && aRepo?.remote === sortRemote ? 0 : sortDir && (a.cwd === sortDir || a.cwd.startsWith(sortDir + "/")) ? 0 : 1;
+        const bLocal = sortRemote && bRepo?.remote === sortRemote ? 0 : sortDir && (b.cwd === sortDir || b.cwd.startsWith(sortDir + "/")) ? 0 : 1;
         if (aLocal !== bLocal) return aLocal - bLocal;
         return b.updatedAt.localeCompare(a.updatedAt);
       });
