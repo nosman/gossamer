@@ -111,11 +111,7 @@ function AssistantCard({ event, matchTerms, agentLabel }: { event: Event; matchT
     >
       <Box>
         {reason && <Badge color={badgeColor} size="xs" variant="light" mb={4}>{reason}</Badge>}
-        {msg && (matchTerms?.length ? (
-          <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
-            {applyHighlight(msg, matchTerms)}
-          </Text>
-        ) : <MarkdownView text={msg} />)}
+        {msg && <MarkdownView text={msg} highlightTerms={matchTerms} />}
       </Box>
     </MessageRow>
   );

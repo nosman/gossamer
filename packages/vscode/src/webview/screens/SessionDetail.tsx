@@ -272,11 +272,11 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
             </Collapse>
           </Box>
         )}
-        {stop && msg && <Box mb={toolGroups.length > 0 ? 6 : 0}>{matchTerms?.length ? (
-          <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: "18px" }}>
-            {highlightText(msg, matchTerms)}
-          </Text>
-        ) : <MarkdownView text={msg} />}</Box>}
+        {stop && msg && (
+          <Box mb={toolGroups.length > 0 ? 6 : 0}>
+            <MarkdownView text={msg} highlightTerms={matchTerms} />
+          </Box>
+        )}
         {toolGroups.length > 0 && (
           <Box>
             <Group gap={6} style={{ cursor: "pointer" }} onClick={() => setToolsExpanded((v) => !v)}>
