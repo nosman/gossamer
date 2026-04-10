@@ -226,6 +226,18 @@ function highlightText(text: string, terms: string[]): React.ReactNode {
   return <>{parts.map((p, i) => i % 2 === 1 ? <mark key={i} style={{ background: "rgba(255,200,0,0.45)", borderRadius: 2, padding: "0 1px" }}>{p}</mark> : p)}</>;
 }
 
+function matchesAny(text: string, terms: string[]): boolean {
+  if (!terms.length || !text) return false;
+  const lower = text.toLowerCase();
+  return terms.some((t) => lower.includes(t.toLowerCase()));
+}
+
+function toolHasMatch(tool: ToolUseData, terms: string[]): boolean {
+  if (!terms.length) return false;
+  const blob = (JSON.stringify(tool.pre.data) + JSON.stringify(tool.post?.data ?? "")).toLowerCase();
+  return terms.some((t) => blob.includes(t.toLowerCase()));
+}
+
 function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[]; agentLabel: string }) {
   const d      = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg    = str(d.last_assistant_message);
@@ -233,8 +245,14 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
   const reason = str(d.reason);
   const hasRedactedThinking = d.hasRedactedThinking === true;
   const totalTools = toolGroups.reduce((n, g) => n + g.length, 0);
-  const [toolsExpanded, setToolsExpanded] = useState(false);
-  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+
+  // Auto-expand collapsible sections when a search term hits inside them.
+  const terms = matchTerms ?? [];
+  const toolsHaveMatch = terms.length > 0 && toolGroups.some((g) => g.some((t) => toolHasMatch(t, terms)));
+  const thinkingHasMatch = matchesAny(thinking, terms);
+
+  const [toolsExpanded, setToolsExpanded] = useState(toolsHaveMatch);
+  const [thinkingExpanded, setThinkingExpanded] = useState(thinkingHasMatch);
   const color = agentColor(agentLabel);
   const badgeColor = agentMantineColor(agentLabel);
 
