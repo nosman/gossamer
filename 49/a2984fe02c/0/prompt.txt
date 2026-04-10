@@ -1,0 +1,149 @@
+Next problem: we didn't actually fix the checkpoints treeview issue- namely, that checkpoints aren't showing at all. Please be thorough and explore all avenues. Make sure the suggestions you make are correct. Also, there is no notion of a primary db in this project- each repo has its own db, they is no heirarchy.
+
+---
+
+Yes, you have to instantiate different db clients for each repo. please fix that
+
+---
+
+I'm seeing this in the debug logs:  checkpoint indexer: failed to create worktree for /Users/stsoucas/gossamer-test — Error: Command failed: git -C "/Users/stsoucas/gossamer-test" worktree add "/Users/stsoucas/gossamer-test/.gossamer/checkpoints" entire/checkpoints/v1
+
+---
+
+I'm opening gossamer in another repo, ~/cosmos/cosmos-graphql. It detects the session, but thinks we're on a different branch other than the checked out branch. The chat history also doesn't seem to be updated. does the file watcher and updater correctly look for changes across all repos?
+
+---
+
+what's this sessions' name?
+
+---
+
+Now it doesn't even seem like this current session is updating.....
+
+---
+
+For the cosmos-graphql repo, i still don't see an updated convsersation. I also don't see a branchHistory section in the checkpoints treeView
+
+---
+
+More issues: main sessions table does not sort based on current workspace repo. Sessions in the cosmos-graphql repo still don't seem to be picking up on new messages when i resume the session from gossamer
+
+---
+
+I created a new session in cosmos-graphl and no new session showed up in the sessions window. I ran entire configure and it said entire was already enabled in the repo. A new session should show up in gossamer as well, right?
+
+---
+
+Last task of the night: add the MIT license to this project as LICENSE.txt and make sure it gets bundled into the vsix file
+
+---
+
+One more: on onboarding when asking the user to install entire, you didn't put the right homebrew command. it's this: brew install entireio/tap/entire
+
+---
+
+The first word in mine: entireio. The first word in yours: entire. That is not the same
+
+---
+
+In the sessionDetails page, is the "claude code" name hardcoded? Also, instead of writing "you" can you write the git username? make sure that it shows the actual username in the entireio logs
+
+---
+
+What did the bundled server.js file do?
+
+---
+
+entire.io lets us configure a separate repo for just checkpoints: https://github.com/entireio/cli?tab=readme-ov-file#checkpoint-remote When we onboard a new repo, we should let the user select this option. if they do, we should create a new repo under the ~/.gossamer directory.
+
+---
+
+entire.io lets us configure a separate repo for just checkpoints: https://github.com/entireio/cli?tab=readme-ov-file#checkpoint-remote When we onboard a new repo, we should let the user select this option. if they do, we should create a new repo under the ~/.gossamer directory. Make sure to respect this setting when indexing the checkpoint branch as well. Finally, review the checkpoint branch indexing logic, making sure we fetch the checkpoint branch from the appropriate repo. It seems like entire.io only pushes changes to the remote, but we want to get those remote changes so that we can index them locally as well.
+
+---
+
+Even now it seems like sessions from other machines do not get indexed here. Are we fetching from the remote repo to get new checkpoints from other machines/users?
+
+---
+
+Does this handle the separate checkpoint repo?
+
+---
+
+How does this sync changes into the worktree?
+
+---
+
+If the indexer picks them up, will they show up in the main sessions table?
+
+---
+
+Is there a corresponding session id for this commit in the database for the gossamer repo? 595987c8564dd457cdc8581a18574567812546b6
+
+---
+
+ok what about this commit id: ea8af174f59e121bc292ec40a0dd90dcf556292d this one should be associated with a checkpoint
+
+---
+
+You're confused... it's written Checkpoint there becuase that's an entire checkpoint. It's on the entire/checkpoints/v1 branch. The trailer for the corresponding commit in the checkpoint should still say entire-checkpoint as the trailer
+
+---
+
+I have two computers, each of which has this repo open. Should i not see the same sessions pertaining to this repository on both?
+
+---
+
+It seems like both computers have the same entire/checkpoints/v1 history on them. Is it possible we're filtering out some session ids or something like that?
+
+---
+
+it's also 130
+
+---
+
+Ah that was it... the same sessions were farther down because cwd sorting. Change the cwd sorting to just sort based on the git remote, since the same repo might not be in the same working directory on different machines
+
+---
+
+I'm seeing some sessions from other people but my name is still on them in the sessionsDetails view. make sure you're setting the right git username when you're indexing.
+
+---
+
+next step, let's rework the session details page. A lot of times, there is no "intent" field for a session, especially if they don't have automatic  ai summaries on. So this information is not so useful. Name, branch, repo, updated, and user should appear first, then intent and the other columns
+
+---
+
+If the gossamer server fails to start, show a more informative message- and a button to try restarting the server or opening log files if there are any
+
+---
+
+We refactored the main sessions page but i'm still seeing the "intent" column as the first one- why?
+
+---
+
+When i start a new session, there is always a long time til it registers in the main session window. is this because of how entire works? And if so are is there anything we can do to show the new session more quickly?
+
+---
+
+Now, let's update how we show agents dialog boxes. Currently we have an orange border and text for the agent's dialog box. that works for claude, but that's not the color of the other agents. Create a mapping between agent name and their main color, and make the dialog border and name text match that color.
+
+---
+
+in this vscode instance, the "multi-repo-db-clients" session is rendering markdown in the sessionDetails page well. but in the other page, it's not rendering the markdown. How come? I thought they should be on the same version of gossamer
+
+---
+
+Does this explain why search wasn't highlighting?
+
+---
+
+Seems to work ok now but there might be an issue where the highlights break the markdown formatting. Is there a way to preserve the formatting and also highlight it?
+
+---
+
+[Image #1] see here there is broken markdown with highglighting
+
+---
+
+Will a search hit in a tool use auto-expand that tool use? that's what it was doing before

@@ -1,0 +1,142 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "49a2984fe02c",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-10T02:14:26.036536Z",
+  "branch": "main",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/vscode/src/webview/screens/SessionDetail.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "30de0570b770",
+  "token_usage": {
+    "input_tokens": 698,
+    "cache_creation_tokens": 2765811,
+    "cache_read_tokens": 78794225,
+    "output_tokens": 213774,
+    "api_call_count": 555
+  },
+  "session_metrics": {
+    "turn_count": 42
+  },
+  "summary": {
+    "intent": "Fix multiple bugs in the Gossamer VS Code extension — a tool that indexes and displays Claude Code sessions — including server lifecycle issues, database schema problems, multi-repo DB client architecture, session discovery delays, and various UI improvements.",
+    "outcome": "Resolved all reported issues across the session: server port conflict handling, per-repo DB clients, checkpoint indexing with correct authors/sorting, live session detection from .entire/metadata/, agent-specific colors, markdown+highlight coexistence, and several UI layout improvements.",
+    "learnings": {
+      "repo": [
+        "pushSchema split SQL on ';\\n' then filtered chunks starting with '--', but every Prisma-generated statement starts with '-- CreateTable', so all 56 statements were silently discarded on every startup",
+        "The server had a single 'db'/'dbPath' primary client variable that most endpoints used; the correct architecture is a dbRegistry Map with allDbs()/dbForRepo() helpers since each repo is equal",
+        "Shadow branches (entire/\u003csession-id\u003e) are only committed at checkpoint boundaries — potentially minutes into a session; live transcript is written immediately to .entire/metadata/\u003csessionId\u003e/full.jsonl",
+        "macOS com.apple.provenance xattr on SQLite files causes disk I/O errors; affected DBs need to be deleted and recreated (evictDb + unlink)",
+        "gitlog npm package defaults to nameStatus: true, adding --name-status to git log; on large repos (cosmos-graphql with 9000+ commits) this exceeds Node's maxBuffer, throwing silently inside a catch block",
+        "Git worktree add fails with 'branch already used by worktree' when two local repos share the same entire/checkpoints/v1 branch; fix is --detach",
+        "The checkpoint branch fetch was shallow (.git/shallow contained the branch tip), limiting git rev-list to 1 commit; unshallowing revealed 203 commits",
+        "Bare git repos store fetched refs at refs/heads/* not refs/remotes/origin/*, unlike normal clones",
+        "Session sorting by localPath cwd broke cross-machine comparison since the same repo lives at different paths; sorting by git remote is machine-independent",
+        "gitUserName fell back to the local machine's git config user when the DB value was null, mis-attributing other users' sessions to the current user",
+        "MarkdownView had HighlightTermsCtx threading through inline renderer, but this broke markdown parsing for nodes containing match terms; post-render DOM walking with TreeWalker decouples highlighting from parsing entirely"
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema only ran on the primary DB at startup; secondary repo DBs were never initialized with schema"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 1574,
+          "end_line": 1574,
+          "finding": "httpServer.listen called without an 'error' event handler, so EADDRINUSE caused a silent crash"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 258,
+          "finding": "spawnServer guard only checked in-memory GossamerPanel.server static; orphaned processes from previous VS Code sessions held the port but reset the static"
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "findCommitForCheckpoint used gitlog with nameStatus: true (default), causing maxBuffer exceeded on large repos; fix: nameStatus: false + execOptions.maxBuffer: 100MB"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 373,
+          "end_line": 374,
+          "finding": "cpUser?.gitUserName ?? gitUser.name fell back to local user's git config when checkpoint author was null/empty — silently mis-attributes sessions"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 427,
+          "end_line": 427,
+          "finding": "EventItem rendered without user prop, always showing 'You'; session.gitUserName was available from session object but never passed down"
+        },
+        {
+          "path": "packages/vscode/src/webview/components/MarkdownView.tsx",
+          "line": 1,
+          "end_line": 200,
+          "finding": "HighlightTermsCtx threaded through inline parser broke markdown formatting when match terms overlapped with markdown syntax; replaced with post-render DOM TreeWalker approach"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 354,
+          "end_line": 360,
+          "finding": "toolsExpanded/thinkingExpanded initialized to false; search hits inside collapsed sections were unreachable — must initialize to true when any tool/thinking block contains a match term"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 246,
+          "end_line": 251,
+          "finding": "GET /api/sessions used qLocalPath only for sorting (not filtering), but sort used localPath cwd which breaks cross-machine comparison; fixed to sort by matching git remote instead"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 141,
+          "end_line": 141,
+          "finding": "catch block in saveGitOidMapping swallows all errors silently, including the maxBuffer overflow that caused zero CheckpointIdGitOidJoin rows"
+        }
+      ],
+      "workflow": [
+        "When a Prisma-generated schema.sql is split by semicolons and filtered by comment prefix, all chunks will be dropped because Prisma prepends '-- CreateTable' to every statement",
+        "Post-render DOM walking (TreeWalker + splitText) is the correct approach for search highlighting over rendered HTML — inline-parser approaches break formatting for edge cases",
+        "fs.watch on macOS can miss cross-process file writes; a fast poll (every 2-3s) as a fallback is necessary alongside the watcher",
+        "bare git clones store fetched refs directly at refs/heads/* without a remotes/ namespace; fetch refspec must be +refs/heads/*:refs/heads/* explicitly",
+        "SQLite files on macOS can acquire com.apple.provenance xattr that blocks I/O; defensive DB retry logic (evict cache, delete file, recreate) handles this transparently",
+        "lsof -ti tcp:\u003cport\u003e provides a reliable way to find and kill orphaned processes holding a port before spawning a replacement"
+      ]
+    },
+    "friction": [
+      "pushSchema bug caused 'no such table' errors on every startup; required multiple debugging sessions because the SQL file, regex, and Prisma client all looked correct in isolation — the filter was only wrong in context",
+      "gitlog maxBuffer overflow was caught silently inside saveGitOidMapping's catch block, producing 0 CheckpointIdGitOidJoin rows with no visible error — required manual debug script to discover",
+      "macOS com.apple.provenance xattr on .db files caused 'disk I/O error' that was opaque until running sqlite3 directly on the file",
+      "The Entire CLI has stopped writing to shadow branches and full.jsonl for cosmos-graphql for 3+ weeks with no visible error — diagnosis was inconclusive from Gossamer's side",
+      "Shallow git clone of the checkpoint branch made git rev-list return 1 commit, masking the full history and confusing ancestry checks",
+      "The user had to correct the Homebrew tap name (entire/tap vs entireio/tap) after the assistant used the wrong one"
+    ],
+    "open_items": [
+      "Checkpoint remote support (bare clone + worktree from ~/.gossamer/checkpoint-repos/) is implemented but not tested end-to-end with an actual Entire.io checkpoint remote",
+      "Cross-node search term matches in markdown are still not highlighted — only matches contained within a single text node are found by the TreeWalker approach",
+      "Entire CLI is not writing full.jsonl or updating shadow branches in cosmos-graphql (no activity for 3+ weeks); root cause not identified — may be a dead background process",
+      "CheckpointIdGitOidJoin population still depends on findCommitForCheckpoint which searches main/master for Entire-Checkpoint: trailers; checkpoints from contributors whose commits aren't locally reachable will have no OID mapping",
+      "GET /api/sessions/:id and checkpoint endpoints accept ?localPath= for DB resolution, but the webview doesn't always have the session's localPath at call time — currently falls back to probing all DBs which works but is slower",
+      "The /api/repos/current endpoint was updated to accept ?localPath= but the underlying repo config matching could still mis-match if remotes differ in SSH vs HTTPS format"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-10T02:13:12.958977Z",
+    "agent_lines": 20,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "total_lines_changed": 22,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
