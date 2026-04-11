@@ -1,6 +1,9 @@
 src/
 node_modules/
-*.ts
+**/.DS_Store
+**/*.map
+dist/**/*.d.ts
 tsconfig*.json
 vite.config.ts
 .gitignore
+*.vsix
