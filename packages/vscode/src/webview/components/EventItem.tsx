@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Box, Badge, Group, Text, Collapse, Avatar } from "@mantine/core";
+import { Box, Badge, Group, Text, Collapse, Avatar, ActionIcon, Tooltip } from "@mantine/core";
 import type { Event } from "../api";
 import { MarkdownView } from "./MarkdownView";
 import { TimeAgo } from "./TimeAgo";
@@ -30,24 +30,52 @@ function BlockedBadge() {
 
 // ── Shared row wrapper ─────────────────────────────────────────────────────────
 
-function MessageRow({ accentColor, label, labelColor, timestamp, blocked, children }: {
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Tooltip label={copied ? "Copied!" : "Copy"} withArrow position="top" openDelay={0}>
+      <ActionIcon
+        size="xs"
+        variant="subtle"
+        color={copied ? "green" : "gray"}
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(text).catch(() => undefined);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+        style={{ opacity: copied ? 1 : 0.5, flexShrink: 0 }}
+      >
+        {copied ? "✓" : "⧉"}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
+function MessageRow({ accentColor, label, labelColor, timestamp, blocked, copyText, children }: {
   accentColor: string;
   label: string;
   labelColor: string;
   timestamp: string | null;
   blocked?: boolean;
+  copyText?: string;
   children: React.ReactNode;
 }) {
+  const [hovered, setHovered] = useState(false);
   return (
-    <Box style={{
-      display: "flex",
-      gap: 10,
-      padding: "5px 12px",
-      paddingLeft: 10,
-      borderLeft: `2px solid ${accentColor}`,
-      borderBottom: "1px solid var(--vscode-panel-border)",
-      alignItems: "flex-start",
-    }}>
+    <Box
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        gap: 10,
+        padding: "5px 12px",
+        paddingLeft: 10,
+        borderLeft: `2px solid ${accentColor}`,
+        borderBottom: "1px solid var(--vscode-panel-border)",
+        alignItems: "flex-start",
+      }}
+    >
       <Text
         size="xs"
         fw={600}
@@ -59,6 +87,7 @@ function MessageRow({ accentColor, label, labelColor, timestamp, blocked, childr
         {children}
       </Box>
       <Box style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, paddingTop: 2 }}>
+        {hovered && copyText && <CopyButton text={copyText} />}
         {blocked && <BlockedBadge />}
         {timestamp && <TimeAgo iso={timestamp} />}
       </Box>
@@ -80,6 +109,7 @@ function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: User
       labelColor="var(--vscode-textLink-foreground)"
       timestamp={event.timestamp}
       blocked={event.blocked}
+      copyText={prompt || undefined}
     >
       {prompt ? (
         matchTerms?.length
@@ -108,6 +138,7 @@ function AssistantCard({ event, matchTerms, agentLabel }: { event: Event; matchT
       labelColor={color}
       timestamp={event.timestamp}
       blocked={event.blocked}
+      copyText={msg || undefined}
     >
       <Box>
         {reason && <Badge color={badgeColor} size="xs" variant="light" mb={4}>{reason}</Badge>}

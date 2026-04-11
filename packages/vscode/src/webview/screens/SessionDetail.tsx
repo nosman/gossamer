@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
-  Center, Loader, Text, ScrollArea, Box, Badge, Group, Collapse, ActionIcon,
+  Center, Loader, Text, ScrollArea, Box, Badge, Group, Collapse, ActionIcon, Tooltip,
 } from "@mantine/core";
 import {
   fetchSession, fetchLogEvents, subscribeToUpdates,
@@ -238,6 +238,28 @@ function toolHasMatch(tool: ToolUseData, terms: string[]): boolean {
   return terms.some((t) => blob.includes(t.toLowerCase()));
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Tooltip label={copied ? "Copied!" : "Copy"} withArrow position="top" openDelay={0}>
+      <ActionIcon
+        size="xs"
+        variant="subtle"
+        color={copied ? "green" : "gray"}
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(text).catch(() => undefined);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+        style={{ opacity: copied ? 1 : 0.5, flexShrink: 0 }}
+      >
+        {copied ? "✓" : "⧉"}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGroups: ToolUseData[][]; stop: Event | null; matchTerms?: string[]; agentLabel: string }) {
   const d      = stop ? (stop.data ?? {}) as Record<string, unknown> : {};
   const msg    = str(d.last_assistant_message);
@@ -253,19 +275,24 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
 
   const [toolsExpanded, setToolsExpanded] = useState(toolsHaveMatch);
   const [thinkingExpanded, setThinkingExpanded] = useState(thinkingHasMatch);
+  const [hovered, setHovered] = useState(false);
   const color = agentColor(agentLabel);
   const badgeColor = agentMantineColor(agentLabel);
 
   return (
-    <Box style={{
-      display: "flex",
-      gap: 10,
-      padding: "5px 12px",
-      paddingLeft: 10,
-      borderLeft: `2px solid ${color}`,
-      borderBottom: "1px solid var(--vscode-panel-border)",
-      alignItems: "flex-start",
-    }}>
+    <Box
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        display: "flex",
+        gap: 10,
+        padding: "5px 12px",
+        paddingLeft: 10,
+        borderLeft: `2px solid ${color}`,
+        borderBottom: "1px solid var(--vscode-panel-border)",
+        alignItems: "flex-start",
+      }}
+    >
       <Text
         size="xs"
         fw={600}
@@ -309,7 +336,8 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
           </Box>
         )}
       </Box>
-      <Box style={{ flexShrink: 0, paddingTop: 2 }}>
+      <Box style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, paddingTop: 2 }}>
+        {hovered && msg && <CopyButton text={msg} />}
         {stop && <TimeAgo iso={stop.timestamp} />}
       </Box>
     </Box>

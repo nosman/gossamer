@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Box, Badge, Group, Text, Collapse, Code } from "@mantine/core";
+import { Box, Badge, Group, Text, Collapse, Code, ActionIcon, Tooltip } from "@mantine/core";
 import type { Event } from "../api";
 import { relativeTime } from "./TimeAgo";
 
@@ -109,8 +109,45 @@ function renderInput(toolName: string, inp: Record<string, unknown>, terms?: str
   }
 }
 
+function copyableText(toolName: string, inp: Record<string, unknown> | undefined): string {
+  if (!inp) return "";
+  const s = (k: string) => (typeof inp[k] === "string" ? String(inp[k]) : "");
+  switch (toolName) {
+    case "Bash": return s("command");
+    case "Read": case "Write": case "Glob": return s("file_path") || s("pattern");
+    case "Edit": return s("file_path");
+    case "Grep": return s("pattern");
+    case "WebFetch": return s("url");
+    case "WebSearch": return s("query");
+    default: return JSON.stringify(inp, null, 2);
+  }
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Tooltip label={copied ? "Copied!" : "Copy"} withArrow position="top" openDelay={0}>
+      <ActionIcon
+        size="xs"
+        variant="subtle"
+        color={copied ? "green" : "gray"}
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(text).catch(() => undefined);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+        style={{ opacity: copied ? 1 : 0.5, flexShrink: 0 }}
+      >
+        {copied ? "✓" : "⧉"}
+      </ActionIcon>
+    </Tooltip>
+  );
+}
+
 export function ToolUseItem({ pre, post, failed, autoExpand, matchTerms }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const [hovered, setHovered] = useState(false);
 
   useEffect(() => {
     if (autoExpand) setExpanded(true);
@@ -130,13 +167,20 @@ export function ToolUseItem({ pre, post, failed, autoExpand, matchTerms }: Props
   const timeStart = relativeTime(pre.timestamp);
   const timeEnd = post ? relativeTime(post.timestamp) : undefined;
   const showRange = timeEnd && timeEnd !== timeStart;
+  const copyText = copyableText(toolName, toolInput);
 
   return (
-    <Box onClick={() => setExpanded((v) => !v)} style={{ padding: "5px 12px", borderBottom: "1px solid var(--vscode-panel-border)", cursor: "pointer" }}>
+    <Box
+      onClick={() => setExpanded((v) => !v)}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ padding: "5px 12px", borderBottom: "1px solid var(--vscode-panel-border)", cursor: "pointer" }}
+    >
       <Group gap={6}>
         <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
         <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>
         {hint && <Text size="xs" c="dimmed" ff="monospace" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</Text>}
+        {hovered && copyText && <CopyButton text={copyText} />}
         <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{timeStart}{showRange ? ` → ${timeEnd}` : ""}</Text>
         {pre.blocked && <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>}
         <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>

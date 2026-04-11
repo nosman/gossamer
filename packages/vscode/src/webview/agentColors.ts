@@ -5,6 +5,7 @@
 /** Short Mantine color name (e.g. "orange") — use with Badge, ActionIcon etc. */
 const AGENT_MANTINE_COLOR: Record<string, string> = {
   "Claude Code": "orange",
+  "Claude":      "orange",
   "Gemini CLI":  "blue",
   "Codex":       "teal",
 };

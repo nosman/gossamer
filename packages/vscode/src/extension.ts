@@ -87,9 +87,11 @@ export function activate(context: vscode.ExtensionContext) {
   const entireWorkspace = findEntireWorkspace();
   if (entireWorkspace) {
     GossamerPanel.createOrShow(context, entireWorkspace, checkpointProvider).catch(console.error);
+    checkEntireHooks(entireWorkspace);
   } else if (vscode.workspace.workspaceFolders?.length) {
     OnboardingPanel.createOrShow(context, (ws) => {
       GossamerPanel.createOrShow(context, ws, checkpointProvider).catch(console.error);
+      checkEntireHooks(ws);
     });
   }
 
@@ -171,4 +173,57 @@ function findEntireWorkspace(): string | undefined {
   return vscode.workspace.workspaceFolders
     ?.map((f) => f.uri.fsPath)
     .find((p) => existsSync(join(p, ".entire", "settings.json")));
+}
+
+/**
+ * Check that the workspace has Entire properly configured:
+ * 1. `.entire/` directory exists with settings.json
+ * 2. `.claude/settings.json` contains Entire hooks
+ *
+ * Shows a warning popup if either is missing.
+ */
+function checkEntireHooks(repoPath: string): void {
+  const entireSettingsPath = join(repoPath, ".entire", "settings.json");
+  if (!existsSync(entireSettingsPath)) {
+    vscode.window.showWarningMessage(
+      "Gossamer: `.entire/settings.json` not found. Run `entire enable` in this workspace to start capturing sessions.",
+      "Open Terminal",
+    ).then((action) => {
+      if (action === "Open Terminal") {
+        const t = vscode.window.createTerminal({ cwd: repoPath, name: "Entire Setup" });
+        t.show();
+        t.sendText("entire enable", false);
+      }
+    });
+    return;
+  }
+
+  // Check if .claude/settings.json has Entire hooks
+  const claudeSettingsPath = join(repoPath, ".claude", "settings.json");
+  if (!existsSync(claudeSettingsPath)) return; // No .claude/settings.json at all — nothing to warn about yet
+
+  try {
+    const raw = readFileSync(claudeSettingsPath, "utf8");
+    const settings = JSON.parse(raw) as { hooks?: Record<string, unknown> };
+    const hooks = settings?.hooks;
+    if (!hooks) return; // No hooks section — user may not use hooks at all
+
+    // Check if any hook command references "entire"
+    const hooksStr = JSON.stringify(hooks);
+    if (hooksStr.includes("entire")) return; // Entire hooks are present
+
+    // hooks section exists but no Entire hooks — warn
+    vscode.window.showWarningMessage(
+      "Gossamer: Claude Code hooks exist but no Entire hooks were found. Session capture may not be active. Run `entire enable` to configure.",
+      "Open Terminal",
+    ).then((action) => {
+      if (action === "Open Terminal") {
+        const t = vscode.window.createTerminal({ cwd: repoPath, name: "Entire Setup" });
+        t.show();
+        t.sendText("entire enable", false);
+      }
+    });
+  } catch {
+    // Malformed settings — don't warn
+  }
 }

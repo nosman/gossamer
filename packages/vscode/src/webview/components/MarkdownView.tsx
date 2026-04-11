@@ -61,17 +61,22 @@ type InlineNode =
   | { t: "text"; s: string }
   | { t: "bold"; s: string }
   | { t: "italic"; s: string }
-  | { t: "code"; s: string };
+  | { t: "code"; s: string }
+  | { t: "link"; text: string; href: string };
 
 function parseInline(raw: string): InlineNode[] {
   const nodes: InlineNode[] = [];
-  const re = /(\*\*(?:[^*]|\*(?!\*))+?\*\*|\*(?:[^*\n])+?\*|``(?:[^`]|`(?!`))+``|`[^`\n]+?`)/g;
+  // Links must come before bold/italic so [text](url) isn't partially consumed by * handling
+  const re = /(\[([^\]]+)\]\(([^)]+)\)|\*\*(?:[^*]|\*(?!\*))+?\*\*|\*(?:[^*\n])+?\*|``(?:[^`]|`(?!`))+``|`[^`\n]+?`)/g;
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = re.exec(raw)) !== null) {
     if (m.index > last) nodes.push({ t: "text", s: raw.slice(last, m.index) });
     const tok = m[1];
-    if (tok.startsWith("**")) nodes.push({ t: "bold", s: tok.slice(2, -2) });
+    if (m[2] && m[3]) {
+      // Link: [text](href)
+      nodes.push({ t: "link", text: m[2], href: m[3] });
+    } else if (tok.startsWith("**")) nodes.push({ t: "bold", s: tok.slice(2, -2) });
     else if (tok.startsWith("``")) nodes.push({ t: "code", s: tok.slice(2, -2).trim() });
     else if (tok.startsWith("`")) nodes.push({ t: "code", s: tok.slice(1, -1) });
     else nodes.push({ t: "italic", s: tok.slice(1, -1) });
@@ -151,6 +156,7 @@ function Inline({ nodes }: { nodes: InlineNode[] }): React.ReactElement {
         if (n.t === "bold") return <strong key={i}><Inline nodes={parseInline(n.s)} /></strong>;
         if (n.t === "italic") return <em key={i}><Inline nodes={parseInline(n.s)} /></em>;
         if (n.t === "code") return <code key={i} style={{ fontFamily: "var(--vscode-editor-font-family, monospace)", fontSize: 12, backgroundColor: "var(--vscode-textCodeBlock-background)", color: "var(--vscode-editor-foreground)", padding: "0 3px", borderRadius: 3 }}>{n.s}</code>;
+        if (n.t === "link") return <a key={i} href={n.href} target="_blank" rel="noopener noreferrer" style={{ color: "var(--vscode-textLink-foreground)", textDecoration: "underline" }}><Inline nodes={parseInline(n.text)} /></a>;
         return <React.Fragment key={i}>{n.s}</React.Fragment>;
       })}
     </>
