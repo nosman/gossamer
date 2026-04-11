@@ -1,6 +1,7 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Center, Loader, Alert, Text, Table, Box, Group, Button, Switch, Tooltip,
+  UnstyledButton,
 } from "@mantine/core";
 import {
   fetchSessions, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions,
@@ -9,17 +10,32 @@ import {
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { postToExtension } from "../vscodeApi";
 
-const SESSION_COLUMNS: { label: string; width: number }[] = [
-  { label: "Name",       width: COL_WIDTHS.sessionId       },
-  { label: "Branch",     width: COL_WIDTHS.branch          },
-  { label: "Repo",       width: COL_WIDTHS.repo            },
-  { label: "Updated",    width: COL_WIDTHS.updated         },
-  { label: "User",       width: COL_WIDTHS.user            },
-  { label: "Intent",     width: COL_WIDTHS.intent          },
-  { label: "Parent",     width: COL_WIDTHS.parentSessionId },
-  { label: "Started",    width: COL_WIDTHS.started         },
-  { label: "",           width: COL_WIDTHS.actions         },
+type SortKey = "updated" | "user" | "repo" | "branch";
+type SortDir = "asc" | "desc";
+
+const SESSION_COLUMNS: { label: string; width: number; sortKey?: SortKey }[] = [
+  { label: "Name",       width: COL_WIDTHS.sessionId                    },
+  { label: "Branch",     width: COL_WIDTHS.branch,     sortKey: "branch"  },
+  { label: "Repo",       width: COL_WIDTHS.repo,       sortKey: "repo"    },
+  { label: "Updated",    width: COL_WIDTHS.updated,    sortKey: "updated" },
+  { label: "User",       width: COL_WIDTHS.user,       sortKey: "user"    },
+  { label: "Intent",     width: COL_WIDTHS.intent                       },
+  { label: "Parent",     width: COL_WIDTHS.parentSessionId              },
+  { label: "Started",    width: COL_WIDTHS.started                      },
+  { label: "",           width: COL_WIDTHS.actions                      },
 ];
+
+function sortSessions(sessions: Session[], key: SortKey, dir: SortDir): Session[] {
+  const sorted = [...sessions].sort((a, b) => {
+    let av = "", bv = "";
+    if (key === "updated") { av = a.updatedAt; bv = b.updatedAt; }
+    else if (key === "user")  { av = a.gitUserName ?? a.gitUserEmail ?? ""; bv = b.gitUserName ?? b.gitUserEmail ?? ""; }
+    else if (key === "repo")  { av = a.repoName ?? ""; bv = b.repoName ?? ""; }
+    else if (key === "branch"){ av = a.branch ?? ""; bv = b.branch ?? ""; }
+    return av < bv ? -1 : av > bv ? 1 : 0;
+  });
+  return dir === "desc" ? sorted.reverse() : sorted;
+}
 
 const SESSION_TOTAL_WIDTH = Object.values(COL_WIDTHS).reduce((a, b) => a + b, 0) + 16;
 
@@ -46,6 +62,8 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing]       = useState(false);
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey]       = useState<SortKey>("updated");
+  const [sortDir, setSortDir]       = useState<SortDir>("desc");
 
   // Wait for the extension host to confirm the server is ready
   useEffect(() => {
@@ -103,6 +121,20 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
       else await archiveSession(sessionId);
       await load(showArchived);
     } catch { /* ignore */ }
+  }
+
+  const sortedSessions = useMemo(
+    () => sortSessions(sessions, sortKey, sortDir),
+    [sessions, sortKey, sortDir],
+  );
+
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "updated" ? "desc" : "asc");
+    }
   }
 
   async function handleSync() {
@@ -242,18 +274,45 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
             <Table stickyHeader highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
-                  {SESSION_COLUMNS.map(({ label, width }) => (
+                  {SESSION_COLUMNS.map(({ label, width, sortKey: colKey }) => (
                     <Table.Th
-                      key={label}
-                      style={{ width, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}
+                      key={label || "_actions"}
+                      style={{ width, fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5, padding: 0 }}
                     >
-                      {label}
+                      {colKey ? (
+                        <UnstyledButton
+                          onClick={() => handleSort(colKey)}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            width: "100%",
+                            padding: "var(--table-vertical-spacing) var(--table-horizontal-spacing, 10px)",
+                            fontSize: "inherit",
+                            textTransform: "inherit",
+                            letterSpacing: "inherit",
+                            color: sortKey === colKey
+                              ? "var(--mantine-color-indigo-5)"
+                              : "inherit",
+                            userSelect: "none",
+                          }}
+                        >
+                          {label}
+                          <span style={{ opacity: sortKey === colKey ? 1 : 0.3, fontSize: 10 }}>
+                            {sortKey === colKey ? (sortDir === "asc" ? " ↑" : " ↓") : " ↕"}
+                          </span>
+                        </UnstyledButton>
+                      ) : (
+                        <span style={{ padding: "var(--table-vertical-spacing) var(--table-horizontal-spacing, 10px)", display: "block" }}>
+                          {label}
+                        </span>
+                      )}
                     </Table.Th>
                   ))}
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {sessions.map((item) => (
+                {sortedSessions.map((item) => (
                   <SessionRow
                     key={item.sessionId}
                     session={item}
