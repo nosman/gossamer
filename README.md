@@ -30,7 +30,9 @@ And because Gossamer integrates with **[Entire.io](https://entire.io)**, your AI
 
 ## Installation
 
-Build and install the VS Code extension locally:
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=nosman.gossamer-vscode), or search for **Gossamer** in the VS Code Extensions panel.
+
+To build and install locally instead:
 
 ```bash
 # Install dependencies and build everything
