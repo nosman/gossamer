@@ -412,6 +412,13 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
     return subscribeToUpdates(() => { load().catch(() => undefined); });
   }, [sessionId]);
 
+  // Push the best-available title up to the extension host so the VS Code
+  // tab label reflects /rename in-place.
+  useEffect(() => {
+    const t = session?.customTitle ?? session?.slug ?? null;
+    if (t) postToExtension({ type: "update_tab_title", title: t });
+  }, [session?.customTitle, session?.slug]);
+
   // Auto-scroll only when new content arrives on a live session and user is already near bottom
   useEffect(() => {
     if (!initialLoadDone.current) return;

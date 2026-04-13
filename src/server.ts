@@ -413,16 +413,21 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         };
       });
 
-      // Sort sessions from the same repo first, matched by git remote
-      // so that the same repo on different machines (different cwds) sorts together.
-      const sortRepo = sortDir ? findRepoForPath(sortDir) : null;
-      const sortRemote = sortRepo?.remote ?? null;
+      // Three-tier sort:
+      //   0 = session's cwd is (under) the active workspace dir
+      //   1 = same repo, just elsewhere on disk or another machine (matched by repo name)
+      //   2 = everything else
+      // Within each tier, newest updatedAt wins.
+      const sortRepoName = sortDir ? basename(sortDir) : null;
+      const inWorkspace = (cwd: string | null) =>
+        !!sortDir && !!cwd && (cwd === sortDir || cwd.startsWith(sortDir + "/"));
+      const tier = (s: SessionResponse) =>
+        inWorkspace(s.cwd)                                   ? 0
+        : sortRepoName && s.repoName === sortRepoName        ? 1
+        :                                                      2;
       result.sort((a, b) => {
-        const aRepo = a.cwd ? findRepoForPath(a.cwd) : null;
-        const bRepo = b.cwd ? findRepoForPath(b.cwd) : null;
-        const aLocal = sortRemote && aRepo?.remote === sortRemote ? 0 : sortDir && (a.cwd === sortDir || a.cwd.startsWith(sortDir + "/")) ? 0 : 1;
-        const bLocal = sortRemote && bRepo?.remote === sortRemote ? 0 : sortDir && (b.cwd === sortDir || b.cwd.startsWith(sortDir + "/")) ? 0 : 1;
-        if (aLocal !== bLocal) return aLocal - bLocal;
+        const t = tier(a) - tier(b);
+        if (t !== 0) return t;
         return b.updatedAt.localeCompare(a.updatedAt);
       });
       res.json(result);

@@ -10,7 +10,9 @@ import {
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
 import { postToExtension } from "../vscodeApi";
 
-type SortKey = "updated" | "user" | "repo" | "branch";
+// "default" preserves the order the server returned (workspace tier,
+// then same-repo, then everything else, by updatedAt desc within each tier).
+type SortKey = "default" | "updated" | "user" | "repo" | "branch";
 type SortDir = "asc" | "desc";
 
 const SESSION_COLUMNS: { label: string; width: number; sortKey?: SortKey }[] = [
@@ -26,6 +28,7 @@ const SESSION_COLUMNS: { label: string; width: number; sortKey?: SortKey }[] = [
 ];
 
 function sortSessions(sessions: Session[], key: SortKey, dir: SortDir): Session[] {
+  if (key === "default") return sessions;
   const sorted = [...sessions].sort((a, b) => {
     let av = "", bv = "";
     if (key === "updated") { av = a.updatedAt; bv = b.updatedAt; }
@@ -62,7 +65,7 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing]       = useState(false);
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
-  const [sortKey, setSortKey]       = useState<SortKey>("updated");
+  const [sortKey, setSortKey]       = useState<SortKey>("default");
   const [sortDir, setSortDir]       = useState<SortDir>("desc");
 
   // Wait for the extension host to confirm the server is ready

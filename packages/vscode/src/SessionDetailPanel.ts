@@ -63,7 +63,11 @@ export class SessionDetailPanel {
     });
 
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string; agent?: string }) => {
+      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string; agent?: string; title?: string }) => {
+        if (msg.type === "update_tab_title" && typeof msg.title === "string" && msg.title.trim()) {
+          const next = msg.title.length > 40 ? msg.title.slice(0, 39) + "…" : msg.title;
+          if (next !== this.panel.title) this.panel.title = next;
+        }
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
           openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
         }
