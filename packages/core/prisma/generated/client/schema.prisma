@@ -1,0 +1,316 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../prisma/generated/client"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model InteractionOverview {
+  id        Int      @id @default(autoincrement())
+  sessionId String   @unique
+  summary   String
+  keywords  String // JSON array as text: '["a","b"]'
+  startedAt DateTime
+  endedAt   DateTime
+}
+
+// ─── Entire CLI checkpoint tables ─────────────────────────────────────────────
+
+model CheckpointMetadata {
+  id               Int                          @id @default(autoincrement())
+  cliVersion       String?
+  checkpointId     String                       @unique
+  strategy         String?
+  branch           String?
+  checkpointsCount Int                          @default(0)
+  gitUserName      String?
+  gitUserEmail     String?
+  tokenUsageId     Int?                         @unique
+  tokenUsage       TokenUsage?                  @relation("CheckpointMetadataTokenUsage", fields: [tokenUsageId], references: [id])
+  sessions         SessionLink[]
+  filesTouched     CheckpointMetadataFilePath[]
+}
+
+model SessionLink {
+  id                   Int                 @id @default(autoincrement())
+  checkpointMetadataId Int?
+  checkpointMetadata   CheckpointMetadata? @relation(fields: [checkpointMetadataId], references: [id])
+  metadata             String?
+  transcript           String?
+  context              String?
+  contentHash          String?
+  prompt               String?
+  logEvents            LogEvent[]
+
+  @@index([checkpointMetadataId])
+}
+
+model CheckpointMetadataFilePath {
+  checkpointMetadataId Int
+  filePathId           Int
+  checkpointMetadata   CheckpointMetadata @relation(fields: [checkpointMetadataId], references: [id])
+  filePath             FilePath           @relation("CheckpointMetadataFilePaths", fields: [filePathId], references: [id])
+
+  @@id([checkpointMetadataId, filePathId])
+}
+
+model FilePath {
+  id                     Int                                 @id @default(autoincrement())
+  path                   String                              @unique
+  checkpointFiles        CheckpointMetadataFilePath[]        @relation("CheckpointMetadataFilePaths")
+  checkpointSessionFiles CheckpointSessionMetadataFilePath[] @relation("CheckpointSessionMetadataFilePaths")
+}
+
+model TokenUsage {
+  id                        Int                        @id @default(autoincrement())
+  inputTokens               Int                        @default(0)
+  cacheCreationTokens       Int                        @default(0)
+  cacheReadTokens           Int                        @default(0)
+  outputTokens              Int                        @default(0)
+  apiCallCount              Int                        @default(0)
+  checkpointMetadata        CheckpointMetadata?        @relation("CheckpointMetadataTokenUsage")
+  checkpointSessionMetadata CheckpointSessionMetadata? @relation("CheckpointSessionMetadataTokenUsage")
+}
+
+model CheckpointSessionMetadata {
+  id                 Int                                 @id @default(autoincrement())
+  cliVersion         String?
+  checkpointId       String
+  sessionId          String
+  strategy           String?
+  createdAt          DateTime?
+  branch             String?
+  checkpointsCount   Int                                 @default(0)
+  agent              String?
+  turnId             String?
+  tokenUsageId       Int?                                @unique
+  tokenUsage         TokenUsage?                         @relation("CheckpointSessionMetadataTokenUsage", fields: [tokenUsageId], references: [id])
+  filesTouched       CheckpointSessionMetadataFilePath[]
+  initialAttribution InitialAttribution?
+  summary            CheckpointSessionSummary?
+
+  @@unique([checkpointId, sessionId])
+  @@index([sessionId])
+}
+
+model CheckpointSessionMetadataFilePath {
+  checkpointSessionMetadataId Int
+  filePathId                  Int
+  checkpointSessionMetadata   CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  filePath                    FilePath                  @relation("CheckpointSessionMetadataFilePaths", fields: [filePathId], references: [id])
+
+  @@id([checkpointSessionMetadataId, filePathId])
+}
+
+model InitialAttribution {
+  id                          Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId Int                       @unique
+  checkpointSessionMetadata   CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  calculatedAt                DateTime?
+  agentLines                  Int                       @default(0)
+  humanAdded                  Int                       @default(0)
+  humanModified               Int                       @default(0)
+  humanRemoved                Int                       @default(0)
+  totalCommitted              Int                       @default(0)
+  agentPercentage             Float                     @default(0)
+}
+
+model CheckpointSessionSummary {
+  id                          Int                       @id @default(autoincrement())
+  checkpointSessionMetadataId Int                       @unique
+  checkpointSessionMetadata   CheckpointSessionMetadata @relation(fields: [checkpointSessionMetadataId], references: [id])
+  intent                      String
+  outcome                     String
+  openItems                   OpenItem[]
+  frictionItems               FrictionItem[]
+  repoLearnings               RepoLearning[]
+  codeLearnings               CodeLearning[]
+  workflowLearnings           WorkflowItem[]
+}
+
+model OpenItem {
+  id                         Int                      @id @default(autoincrement())
+  checkpointSessionSummaryId Int
+  checkpointSessionSummary   CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
+  text                       String
+  status                     String                   @default("open") // "open" | "in_progress" | "complete" | "na"
+  subSessionId               String?
+
+  @@unique([checkpointSessionSummaryId, text])
+  @@index([checkpointSessionSummaryId])
+}
+
+model FrictionItem {
+  id                         Int                      @id @default(autoincrement())
+  checkpointSessionSummaryId Int
+  checkpointSessionMetadata  CheckpointSessionSummary @relation(fields: [checkpointSessionSummaryId], references: [id])
+  text                       String
+
+  @@index([checkpointSessionSummaryId])
+}
+
+model RepoLearning {
+  id                          Int                      @id @default(autoincrement())
+  checkpointSessionMetadataId Int
+  checkpointSessionMetadata   CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  text                        String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+model CodeLearning {
+  id                          Int                      @id @default(autoincrement())
+  checkpointSessionMetadataId Int
+  checkpointSessionMetadata   CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  path                        String
+  finding                     String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+model WorkflowItem {
+  id                          Int                      @id @default(autoincrement())
+  checkpointSessionMetadataId Int
+  checkpointSessionMetadata   CheckpointSessionSummary @relation(fields: [checkpointSessionMetadataId], references: [id])
+  text                        String
+
+  @@index([checkpointSessionMetadataId])
+}
+
+model CheckpointIdGitOidJoin {
+  gitOid       String @id
+  checkpointId String
+
+  @@index([checkpointId])
+}
+
+model ArchivedSession {
+  sessionId  String   @id
+  archivedAt DateTime @default(now())
+}
+
+model SessionParent {
+  childSessionId  String  @id
+  parentSessionId String
+  toolUseId       String?
+
+  @@index([parentSessionId])
+}
+
+// ─── Full JSONL log tables ─────────────────────────────────────────────────────
+// One row per line in full.jsonl, with normalized sub-tables for content blocks,
+// token usage, progress events, and system events.
+
+// Tracks an in-progress session from a shadow branch (entire/<commit>-<hash>).
+// Shadow sessions are indexed directly from git without a worktree.
+// Once a session is committed to entire/checkpoints/v1 it also appears as a
+// CheckpointSessionMetadata; the LogEvent uuid-dedup prevents double-indexing.
+model ShadowSession {
+  id           Int        @id @default(autoincrement())
+  sessionId    String     @unique
+  branch       String // most recently active shadow branch
+  seenBlobShas String     @default("[]") // JSON array of git blob SHAs already indexed
+  prompt       String?
+  cwd          String?
+  gitBranch    String? // the working branch inside the session
+  createdAt    DateTime?
+  gitUserName  String? // author of the shadow branch tip — the user who ran Entire
+  gitUserEmail String?
+  logEvents    LogEvent[]
+}
+
+model LogEvent {
+  id              Int              @id @default(autoincrement())
+  uuid            String?          @unique // present on most event types
+  messageId       String?          @unique // used by file-history-snapshot instead of uuid
+  sessionId       String?
+  parentUuid      String?
+  type            String // user | assistant | progress | system | file-history-snapshot
+  timestamp       DateTime?
+  cwd             String?
+  gitBranch       String?
+  version         String?
+  slug            String?
+  isSidechain     Boolean?
+  userType        String?
+  toolUseId       String?
+  parentToolUseId String?
+  requestId       String? // present on assistant events
+  data            String // full raw JSON of the event line
+  sessionLinkId   Int?
+  sessionLink     SessionLink?     @relation(fields: [sessionLinkId], references: [id])
+  shadowSessionId Int?
+  shadowSession   ShadowSession?   @relation(fields: [shadowSessionId], references: [id])
+  contents        LogContent[]
+  usage           LogUsage?
+  hookProgress    LogHookProgress?
+  systemData      LogSystemEvent?
+
+  @@index([sessionId])
+  @@index([sessionId, timestamp])
+  @@index([sessionId, id])
+  @@index([type])
+  @@index([sessionLinkId])
+  @@index([shadowSessionId])
+}
+
+// One row per content block within a user or assistant message.
+model LogContent {
+  id                Int      @id @default(autoincrement())
+  logEventId        Int
+  logEvent          LogEvent @relation(fields: [logEventId], references: [id])
+  role              String // user | assistant
+  contentIndex      Int // 0-based position in the content array
+  contentType       String // text | thinking | tool_use | tool_result | image
+  text              String? // type=text
+  thinking          String? // type=thinking
+  toolUseId         String? // type=tool_use (id field) or type=tool_result (tool_use_id field)
+  toolName          String? // type=tool_use
+  toolInput         String? // type=tool_use, JSON text of input object
+  toolResultContent String? // type=tool_result, stringified content
+  isError           Boolean? // type=tool_result
+  imageData         String? // type=image, base64-encoded data
+  imageMediaType    String? // type=image, e.g. "image/png"
+
+  @@index([logEventId])
+  @@index([toolUseId])
+}
+
+// Token usage summary for assistant messages.
+model LogUsage {
+  id                       Int      @id @default(autoincrement())
+  logEventId               Int      @unique
+  logEvent                 LogEvent @relation(fields: [logEventId], references: [id])
+  model                    String?
+  stopReason               String?
+  inputTokens              Int      @default(0)
+  cacheCreationInputTokens Int      @default(0)
+  cacheReadInputTokens     Int      @default(0)
+  outputTokens             Int      @default(0)
+}
+
+// The `data` sub-object present on progress events (type=hook_progress).
+model LogHookProgress {
+  id         Int      @id @default(autoincrement())
+  logEventId Int      @unique
+  logEvent   LogEvent @relation(fields: [logEventId], references: [id])
+  type       String? // e.g. hook_progress
+  hookEvent  String? // e.g. PreToolUse, PostToolUse
+  hookName   String? // e.g. PreToolUse:Read
+  command    String? // shell command that was run
+}
+
+// Extra fields for system events.
+model LogSystemEvent {
+  id                    Int      @id @default(autoincrement())
+  logEventId            Int      @unique
+  logEvent              LogEvent @relation(fields: [logEventId], references: [id])
+  subtype               String? // e.g. stop_hook_summary, turn_duration
+  hookCount             Int?
+  stopReason            String?
+  preventedContinuation Boolean?
+  level                 String?
+  durationMs            Int? // present on turn_duration subtype
+}

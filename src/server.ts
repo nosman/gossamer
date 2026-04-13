@@ -86,6 +86,19 @@ async function pushSchema(db: PrismaClient): Promise<void> {
   for (const stmt of stmts) {
     await db.$executeRawUnsafe(stmt);
   }
+
+  // Ad-hoc ADD COLUMN migrations for DBs created before a column was added.
+  // SQLite has no IF NOT EXISTS for ADD COLUMN, so we swallow "duplicate column".
+  for (const { table, col, type } of [
+    { table: "ShadowSession", col: "gitUserName",  type: "TEXT" },
+    { table: "ShadowSession", col: "gitUserEmail", type: "TEXT" },
+  ]) {
+    try {
+      await db.$executeRawUnsafe(`ALTER TABLE "${table}" ADD COLUMN "${col}" ${type}`);
+    } catch (err) {
+      if (!/duplicate column/i.test(String(err))) throw err;
+    }
+  }
 }
 
 // ─── Git user ─────────────────────────────────────────────────────────────────
@@ -270,6 +283,23 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         }
       }
 
+      // Last-resort fallback for sessions with no checkpoint or shadow author:
+      // resolve the local git config of the repo matching the session's cwd.
+      // The session's transcript exists on this machine, so that user is by
+      // definition the one who ran it. Memoised per-request to avoid re-execing
+      // git config for every row.
+      const repoUserCache = new Map<string, { name: string | null; email: string | null }>();
+      function localUserFor(cwd: string): { name: string | null; email: string | null } {
+        const repo = findRepoForPath(cwd);
+        const key = repo?.localPath ?? cwd;
+        if (!key) return { name: null, email: null };
+        const cached = repoUserCache.get(key);
+        if (cached) return cached;
+        const u = getGitUser(key);
+        repoUserCache.set(key, u);
+        return u;
+      }
+
       // Git user per checkpoint (from all DBs)
       const cpUserMap = new Map<string, { gitUserName: string | null; gitUserEmail: string | null }>();
       if (allCheckpointIds.size > 0) {
@@ -369,8 +399,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
           repoName:        basename(cwd) || repoName,
           parentSessionId: parentMap.get(sessionId) ?? null,
           childSessionIds: childMap.get(sessionId) ?? [],
-          gitUserName:     cpUser?.gitUserName || null,
-          gitUserEmail:    cpUser?.gitUserEmail || null,
+          gitUserName:     cpUser?.gitUserName  || shadow?.gitUserName  || (cwd ? localUserFor(cwd).name  : null),
+          gitUserEmail:    cpUser?.gitUserEmail || shadow?.gitUserEmail || (cwd ? localUserFor(cwd).email : null),
           prompt:          shadow?.prompt ?? null,
           summary:         null,
           keywords:        [],
@@ -463,8 +493,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         repoName:        basename(cwd) || repoName,
         parentSessionId: null,
         childSessionIds: [],
-        gitUserName:     cpMeta?.gitUserName || null,
-        gitUserEmail:    cpMeta?.gitUserEmail || null,
+        gitUserName:     cpMeta?.gitUserName  || shadow?.gitUserName  || (cwd ? getGitUser(findRepoForPath(cwd)?.localPath ?? cwd).name  : null),
+        gitUserEmail:    cpMeta?.gitUserEmail || shadow?.gitUserEmail || (cwd ? getGitUser(findRepoForPath(cwd)?.localPath ?? cwd).email : null),
         prompt:          shadow?.prompt ?? null,
         summary:         null,
         keywords:        [],

@@ -795,6 +795,14 @@ function readBlobContent(repoPath: string, blobSha: string): string {
   return gitExec(`cat-file blob ${blobSha}`, repoPath);
 }
 
+/** Author of the shadow branch tip — the user who ran Entire for that session. */
+function getShadowBranchAuthor(repoPath: string, branch: string): { name: string | null; email: string | null } {
+  try {
+    const out = gitExec(`log -1 --format=%an%n%ae ${branch}`, repoPath).split("\n");
+    return { name: out[0]?.trim() || null, email: out[1]?.trim() || null };
+  } catch { return { name: null, email: null }; }
+}
+
 function readPromptFromBranch(repoPath: string, branch: string, sessionId: string): string | null {
   try {
     return gitExec(`show ${branch}:.entire/metadata/${sessionId}/prompt.txt`, repoPath).trim();
@@ -815,6 +823,7 @@ export async function indexAllShadowBranches(
 
   for (const branch of branches) {
     const sessions = getShadowSessions(repoPath, branch);
+    const branchAuthor = getShadowBranchAuthor(repoPath, branch);
 
     for (const { sessionId, blobSha } of sessions) {
       // Skip if this exact blob SHA has already been indexed for this session.
@@ -822,7 +831,17 @@ export async function indexAllShadowBranches(
       //  each branch may have a different SHA even for the same underlying content.)
       const existing = await db.shadowSession.findUnique({ where: { sessionId } });
       const seenShas: string[] = existing ? (JSON.parse(existing.seenBlobShas) as string[]) : [];
-      if (seenShas.includes(blobSha)) continue;
+      if (seenShas.includes(blobSha)) {
+        // Backfill: if this row was created before we tracked the author,
+        // patch it in without re-indexing the blob.
+        if (existing && !existing.gitUserName && !existing.gitUserEmail && (branchAuthor.name || branchAuthor.email)) {
+          await db.shadowSession.update({
+            where: { sessionId },
+            data:  { gitUserName: branchAuthor.name, gitUserEmail: branchAuthor.email },
+          });
+        }
+        continue;
+      }
 
       const fullJsonlContent = readBlobContent(repoPath, blobSha);
       const events = parseFullJsonl(fullJsonlContent);
@@ -841,8 +860,13 @@ export async function indexAllShadowBranches(
 
       const shadowSession = await db.shadowSession.upsert({
         where:  { sessionId },
-        create: { sessionId, branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
-        update: { branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
+        create: { sessionId, branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt, gitUserName: branchAuthor.name, gitUserEmail: branchAuthor.email },
+        update: {
+          branch, seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt,
+          // Only fill user fields if we found a value and the row doesn't already have one.
+          ...(branchAuthor.name  && !existing?.gitUserName  ? { gitUserName:  branchAuthor.name  } : {}),
+          ...(branchAuthor.email && !existing?.gitUserEmail ? { gitUserEmail: branchAuthor.email } : {}),
+        },
       });
 
       const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id);

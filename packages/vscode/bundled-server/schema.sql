@@ -181,7 +181,9 @@ CREATE TABLE IF NOT EXISTS "ShadowSession" (
     "prompt" TEXT,
     "cwd" TEXT,
     "gitBranch" TEXT,
-    "createdAt" DATETIME
+    "createdAt" DATETIME,
+    "gitUserName" TEXT,
+    "gitUserEmail" TEXT
 );
 
 -- CreateTable
