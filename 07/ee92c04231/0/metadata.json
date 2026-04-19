@@ -1,0 +1,133 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "07ee92c04231",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-19T01:54:43.527393Z",
+  "branch": "main",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/src/webview/components/EventItem.tsx",
+    "packages/vscode/src/webview/components/ToolUseItem.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "src/config.ts",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-haiku-4-5-20251001",
+  "turn_id": "395e495a2d72",
+  "token_usage": {
+    "input_tokens": 964,
+    "cache_creation_tokens": 3712599,
+    "cache_read_tokens": 106822455,
+    "output_tokens": 295966,
+    "api_call_count": 737
+  },
+  "session_metrics": {
+    "turn_count": 63
+  },
+  "summary": {
+    "intent": "The user was iterating on the Gossamer VS Code extension — a session/checkpoint indexer built on top of Entire.io — fixing critical backend bugs (port conflicts, missing DB schema, wrong per-repo DB clients) while also improving the UI (session detail layout, agent colors, markdown rendering, copy buttons, sorting).",
+    "outcome": "All major bugs were fixed (EADDRINUSE orphan handling, silent pushSchema discarding all SQL statements, single-db architecture replaced with per-repo registry) and a substantial set of UI improvements were shipped; some issues (live session updates, session author attribution) were partially addressed but revealed deeper Entire.io data-availability limits.",
+    "learnings": {
+      "repo": [
+        "pushSchema split SQL on ';\\n' then filtered chunks starting with '--'; every chunk in schema.sql begins with '-- CreateTable', so all 56 statements were silently discarded — DBs had zero tables",
+        "The server had a single 'primary' db variable bound to the --repo-dir startup arg; all endpoints used it exclusively, so sessions in other repos returned empty results",
+        "Checkpoint worktrees were previously placed inside the user's repo at \u003crepo\u003e/.gossamer/checkpoints — moved to ~/.gossamer/checkpoints/\u003cname\u003e/ to avoid interfering with user's working tree",
+        "gitlog npm package defaults to nameStatus:true (--name-status), causing ERR_CHILD_PROCESS_STDIO_MAXBUFFER on large repos; findCommitForCheckpoint returned null for all checkpoints, leaving CheckpointIdGitOidJoin empty",
+        "Entire.io only writes to full.jsonl when its hooks are configured in .claude/settings.json (per-repo agent settings), not just .entire/settings.json — missing hooks means no transcript capture",
+        "Shadow branch refs are stored as loose files under .git/refs/heads/entire/; fs.watch on .git/refs/ correctly detects new commits but the 30s polling is the fallback",
+        "ShadowSession rows had no gitUserName/gitUserEmail columns; user attribution relied entirely on findCheckpointAuthor which greps entire/checkpoints/v1 commits, unavailable for recent sessions not yet promoted to v1",
+        "The worktree for entire/checkpoints/v1 was being created as a shallow clone (entries in .git/shallow), limiting git rev-list to 1 commit and breaking author lookups that walk history"
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called on the primary DB at startup, not on the per-repo DBs loaded from config — secondary repos had zero tables until re-registration"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints used bare 'db' (primary client); sessions in other repos returned empty arrays"
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "findCommitForCheckpoint passed nameStatus:true (gitlog default) causing maxBuffer overflow on large repos; fix: nameStatus:false + execOptions.maxBuffer:100MB"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 388,
+          "end_line": 391,
+          "finding": "Session sort used repoDir (server startup arg) as the sort anchor; sessions from other workspaces sorted to bottom even on the correct machine"
+        },
+        {
+          "path": "packages/vscode/src/webview/components/MarkdownView.tsx",
+          "line": 1,
+          "end_line": 200,
+          "finding": "Highlighting was woven into the inline parser via HighlightText; switched to post-render DOM TreeWalker walk (useLayoutEffect) to avoid breaking markdown output"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 384,
+          "end_line": 384,
+          "finding": "SessionDetail re-fetches on sessions_updated WS events but ClaudeTurnCard toolsExpanded/thinkingExpanded were never initialized based on search match terms — tool groups didn't auto-expand on search hits"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+          "line": 28,
+          "end_line": 47,
+          "finding": "Client-side sortSessions was overriding the server's tiered order (workspace cwd → same repo name → other); default sort key changed to 'default' to preserve server order"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 495,
+          "end_line": 496,
+          "finding": "saveGitOidMapping called with meta.branch from checkpoint metadata, but author backfill was never triggered for ShadowSession rows with null user even when blob SHA was unchanged"
+        }
+      ],
+      "workflow": [
+        "When a VS Code extension reloads/crashes, its spawned child processes survive as orphans; the in-memory guard (GossamerPanel.server) is reset, so naive re-spawn causes EADDRINUSE — probe the port first and kill orphan via lsof before spawning",
+        "SQLite DBs with macOS com.apple.provenance xattr can fail with 'disk I/O error'; the fix is delete+recreate with cache eviction (getDb caches Prisma clients by path)",
+        "Bare git clones store fetched refs at refs/heads/* not refs/remotes/origin/* — worktrees created from bare repos should reset to refs/heads/entire/checkpoints/v1",
+        "Entire.io's checkpoint remote feature allows separating checkpoints into a dedicated repo; Gossamer needs to bare-clone it and create worktrees from the bare repo, fetching on every poll cycle",
+        "shell wrapper 'command -v entire \u003e/dev/null 2\u003e\u00261 \u0026\u0026 entire hooks claude-code \u003cverb\u003e || true' safely makes Entire hooks optional in team repos where not everyone has Entire installed"
+      ]
+    },
+    "friction": [
+      "pushSchema bug silently discarded all 56 SQL statements — took multiple debugging rounds to find because the DB file was created (SQLite creates on connect) but had zero tables, making errors look like connection or Prisma issues",
+      "The user repeatedly hit the same 'no such table' error across multiple restart cycles because the root cause (comment-filter) wasn't found until explicit Node.js debugging of the statement pipeline",
+      "Entire.io hooks were missing from cosmos-graphql's .claude/settings.json; this caused 'session not updating' symptoms that looked like a Gossamer indexing bug and took significant investigation before the real cause was identified",
+      "gitlog maxBuffer overflow was caught silently in a try/catch in saveGitOidMapping, making CheckpointIdGitOidJoin silently stay at 0 rows with no observable error log",
+      "The installed VS Code extension (bundled-server) is independent of the dev repo build — multiple debugging cycles were confused by the extension running stale code from the installed VSIX rather than the dev build",
+      "Copy button on hover caused text reflow because the button was conditionally mounted; required switching to always-mounted with opacity toggle in three separate components",
+      "Session default sort was overridden client-side by ActiveSessions.tsx sort logic, making the server-side tiered sort completely invisible until the client-side sort was neutered for the default case"
+    ],
+    "open_items": [
+      "SessionDetailPanel does not inject window.__GOSSAMER_REPO_PATH__ — fetchSession/fetchLogEvents never send ?localPath=, relying on the probe-all-DBs fallback which is slower and could be fragile",
+      "The 'LIVE' badge on sessions reflects existence of a ShadowSession row, not whether data is actively flowing — stale sessions from dead Entire instances show as LIVE indefinitely",
+      "The shallow clone issue on entire/checkpoints/v1 was manually fixed (unshallow) but the fetch command in the indexer still creates shallow history; ensureWorktree should pass --no-shallow",
+      "Sessions from .entire/metadata/ on disk (live sessions not yet committed to any shadow branch) are not indexed in the current code — the indexLiveSessions work was reverted and only partially reintroduced",
+      "Author attribution for sessions that exist only in .entire/metadata/ (never committed to a shadow branch) falls back to the local git config, which is wrong for repos with multiple contributors",
+      "The server /api/repos/current endpoint was updated to accept ?localPath= but ensureRepoRegistered in GossamerPanel still does a round-trip that may redundantly re-register already-configured repos",
+      "Multi-window server spawn conflict: if three VS Code windows activate simultaneously, two get EADDRINUSE and hang at 'Starting gossamer server' — need port-probe-before-spawn in the extension host as well as the server side"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-19T01:53:39.018016Z",
+    "agent_lines": 54,
+    "agent_removed": 13,
+    "human_added": 27,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 90,
+    "total_lines_changed": 103,
+    "agent_percentage": 65.0485436893204,
+    "metric_version": 2
+  }
+}
