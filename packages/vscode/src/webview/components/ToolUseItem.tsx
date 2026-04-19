@@ -180,7 +180,11 @@ export function ToolUseItem({ pre, post, failed, autoExpand, matchTerms }: Props
         <Text size="xs" fw={700} c={color} style={{ width: 14, textAlign: "center" }}>{sym}</Text>
         <Text size="xs" fw={600} ff="monospace" c={color} style={{ flexShrink: 0 }}>{toolName}</Text>
         {hint && <Text size="xs" c="dimmed" ff="monospace" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{hint}</Text>}
-        {hovered && copyText && <CopyButton text={copyText} />}
+        {copyText && (
+          <Box style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? "auto" : "none", transition: "opacity 120ms", flexShrink: 0 }}>
+            <CopyButton text={copyText} />
+          </Box>
+        )}
         <Text size="xs" c="dimmed" style={{ flexShrink: 0 }}>{timeStart}{showRange ? ` → ${timeEnd}` : ""}</Text>
         {pre.blocked && <Badge color="red" size="xs" variant="filled" fw={700}>BLOCKED</Badge>}
         <Text size="xs" c="dimmed">{expanded ? "▲" : "▼"}</Text>

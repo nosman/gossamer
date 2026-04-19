@@ -337,7 +337,11 @@ function ClaudeTurnCard({ toolGroups, stop, matchTerms, agentLabel }: { toolGrou
         )}
       </Box>
       <Box style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, paddingTop: 2 }}>
-        {hovered && msg && <CopyButton text={msg} />}
+        {msg && (
+          <Box style={{ opacity: hovered ? 1 : 0, pointerEvents: hovered ? "auto" : "none", transition: "opacity 120ms" }}>
+            <CopyButton text={msg} />
+          </Box>
+        )}
         {stop && <TimeAgo iso={stop.timestamp} />}
       </Box>
     </Box>

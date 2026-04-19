@@ -87,7 +87,17 @@ function MessageRow({ accentColor, label, labelColor, timestamp, blocked, copyTe
         {children}
       </Box>
       <Box style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, paddingTop: 2 }}>
-        {hovered && copyText && <CopyButton text={copyText} />}
+        {copyText && (
+          <Box
+            style={{
+              opacity: hovered ? 1 : 0,
+              pointerEvents: hovered ? "auto" : "none",
+              transition: "opacity 120ms",
+            }}
+          >
+            <CopyButton text={copyText} />
+          </Box>
+        )}
         {blocked && <BlockedBadge />}
         {timestamp && <TimeAgo iso={timestamp} />}
       </Box>

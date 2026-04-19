@@ -80,3 +80,9 @@ export function checkpointRepoPath(repoName: string): string {
   const safe = repoName.replace(/[^a-zA-Z0-9_-]/g, "_");
   return join(CONFIG_DIR, "checkpoint-repos", `${safe}.git`);
 }
+
+/** Path to the checkpoint-branch worktree: ~/.gossamer/checkpoints/<safe-name> */
+export function checkpointWorktreePath(repoName: string): string {
+  const safe = repoName.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return join(CONFIG_DIR, "checkpoints", safe);
+}

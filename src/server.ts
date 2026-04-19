@@ -8,7 +8,7 @@ import { promisify } from "util";
 
 const exec     = promisify(execCb);
 const execFile = promisify(execFileCb);
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch as fsWatch, FSWatcher } from "fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch as fsWatch, FSWatcher } from "fs";
 import { homedir } from "os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./mcp-server.js";
@@ -16,7 +16,7 @@ import { basename, dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { getDb, evictDb, indexAllCheckpointsV2, indexAllShadowBranches, indexLiveSessions, setupLogContentFts, syncLogContentFts, searchLogContent } from "@gossamer/core";
 import type { PrismaClient } from "@gossamer/core";
-import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, checkpointRepoPath, type RepoConfig } from "./config.js";
+import { readConfig, addRepo, removeRepo, findRepo, findRepoForPath, defaultDbPath, checkpointRepoPath, checkpointWorktreePath, type RepoConfig } from "./config.js";
 
 // ─── Custom title cache (reads ~/.claude/projects/…/*.jsonl for /rename events) ──
 
@@ -1663,10 +1663,35 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     return bareRepoPath;
   }
 
+  /**
+   * Migrate a legacy <localPath>/.gossamer/checkpoints worktree out of the user's
+   * repo into ~/.gossamer/checkpoints/<name>. No DB changes — checkpoints are keyed
+   * by checkpointId, and the worktree itself is just a throwaway checkout of
+   * entire/checkpoints/v1. Best-effort: if anything fails, the indexer will just
+   * re-create at the new path on the next pass.
+   */
+  function migrateLegacyWorktree(gitDir: string, localPath: string): void {
+    const legacy = join(localPath, ".gossamer", "checkpoints");
+    if (!existsSync(legacy)) return;
+    try {
+      execSync(`git -C ${JSON.stringify(gitDir)} worktree remove --force ${JSON.stringify(legacy)}`, { stdio: "pipe" });
+    } catch {
+      // Not registered as a worktree (or already gone) — fall through to rm.
+    }
+    try { rmSync(legacy, { recursive: true, force: true }); } catch { /* noop */ }
+    // Drop the .gossamer dir too if we're the only thing in it.
+    try {
+      const parent = join(localPath, ".gossamer");
+      if (existsSync(parent) && readdirSync(parent).length === 0) rmSync(parent, { recursive: true, force: true });
+    } catch { /* noop */ }
+    process.stderr.write(`checkpoint indexer: migrated legacy worktree out of ${localPath}\n`);
+  }
+
   /** Create a worktree for the checkpoint branch from a bare checkpoint repo. */
-  async function ensureWorktreeFromBare(bareRepoPath: string, localPath: string): Promise<string> {
-    const worktreePath = join(localPath, ".gossamer", "checkpoints");
-    mkdirSync(join(localPath, ".gossamer"), { recursive: true });
+  async function ensureWorktreeFromBare(bareRepoPath: string, name: string, localPath: string): Promise<string> {
+    migrateLegacyWorktree(bareRepoPath, localPath);
+    const worktreePath = checkpointWorktreePath(name);
+    mkdirSync(dirname(worktreePath), { recursive: true });
     if (!existsSync(worktreePath)) {
       try {
         execSync(`git -C ${JSON.stringify(bareRepoPath)} worktree prune`, { stdio: "pipe" });
@@ -1682,9 +1707,10 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     return worktreePath;
   }
 
-  async function ensureWorktree(localPath: string): Promise<string> {
-    const worktreePath = join(localPath, ".gossamer", "checkpoints");
-    mkdirSync(join(localPath, ".gossamer"), { recursive: true });
+  async function ensureWorktree(name: string, localPath: string): Promise<string> {
+    migrateLegacyWorktree(localPath, localPath);
+    const worktreePath = checkpointWorktreePath(name);
+    mkdirSync(dirname(worktreePath), { recursive: true });
     if (!existsSync(worktreePath)) {
       try {
         execSync(`git -C ${JSON.stringify(localPath)} worktree prune`, { stdio: "pipe" });
@@ -1709,9 +1735,9 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       let worktreePath: string;
       if (checkpointRemoteUrl) {
         const bareRepoPath = await ensureCheckpointRepo(name, checkpointRemoteUrl);
-        worktreePath = await ensureWorktreeFromBare(bareRepoPath, localPath);
+        worktreePath = await ensureWorktreeFromBare(bareRepoPath, name, localPath);
       } else {
-        worktreePath = await ensureWorktree(localPath);
+        worktreePath = await ensureWorktree(name, localPath);
       }
 
       if (!existsSync(worktreePath)) return;
