@@ -2,11 +2,12 @@
   "name": "gossamer-vscode",
   "displayName": "Gossamer",
   "description": "View Entire CLI session history and logs inside VS Code",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "publisher": "nosman",
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "icon.png",
   "license": "MIT",
   "repository": {
     "type": "git",

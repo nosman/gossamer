@@ -6,7 +6,7 @@ declare global {
 }
 
 const port = () => window.__GOSSAMER_PORT__;
-const repoPath = () => window.__GOSSAMER_REPO_PATH__ ?? "";
+export const repoPath = () => window.__GOSSAMER_REPO_PATH__ ?? "";
 const API_BASE = () => `http://localhost:${port()}/api`;
 const WS_URL   = () => `ws://localhost:${port()}`;
 

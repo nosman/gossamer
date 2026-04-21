@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
+import { existsSync } from "fs";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
+import { execFileSync } from "child_process";
 import { openCheckpointDiff } from "./diffUtils.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
 import { AGENT_CLI } from "./GossamerPanel.js";
@@ -63,7 +65,7 @@ export class SessionDetailPanel {
     });
 
     this.panel.webview.onDidReceiveMessage(
-      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string; agent?: string; title?: string }) => {
+      (msg: { type: string; checkpointId?: string; filePath?: string; sessionId?: string; cwd?: string; agent?: string; branch?: string; title?: string }) => {
         if (msg.type === "update_tab_title" && typeof msg.title === "string" && msg.title.trim()) {
           const next = msg.title.length > 40 ? msg.title.slice(0, 39) + "…" : msg.title;
           if (next !== this.panel.title) this.panel.title = next;
@@ -72,13 +74,37 @@ export class SessionDetailPanel {
           openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
         }
         if (msg.type === "resume_session" && msg.sessionId) {
-          const agentEntry = msg.agent ? AGENT_CLI[msg.agent] : undefined;
-          const bin        = agentEntry?.bin        ?? "claude";
-          const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
           const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot ?? (msg.cwd || undefined) });
-          terminal.show();
-          terminal.sendText(`${bin} ${resumeFlag} ${msg.sessionId}`, true);
+          const cwdExists = msg.cwd ? existsSync(msg.cwd) : false;
+
+          if (!cwdExists && msg.branch) {
+            // Session is from a machine/path that doesn't exist locally.
+            // Use `entire resume <branch>` — but only if that branch is checked out.
+            let currentBranch: string | undefined;
+            try {
+              const root = workspaceRoot ?? msg.cwd ?? ".";
+              currentBranch = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+            } catch { /* not a git repo or git unavailable */ }
+
+            if (currentBranch === msg.branch) {
+              const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot });
+              terminal.show();
+              terminal.sendText(`entire resume ${msg.branch}`, true);
+            } else {
+              const branchLabel = msg.branch;
+              const currentLabel = currentBranch ?? "unknown";
+              vscode.window.showWarningMessage(
+                `Cannot resume: session is from branch "${branchLabel}" but "${currentLabel}" is checked out. Switch to "${branchLabel}" first.`,
+              );
+            }
+          } else {
+            const agentEntry = msg.agent ? AGENT_CLI[msg.agent] : undefined;
+            const bin        = agentEntry?.bin        ?? "claude";
+            const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
+            const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot ?? (msg.cwd || undefined) });
+            terminal.show();
+            terminal.sendText(`${bin} ${resumeFlag} ${msg.sessionId}`, true);
+          }
         }
       },
     );

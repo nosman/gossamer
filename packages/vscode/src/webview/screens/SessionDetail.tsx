@@ -3,7 +3,7 @@ import {
   Center, Loader, Text, ScrollArea, Box, Badge, Group, Collapse, ActionIcon, Tooltip,
 } from "@mantine/core";
 import {
-  fetchSession, fetchLogEvents, subscribeToUpdates,
+  fetchSession, fetchLogEvents, subscribeToUpdates, repoPath,
   type Session, type LogEventItem,
 } from "../api";
 import { postToExtension } from "../vscodeApi";
@@ -456,12 +456,25 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
             {session?.customTitle ?? session?.slug ?? title}
           </Text>
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
-          <ActionIcon
-            size="sm"
-            variant="subtle"
-            title="Resume session in terminal"
-            onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session?.cwd ?? "", agent: session?.agent ?? undefined })}
-          >▶</ActionIcon>
+          {session && (() => {
+            const isFork = session.repoRoot !== repoPath();
+            return (
+              <Tooltip
+                label={isFork ? `Fork via entire resume ${session.branch ?? ""}` : "Resume session in terminal"}
+                withArrow
+                openDelay={300}
+              >
+                <ActionIcon
+                  size="sm"
+                  variant="subtle"
+                  color={isFork ? "grape" : undefined}
+                  onClick={() => postToExtension({ type: "resume_session", sessionId, cwd: session.cwd ?? "", agent: session.agent ?? undefined, branch: session.branch ?? undefined })}
+                >
+                  {isFork ? "⎇" : "▶"}
+                </ActionIcon>
+              </Tooltip>
+            );
+          })()}
         </Group>
         {session && (
           <Group px={12} pb={5} gap={16}>
