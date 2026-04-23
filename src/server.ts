@@ -120,6 +120,21 @@ function getGitUser(cwd?: string): { name: string | null; email: string | null }
   return { name, email };
 }
 
+/**
+ * Returns true when the session's git user (name or email) matches the git user
+ * configured on this machine for the given cwd.
+ */
+function isSessionLocalUser(
+  sessionName: string | null,
+  sessionEmail: string | null,
+  cwd: string,
+): boolean {
+  const local = getGitUser(cwd);
+  if (local.email && sessionEmail && local.email === sessionEmail) return true;
+  if (local.name  && sessionName  && local.name  === sessionName)  return true;
+  return false;
+}
+
 // ─── Response types ───────────────────────────────────────────────────────────
 
 interface SessionResponse {
@@ -127,6 +142,9 @@ interface SessionResponse {
   startedAt: string;
   updatedAt: string;
   cwd: string;
+  cwdExists: boolean;
+  /** true when cwd exists locally AND the session's git user matches this machine's git user */
+  isLocalSession: boolean;
   repoRoot: string | null;
   repoName: string | null;
   parentSessionId: string | null;
@@ -244,9 +262,14 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     return null;
   }
 
+  // Bump when the session API shape changes in a way that requires a fresh server.
+  const SERVER_API_VERSION = 2;
+
   const app = express();
   app.use(cors());
   app.use(express.json());
+
+  app.get("/health", (_req, res) => { res.json({ v: SERVER_API_VERSION }); });
 
   // Resolve repo name from repo config once at startup
   const repoName = repoDir ? basename(repoDir) : null;
@@ -390,17 +413,22 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         const updatedAt = t?.updatedAt ?? shadow?.createdAt ?? null;
         const cpUser = cp ? cpUserMap.get(cp.checkpointId) ?? null : null;
         const cwd = cwdMap.get(sessionId) ?? shadow?.cwd ?? "";
+        const cwdExists = cwd ? existsSync(cwd) : false;
+        const gitUserName  = cpUser?.gitUserName  || shadow?.gitUserName  || (cwd ? localUserFor(cwd).name  : null);
+        const gitUserEmail = cpUser?.gitUserEmail || shadow?.gitUserEmail || (cwd ? localUserFor(cwd).email : null);
         return {
           sessionId,
           startedAt: startedAt?.toISOString() ?? new Date(0).toISOString(),
           updatedAt: updatedAt?.toISOString() ?? new Date(0).toISOString(),
           cwd,
+          cwdExists,
+          isLocalSession:  cwdExists && cwd ? isSessionLocalUser(gitUserName, gitUserEmail, cwd) : false,
           repoRoot:        findRepoForPath(cwd)?.localPath ?? repoDir ?? null,
           repoName:        basename(cwd) || repoName,
           parentSessionId: parentMap.get(sessionId) ?? null,
           childSessionIds: childMap.get(sessionId) ?? [],
-          gitUserName:     cpUser?.gitUserName  || shadow?.gitUserName  || (cwd ? localUserFor(cwd).name  : null),
-          gitUserEmail:    cpUser?.gitUserEmail || shadow?.gitUserEmail || (cwd ? localUserFor(cwd).email : null),
+          gitUserName,
+          gitUserEmail,
           prompt:          shadow?.prompt ?? null,
           summary:         null,
           keywords:        [],
@@ -489,17 +517,23 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       const cwd = firstCwdEvent?.cwd ?? shadow?.cwd ?? "";
       const startedAt = firstTimestampEvent?.timestamp ?? shadow?.createdAt ?? null;
       const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
+      const cwdExists = cwd ? existsSync(cwd) : false;
+      const repoLocalPath = findRepoForPath(cwd)?.localPath ?? cwd;
+      const gitUserName  = cpMeta?.gitUserName  || shadow?.gitUserName  || (cwd ? getGitUser(repoLocalPath).name  : null);
+      const gitUserEmail = cpMeta?.gitUserEmail || shadow?.gitUserEmail || (cwd ? getGitUser(repoLocalPath).email : null);
       res.json({
         sessionId:       id,
         startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
         updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
         cwd,
+        cwdExists,
+        isLocalSession:  cwdExists && cwd ? isSessionLocalUser(gitUserName, gitUserEmail, cwd) : false,
         repoRoot:        findRepoForPath(cwd)?.localPath ?? repoDir ?? null,
         repoName:        basename(cwd) || repoName,
         parentSessionId: null,
         childSessionIds: [],
-        gitUserName:     cpMeta?.gitUserName  || shadow?.gitUserName  || (cwd ? getGitUser(findRepoForPath(cwd)?.localPath ?? cwd).name  : null),
-        gitUserEmail:    cpMeta?.gitUserEmail || shadow?.gitUserEmail || (cwd ? getGitUser(findRepoForPath(cwd)?.localPath ?? cwd).email : null),
+        gitUserName,
+        gitUserEmail,
         prompt:          shadow?.prompt ?? null,
         summary:         null,
         keywords:        [],
@@ -1714,10 +1748,19 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     if (!existsSync(worktreePath)) {
       try {
         execSync(`git -C ${JSON.stringify(localPath)} worktree prune`, { stdio: "pipe" });
-        execSync(
-          `git -C ${JSON.stringify(localPath)} worktree add --detach ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
-          { stdio: "pipe" },
-        );
+        try {
+          execSync(
+            `git -C ${JSON.stringify(localPath)} worktree add --detach ${JSON.stringify(worktreePath)} ${CHECKPOINT_BRANCH}`,
+            { stdio: "pipe" },
+          );
+        } catch {
+          // Local branch not present (e.g. fresh clone) — fall back to remote-tracking ref,
+          // which exists without any additional fetch after a normal git clone.
+          execSync(
+            `git -C ${JSON.stringify(localPath)} worktree add --detach ${JSON.stringify(worktreePath)} refs/remotes/origin/${CHECKPOINT_BRANCH}`,
+            { stdio: "pipe" },
+          );
+        }
         process.stderr.write(`checkpoint indexer: worktree created at ${worktreePath}\n`);
       } catch (err) {
         process.stderr.write(`checkpoint indexer: failed to create worktree for ${localPath} — ${err}\n`);
