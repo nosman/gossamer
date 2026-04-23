@@ -3,11 +3,55 @@ import { existsSync } from "fs";
 import { dirname } from "path";
 import { fileURLToPath } from "url";
 import { execFileSync } from "child_process";
+import { get as httpGet } from "http";
 import { openCheckpointDiff } from "./diffUtils.js";
 import { CheckpointTreeProvider } from "./CheckpointTreeProvider.js";
 import { AGENT_CLI } from "./GossamerPanel.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+function httpGetJson<T>(url: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const req = httpGet(url, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as T); }
+        catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error("timeout")); });
+  });
+}
+
+/** Poll for a session on the given branch that started after `afterTime`. Resolves null on timeout. */
+async function pollForNewSession(
+  port: number,
+  branch: string,
+  afterTime: Date,
+  timeoutMs = 30_000,
+): Promise<{ sessionId: string; intent: string | null; slug: string | null; customTitle: string | null } | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const sessions = await httpGetJson<Array<{
+        sessionId: string;
+        branch: string | null;
+        startedAt: string;
+        intent: string | null;
+        slug: string | null;
+        customTitle: string | null;
+      }>>(`http://localhost:${port}/api/sessions`);
+      const match = sessions.find(
+        (s) => s.branch === branch && new Date(s.startedAt) > afterTime,
+      );
+      if (match) return match;
+    } catch { /* keep polling */ }
+  }
+  return null;
+}
 
 export class SessionDetailPanel {
   private static panels = new Map<string, SessionDetailPanel>();
@@ -18,6 +62,7 @@ export class SessionDetailPanel {
     title: string,
     port: number,
     checkpointProvider: CheckpointTreeProvider,
+    repoPath?: string,
     highlight?: string,
   ): void {
     const existing = SessionDetailPanel.panels.get(sessionId);
@@ -27,10 +72,14 @@ export class SessionDetailPanel {
       return;
     }
     const shortTitle = title.length > 40 ? title.slice(0, 39) + "…" : title;
-    new SessionDetailPanel(context, sessionId, shortTitle, port, checkpointProvider, highlight);
+    new SessionDetailPanel(context, sessionId, shortTitle, port, checkpointProvider, repoPath, highlight);
   }
 
   private readonly panel: vscode.WebviewPanel;
+  private readonly context: vscode.ExtensionContext;
+  private readonly port: number;
+  private readonly checkpointProvider: CheckpointTreeProvider;
+  private readonly repoPath: string;
 
   private constructor(
     context: vscode.ExtensionContext,
@@ -38,8 +87,14 @@ export class SessionDetailPanel {
     title: string,
     port: number,
     checkpointProvider: CheckpointTreeProvider,
+    repoPath?: string,
     highlight?: string,
   ) {
+    this.context            = context;
+    this.port               = port;
+    this.checkpointProvider = checkpointProvider;
+    this.repoPath           = repoPath ?? "";
+
     this.panel = vscode.window.createWebviewPanel(
       `gossamer.session.${sessionId}`,
       title,
@@ -54,7 +109,7 @@ export class SessionDetailPanel {
       },
     );
 
-    this.panel.webview.html = this.getHtml(context, sessionId, title, port, highlight);
+    this.panel.webview.html = this.getHtml(context, sessionId, title, port, this.repoPath, highlight);
     checkpointProvider.setSession(sessionId, port).catch(console.error);
 
     // Update sidebar whenever this tab is brought into focus
@@ -74,37 +129,7 @@ export class SessionDetailPanel {
           openCheckpointDiff(port, msg.checkpointId, msg.filePath).catch(console.error);
         }
         if (msg.type === "resume_session" && msg.sessionId) {
-          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-          const cwdExists = msg.cwd ? existsSync(msg.cwd) : false;
-
-          if (!cwdExists && msg.branch) {
-            // Session is from a machine/path that doesn't exist locally.
-            // Use `entire resume <branch>` — but only if that branch is checked out.
-            let currentBranch: string | undefined;
-            try {
-              const root = workspaceRoot ?? msg.cwd ?? ".";
-              currentBranch = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
-            } catch { /* not a git repo or git unavailable */ }
-
-            if (currentBranch === msg.branch) {
-              const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot });
-              terminal.show();
-              terminal.sendText(`entire resume ${msg.branch}`, true);
-            } else {
-              const branchLabel = msg.branch;
-              const currentLabel = currentBranch ?? "unknown";
-              vscode.window.showWarningMessage(
-                `Cannot resume: session is from branch "${branchLabel}" but "${currentLabel}" is checked out. Switch to "${branchLabel}" first.`,
-              );
-            }
-          } else {
-            const agentEntry = msg.agent ? AGENT_CLI[msg.agent] : undefined;
-            const bin        = agentEntry?.bin        ?? "claude";
-            const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
-            const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot ?? (msg.cwd || undefined) });
-            terminal.show();
-            terminal.sendText(`${bin} ${resumeFlag} ${msg.sessionId}`, true);
-          }
+          this.handleResume(msg.sessionId, msg.cwd, msg.agent, msg.branch, title).catch(console.error);
         }
       },
     );
@@ -112,11 +137,59 @@ export class SessionDetailPanel {
     SessionDetailPanel.panels.set(sessionId, this);
   }
 
+  private async handleResume(
+    sessionId: string,
+    cwd: string | undefined,
+    agent: string | undefined,
+    branch: string | undefined,
+    title: string,
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const cwdExists = cwd ? existsSync(cwd) : false;
+
+    if (!cwdExists && branch) {
+      // Session is from a machine/path that doesn't exist locally.
+      // Use `entire resume <branch>` — but only if that branch is checked out.
+      let currentBranch: string | undefined;
+      try {
+        const root = workspaceRoot ?? cwd ?? ".";
+        currentBranch = execFileSync("git", ["-C", root, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+      } catch { /* not a git repo or git unavailable */ }
+
+      if (currentBranch !== branch) {
+        vscode.window.showWarningMessage(
+          `Cannot resume: session is from branch "${branch}" but "${currentBranch ?? "unknown"}" is checked out. Switch to "${branch}" first.`,
+        );
+        return;
+      }
+
+      const forkTime = new Date();
+      const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot });
+      terminal.show();
+      terminal.sendText(`entire resume ${branch}`, true);
+
+      // Poll for the new session in the background and open a detail tab when it appears.
+      const newSession = await pollForNewSession(this.port, branch, forkTime);
+      if (newSession) {
+        const newTitle = newSession.customTitle ?? newSession.slug ?? newSession.intent ?? newSession.sessionId.slice(0, 8);
+        SessionDetailPanel.createOrShow(this.context, newSession.sessionId, newTitle, this.port, this.checkpointProvider, this.repoPath);
+      }
+    } else {
+      const agentEntry = agent ? AGENT_CLI[agent] : undefined;
+      const bin        = agentEntry?.bin        ?? "claude";
+      const resumeFlag = agentEntry?.resumeFlag ?? "--resume";
+      const terminal = vscode.window.createTerminal({ name: title, cwd: workspaceRoot ?? (cwd || undefined) });
+      terminal.show();
+      terminal.sendText(`${bin} ${resumeFlag} ${sessionId}`, true);
+    }
+  }
+
   private getHtml(
     context: vscode.ExtensionContext,
     sessionId: string,
     title: string,
     port: number,
+    repoPath: string,
     highlight?: string,
   ): string {
     const webview   = this.panel.webview;
@@ -140,6 +213,7 @@ export class SessionDetailPanel {
   <div id="root"></div>
   <script nonce="${nonce}">
     window.__GOSSAMER_PORT__         = ${port};
+    window.__GOSSAMER_REPO_PATH__    = ${JSON.stringify(repoPath)};
     window.__GOSSAMER_SESSION_ID__    = ${JSON.stringify(sessionId)};
     window.__GOSSAMER_SESSION_TITLE__ = ${JSON.stringify(title)};
     window.__GOSSAMER_HIGHLIGHT__     = ${JSON.stringify(highlight ?? "")};

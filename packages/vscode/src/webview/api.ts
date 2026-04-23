@@ -15,6 +15,8 @@ export interface Session {
   startedAt: string;
   updatedAt: string;
   cwd: string;
+  cwdExists: boolean;
+  isLocalSession: boolean;
   repoRoot: string | null;
   repoName: string | null;
   parentSessionId: string | null;

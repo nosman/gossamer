@@ -86,12 +86,39 @@ function getSystemNode(): string {
   }
 }
 
+// Must match SERVER_API_VERSION in src/server.ts.
+const SERVER_API_VERSION = 2;
+
 /** Probe the server once; resolves true if it responds, false otherwise. */
 function probeServer(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const req = httpGet(`http://localhost:${port}/api/sessions`, (res) => {
+    const req = httpGet(`http://localhost:${port}/health`, (res: any) => {
       res.destroy();
       resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.setTimeout(500, () => { req.destroy(); resolve(false); });
+  });
+}
+
+/**
+ * Returns true if a Gossamer server is running on `port` AND its API version
+ * matches SERVER_API_VERSION.  Returns false if nothing is listening OR if the
+ * server is an older version (in which case the caller should kill and respawn).
+ */
+function probeServerVersion(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const req = httpGet(`http://localhost:${port}/health`, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (c: Buffer) => chunks.push(c));
+      res.on("end", () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString()) as { v?: number };
+          resolve(body.v === SERVER_API_VERSION);
+        } catch {
+          resolve(false);
+        }
+      });
     });
     req.on("error", () => resolve(false));
     req.setTimeout(500, () => { req.destroy(); resolve(false); });
@@ -264,13 +291,12 @@ export class GossamerPanel {
       },
     );
 
-    this.spawnServer();
     this.panel.webview.html = this.getWebviewHtml(context);
     this.panel.onDidDispose(() => this.cleanup(false), undefined, this.disposables);
     this.panel.webview.onDidReceiveMessage(
       (msg: { type: string; sessionId?: string; title?: string; checkpointId?: string; filePath?: string }) => {
         if (msg.type === "open_session" && msg.sessionId) {
-          SessionDetailPanel.createOrShow(this.context, msg.sessionId, msg.title ?? msg.sessionId.slice(0, 8), this.port, this.checkpointProvider);
+          SessionDetailPanel.createOrShow(this.context, msg.sessionId, msg.title ?? msg.sessionId.slice(0, 8), this.port, this.checkpointProvider, this.repoPath);
         }
         if (msg.type === "show_checkpoint_diff" && msg.checkpointId && msg.filePath) {
           openCheckpointDiff(this.port, msg.checkpointId, msg.filePath).catch(console.error);
@@ -305,7 +331,10 @@ export class GossamerPanel {
       undefined,
       this.disposables,
     );
-    waitForServer(this.port)
+    // spawnServer must finish before waitForServer starts — it may kill an outdated
+    // server and we must not let waitForServer resolve on that dead server.
+    this.spawnServer()
+      .then(() => waitForServer(this.port))
       .then(() => this.ensureRepoRegistered())
       .then(() => { this.serverReady = true; return this.panel.webview.postMessage({ type: "server_ready" }); })
       .catch((err) => this.reportServerError(String(err)));
@@ -318,20 +347,25 @@ export class GossamerPanel {
       return;
     }
 
-    // Kill any orphaned server from a previous VS Code session that is still
-    // holding the port.  Without this, the new spawn fails with EADDRINUSE.
+    // Check whether a server is already on the port.
+    // - Compatible version → reuse it (safe for two VS Code windows sharing one server).
+    // - Outdated version   → SIGKILL it and give the OS 300 ms to release the port.
+    // - Nothing there      → fall through to spawn.
+    if (await probeServerVersion(this.port)) {
+      console.log("[Gossamer] reusing compatible server on port", this.port);
+      GossamerPanel.serverPort = this.port;
+      return;
+    }
     if (await probeServer(this.port)) {
-      console.log("[Gossamer] killing orphaned server on port", this.port);
+      console.log("[Gossamer] killing outdated server on port", this.port);
       try {
         execFileSync("lsof", ["-ti", `tcp:${this.port}`], { encoding: "utf8" })
           .trim().split(/\s+/)
           .filter(Boolean)
-          .forEach((pid) => { try { process.kill(Number(pid), "SIGTERM"); } catch {} });
-        // Give the old process a moment to release the port
-        await new Promise((r) => setTimeout(r, 500));
-      } catch {
-        // lsof may fail if nothing is found — proceed anyway
-      }
+          // SIGKILL (9): bypasses signal handlers, OS releases port immediately.
+          .forEach((pid) => { try { process.kill(Number(pid), 9); } catch {} });
+      } catch { /* lsof may find nothing — proceed */ }
+      await new Promise((r) => setTimeout(r, 300));
     }
 
     if (!existsSync(SERVE_SCRIPT)) {
@@ -378,7 +412,6 @@ export class GossamerPanel {
       if (GossamerPanel.server === proc) {
         GossamerPanel.server = undefined;
         GossamerPanel.serverPort = undefined;
-        // If the panel was still waiting on this process, surface the crash
         const instance = GossamerPanel.instance;
         if (instance && !instance.serverReady) {
           instance.reportServerError(`server exited before becoming ready (code=${code}, signal=${signal})`);
@@ -511,6 +544,7 @@ export class GossamerPanel {
           selected.sessionTitle,
           this.port,
           this.checkpointProvider,
+          this.repoPath,
           query || undefined,
         );
       }

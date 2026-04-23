@@ -3,7 +3,7 @@ import {
   Center, Loader, Text, ScrollArea, Box, Badge, Group, Collapse, ActionIcon, Tooltip,
 } from "@mantine/core";
 import {
-  fetchSession, fetchLogEvents, subscribeToUpdates, repoPath,
+  fetchSession, fetchLogEvents, subscribeToUpdates,
   type Session, type LogEventItem,
 } from "../api";
 import { postToExtension } from "../vscodeApi";
@@ -457,7 +457,7 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
           </Text>
           {session?.isLive && <Badge size="xs" color="orange" variant="light">live</Badge>}
           {session && (() => {
-            const isFork = session.repoRoot !== repoPath();
+            const isFork = !session.isLocalSession;
             return (
               <Tooltip
                 label={isFork ? `Fork via entire resume ${session.branch ?? ""}` : "Resume session in terminal"}

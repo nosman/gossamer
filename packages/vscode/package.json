@@ -13,6 +13,10 @@
     "type": "git",
     "url": "https://github.com/nosman/gossamer"
   },
+  "bugs": {
+    "url": "https://github.com/nosman/gossamer/issues",
+    "email": "stephanos.tsoucas@gmail.com"
+  },
   "categories": [
     "Visualization",
     "Formatters",
