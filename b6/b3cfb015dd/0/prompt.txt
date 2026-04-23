@@ -1,0 +1,85 @@
+The session logs store the session id right?
+
+---
+
+Sure
+
+---
+
+How come all the icons now show up as fork? If the session is live on this machine (ie if the agent still knows about the session), it should show the play button.
+
+---
+
+Ok but now all of them have the play button. This is another bug.
+
+---
+
+Also compare the usernames/emails for the given git users.
+
+---
+
+Create a SUPPORT.md file in the correct format for vscode extension marketplace to recognize. Put my email in it.
+
+---
+
+If a new session is created via the fork button, does it get the old session's id as its parent?
+
+---
+
+Why are you asking me?! You're the ai!
+
+---
+
+Big issue- i asked you before about what happens when i open a new repo with an entire checkpoint in it. You said it would automatically detect that and index the sessions. However, it doesn't do any of that unless i kick off a new session in the new repo. Fix that.
+
+---
+
+Ok but now the server just hangs...
+
+---
+
+Still hanging! I am going to cancel my subscription, this session has been really bad.
+
+---
+
+The gossamer panel shows a spinning wheel and then says "Gossamer server did not start within 30s (exit code 0)
+
+---
+
+There was previously a problem with two session windows opening at the same time. Didn't we fix this issue previously? What caused the regression?
+
+---
+
+It didn't fix it at all. This is really bad.
+
+---
+
+It's still not working. This is unacceptable.
+
+---
+
+Simple test: when i stashed your latest changes and rebuilt the plugin, it works again. Therefore your latest changes (detecting if a session exists on the local machine or not) are what were preventing the server from starting up properly.
+
+---
+
+Unstash then and fix it!
+
+---
+
+Ok but then what happens when i want to run two windows at a time both with gossamer?
+
+---
+
+I rebuilt the plugin and guess what it doesn't work anymore.
+
+---
+
+You are right that the server itself looks fine, so the problem is probably with the window. here is what i see: [Image #1]
+
+---
+
+NOPE. DID NOT WORK. It's clearly something much simpler, whatever it is. Located entirely in your most recent changes. Are the ports the same?
+
+---
+
+Here's the problem tho. There was only one server process. I killed it, meaning there were NO SERVER PROCESSES. NOW WHEN I START UP THE PLUGIN, IT DOES NOT CONNECT TO THE SERVER.

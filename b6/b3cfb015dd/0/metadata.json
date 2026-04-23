@@ -1,0 +1,140 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "b6b3cfb015dd",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-23T17:25:07.880298Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/package.json",
+    "packages/vscode/src/GossamerPanel.ts",
+    "packages/vscode/src/SessionDetailPanel.ts",
+    "packages/vscode/src/webview/api.ts",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "0bb93a10c801",
+  "token_usage": {
+    "input_tokens": 1100,
+    "cache_creation_tokens": 3974562,
+    "cache_read_tokens": 117842442,
+    "output_tokens": 397100,
+    "api_call_count": 858
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Fix multiple stacked bugs in the Gossamer VS Code extension (server startup, database schema, multi-repo session indexing, checkpoint branch management) and add a series of UI and backend improvements including per-repo DB clients, live session detection, agent colors, markdown rendering, and multi-window server support.",
+    "outcome": "Most bugs were fixed and features shipped, but the session ended mid-fix on a spawnServer→waitForServer race condition that causes the panel to hang when no server process exists and a compatible server is already on the port.",
+    "learnings": {
+      "repo": [
+        "The VS Code extension loads from a gossamer-testing worktree (not the main repo); stale builds there cause confusing behavior",
+        "bundled-server/serve.js takes priority over dist/serve.js at runtime — rebuilding packages/vscode alone is not enough if bundled-server is stale",
+        "pushSchema splits schema.sql on ';\\n' and filtered chunks starting with '--'; every chunk in schema.sql begins with '-- CreateTable' so ALL 56 statements were silently discarded",
+        "Entire.io writes live transcripts to .entire/metadata/\u003csessionId\u003e/full.jsonl; shadow branch commits only happen at checkpoint boundaries (can be minutes later)",
+        "Shadow branch author info (git commit author) is the only reliable per-session user signal; the jsonl transcript itself contains no author fields",
+        "Each repo has its own SQLite DB; the server previously used a single 'primary' db variable that caused cross-repo queries to return empty results",
+        "Checkpoint commits live on entire/checkpoints/v1 with 'Checkpoint: \u003cid\u003e' subjects; Entire-Checkpoint: trailers appear on feature branch commits linking back to checkpoints",
+        "The gitlog npm package defaults to nameStatus:true (adds --name-status to git log), causing ERR_CHILD_PROCESS_STDIO_MAXBUFFER on large repos with 10k commit history",
+        "macOS com.apple.provenance xattr on SQLite files causes 'disk I/O error'; fix is delete the file and recreate (requires evicting the Prisma client cache too)",
+        "Entire hooks are configured in .claude/settings.json per-repo, not in .entire/settings.json; missing hooks means no data flows to full.jsonl"
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called for the primary DB at startup; secondary repo DBs registered in config never got schema applied"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 229,
+          "end_line": 229,
+          "finding": "SERVER_API_VERSION constant used for /health endpoint version-checking between extension and server"
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "findCommitForCheckpoint used gitlog with default nameStatus:true; on large repos this blows maxBuffer. Fix: nameStatus:false + execOptions.maxBuffer: 100MB"
+        },
+        {
+          "path": "packages/core/src/db.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "dbCache caches Prisma clients by path; deleting a corrupt SQLite file doesn't help without evicting the cache. Added evictDb() export"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "spawnServer() was fire-and-forget; waitForServer() ran concurrently and could resolve on an OLD server before spawnServer killed it. Fix: await spawnServer before starting waitForServer"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 384,
+          "end_line": 384,
+          "finding": "Session detail re-fetches on every sessions_updated WebSocket event"
+        },
+        {
+          "path": "packages/vscode/src/webview/components/MarkdownView.tsx",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Switched from in-parser highlighting (HighlightTermsCtx) to post-render DOM walking via TreeWalker; avoids breaking markdown AST and handles cross-node matches"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 813,
+          "end_line": 813,
+          "finding": "seenBlobShas check skips re-indexing unchanged sessions; backfill for missing gitUserName requires a separate update path that bypasses the sha check"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/ActiveSessions.tsx",
+          "line": 28,
+          "end_line": 47,
+          "finding": "Client-side sort was overriding the server's tiered workspace-first ordering; fixed by adding 'default' sort key that preserves server order until user clicks a column header"
+        }
+      ],
+      "workflow": [
+        "When pushSchema silently does nothing, check the SQL chunking/filtering logic before assuming schema.sql itself is wrong",
+        "Test schema push with sqlite3 CLI directly before assuming Prisma is the problem",
+        "For multi-repo VS Code extensions, inject workspace path into webview HTML (window.__VAR__) so all API calls can include localPath for DB resolution",
+        "When multiple git worktrees share a branch, use --detach on worktree add to avoid 'branch already used' errors",
+        "The kill-and-respawn pattern for server management breaks multi-window setups; version-check via /health endpoint is the right approach"
+      ]
+    },
+    "friction": [
+      "Three separate bugs stacked on top of each other in the schema/DB area (comment filter, missing secondary repo push, corrupt file with xattr) made it look like the fix wasn't working each time",
+      "git stash pop during a context-limit continuation brought back all the bugs that had been fixed, causing confusion about what was a regression vs what was already broken",
+      "gossamer-testing worktree had stale builds; rebuilding the main repo didn't update what VS Code was actually loading",
+      "spawnServer/waitForServer race condition was introduced while trying to solve the multi-window problem, making it worse",
+      "bundled-server/serve.js is a separate artifact that must be manually updated; it doesn't get rebuilt by the normal build pipeline",
+      "The gitlog maxBuffer error was silently caught and swallowed, making it impossible to distinguish 'no commits found' from 'command failed'"
+    ],
+    "open_items": [
+      "spawnServer → waitForServer race condition: when a compatible server is on the port, reuse path is correct, but the no-server case still has potential timing issues with the 300ms kill wait",
+      "SessionDetailPanel.ts does not inject window.__GOSSAMER_REPO_PATH__, so session-specific API calls don't send localPath and fall back to probing all DBs",
+      "Entire.io does not write author/email into full.jsonl events; stamping it at session-start would make attribution reliable without needing git branch lookups",
+      "Live session update detection is fully dependent on Entire hooks being configured in .claude/settings.json; there's no fallback when hooks are missing",
+      "The 'fork via entire resume' feature was added but auto-opening the new session tab requires polling since the new session ID isn't known at click time",
+      "CheckpointIdGitOidJoin backfill is shallow-clone-aware but git objects from force-pushed branches remain as dangling commits and are never reachable from findCommitForCheckpoint",
+      "bundled-server/serve.js needs a proper automated rebuild step so SERVER_API_VERSION stays in sync with src/server.ts"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-23T17:23:56.951656Z",
+    "agent_lines": 195,
+    "agent_removed": 54,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 195,
+    "total_lines_changed": 249,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
