@@ -1,0 +1,81 @@
+Now it's time to package gossamer for the vscode plugin marketplace. When i run vsce package, i get  ERROR  Manifest missing field: engines
+
+---
+
+Github url is https://github.com/nosman/gossamer
+
+---
+
+My publisher id is nosman
+
+---
+
+vsce publish
+
+---
+
+Update the category in the package file to include Visualization, Formatters, and Other
+
+---
+
+Update the pacakge version to 0.1.1
+
+---
+
+Update the .vscodeignore file to get rid of unnecessary files. I see stuff like .DS_Store in there that should definitely not be included. Do typescript type definitions need to be in there too?
+
+---
+
+vsce is also suggesting to bundle the extension to reduce size: https://code.visualstudio.com/api/working-with-extensions/bundling-extension. Can you set this up?
+
+---
+
+What does the --no-dependencies flag do in vsce package?
+
+---
+
+In commit 19f189c, i added code to make sessionDetails dialog events copyable. Why don't i see it here?
+
+---
+
+Does vsce packge not run a build?
+
+---
+
+Can you update the vscode extension with a readme? when i open the plugin listing on the vscode marketplace, there is no readme. copy most of the top-level README file, and also add a list of the commands in the command palette as well as the main experiences: sessions table, session details table, and checkpoints sidebar.
+
+---
+
+it will ask you to install Entire if you don't have it installed, update the README to say that, since you don't strictly need to have entire installed before opening the plugin.
+
+---
+
+When you open a new project in gossamer, does it ask you to run "entire configure"? or does it do it for you
+
+---
+
+Also add in the README that you can install it from the vscode marketplace here: https://marketplace.visualstudio.com/items?itemName=nosman.gossamer-vscode
+
+---
+
+Update the top-level README with the vscode marketplace link too, mention it before the steps for installing from source
+
+---
+
+Add this image as the icon of the plugin: [Image #1] and make sure to update the package.json so that it shows up in the vscode extension marketplace.
+
+---
+
+What does gossamer (this plugin) do when you open a new repo with an existing entire/checkpoints/v1 branch but you don't have an active session in it?
+
+---
+
+In the "resume" button in the sessionDetails page, we are calling a custom command (depending on the agent we are using) to resume the session. For example, if it's a claude session, we call claude --resume <session_id>. What happens if that session does not exist on the currenct machine?
+
+---
+
+If the cwd doesn't exist locally, call the 'entire resume' command instead. That one loads the session history from the recent checkpoint in the checked out branch. 'entire resume <branchName>'. However, make sure that the branchName is checked out. I don't want it to be distruptive to accidentally check out a branch you didn't mean to.
+
+---
+
+let's make a small tweak to the UI as well. If we hit the 'entire resume' path, we should create a new session based on the old session. The new session's parent ID should be set to the old session's ID. to disambiguate the flows, in this case the button should be a fork icon. Clicking the icon should open a new tab as well for the new session.
