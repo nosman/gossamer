@@ -1,0 +1,137 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "89de5aaf9d31",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-24T22:19:42.517657Z",
+  "branch": "main",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "packages/core/prisma/generated/client/schema.prisma",
+    "packages/core/prisma/schema.prisma",
+    "packages/core/prisma/schema.sql",
+    "packages/core/src/indexer.ts",
+    "packages/vscode/bundled-server/schema.sql",
+    "packages/vscode/bundled-server/serve.js",
+    "packages/vscode/src/webview/api.ts",
+    "packages/vscode/src/webview/components/EventItem.tsx",
+    "packages/vscode/src/webview/screens/SessionDetail.tsx",
+    "src/server.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e18d9950e7e9",
+  "token_usage": {
+    "input_tokens": 1074,
+    "cache_creation_tokens": 4021581,
+    "cache_read_tokens": 120653727,
+    "output_tokens": 348320,
+    "api_call_count": 825
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Fix a series of bugs in the Gossamer VS Code extension (session tracking, DB schema, multi-repo support, server lifecycle) while adding new features including agent color mapping, markdown improvements, per-message author attribution, and UI polish to the session detail and list views.",
+    "outcome": "All requested bug fixes and features were implemented and compiled successfully: multi-repo DB client registry, schema push fix, checkpoint worktree relocation, per-message git author attribution via checkpoint commits, agent brand colors, post-render DOM search highlighting, copy-on-hover for messages, workspace-scoped session filtering, and live session detection from disk.",
+    "learnings": {
+      "repo": [
+        "pushSchema in server.ts splits schema.sql on ';\\n' then filters chunks starting with '--', but every chunk in schema.sql starts with '-- CreateTable', so ALL 56 CREATE TABLE statements were silently discarded — fixed by stripping comment lines within chunks instead of filtering whole chunks",
+        "Entire.io hooks are configured in the agent's settings file (.claude/settings.json), not in .entire/settings.json; without hooks the CLI never writes to full.jsonl",
+        "Shadow branches (entire/\u003chash\u003e-\u003cid\u003e) are written continuously during a session; entire/checkpoints/v1 only gets promoted at checkpoint boundaries, which can lag by hours or days",
+        "Each repo has its own SQLite DB keyed by path; the server previously used a single 'primary' db variable that broke cross-repo queries — replaced with a dbRegistry Map and helper functions allDbs()/dbForRepo()/resolveDb()",
+        "The gitlog npm package defaults to nameStatus: true, appending --name-status to git log; on large repos with 10,000 commits this exceeds Node's maxBuffer and throws silently, causing zero CheckpointIdGitOidJoin rows",
+        "macOS com.apple.provenance extended attribute can block SQLite I/O with 'disk I/O error'; fixed by adding retry logic that evicts the cached Prisma client, deletes the corrupt file, and retries",
+        "Author attribution should come from checkpoint commits (Checkpoint: \u003cid\u003e on entire/checkpoints/v1) not from git blame on the jsonl file; each checkpoint commit is authored by whoever ran Entire",
+        "git worktree add fails with 'branch already used by worktree' when two repos share the same branch name; fixed with --detach flag",
+        "The Entire CLI's full.jsonl lives at .entire/metadata/\u003csessionId\u003e/full.jsonl on disk, updated live before any shadow branch commit; watching this file enables sub-3-second session appearance"
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema was only called on the primary DB at startup; secondary repo DBs registered in config were never schema-pushed, causing 'table does not exist' errors for all indexers"
+        },
+        {
+          "path": "src/server.ts",
+          "line": 388,
+          "end_line": 391,
+          "finding": "Session sort was comparing cwd paths which break across machines; changed to compare basename(cwd) and repo remote URL for cross-machine same-repo grouping"
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 1,
+          "end_line": 35,
+          "finding": "findCommitForCheckpoint must pass nameStatus: false and execOptions: {maxBuffer: 100*1024*1024} to gitlog, otherwise large repos silently fail and return null"
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 813,
+          "end_line": 822,
+          "finding": "seenBlobShas check skips re-indexing if blob SHA unchanged; needed a bypass path for author backfill when gitUserName is NULL on existing rows"
+        },
+        {
+          "path": "packages/vscode/src/webview/components/MarkdownView.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Context-based inline highlighting breaks markdown rendering on edge cases; switched to post-render DOM walking via TreeWalker API after React commits the tree"
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 384,
+          "end_line": 395,
+          "finding": "ClaudeTurnCard initialized toolsExpanded/thinkingExpanded to false unconditionally; auto-expand on search hit requires initializing from matchesAny()/toolHasMatch() helpers"
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 275,
+          "finding": "spawnServer() guard only checked in-memory GossamerPanel.server; orphaned processes from VS Code crashes held the port and caused EADDRINUSE on next activation"
+        },
+        {
+          "path": "packages/core/prisma/schema.prisma",
+          "line": 1,
+          "end_line": 999,
+          "finding": "ShadowSession and LogEvent lacked gitUserName/gitUserEmail columns; old DBs need ALTER TABLE migration in pushSchema (tolerant, swallows duplicate column errors)"
+        }
+      ],
+      "workflow": [
+        "When SQLite DBs are 4096 bytes (header only, no tables), pushSchema ran but silently executed zero statements — always verify table existence after schema push rather than trusting the 'schema ready' log line",
+        "For multi-machine repos, comparing git remote URLs is more reliable than comparing cwd paths for session ownership",
+        "git worktrees owned by a bare repo work correctly: the worktree's .git file points back to the bare repo's worktree metadata, so refs resolve from the bare repo's ref store",
+        "Shallow clones (.git/shallow) silently truncate git rev-list; unshallowing with git fetch --unshallow is needed before any commit-history-dependent operations",
+        "Post-render DOM highlighting (TreeWalker on text nodes) is more robust than parser-level highlighting because it operates on the final rendered output and handles cross-node matches"
+      ]
+    },
+    "friction": [
+      "pushSchema bug required 4+ debugging iterations before the root cause (comment filter on SQL chunks) was found",
+      "macOS com.apple.provenance xattr causing SQLite disk I/O error was unexpected and hard to diagnose",
+      "gitlog npm package silently discarded failures from maxBuffer overflow, causing 0 OID mappings with no error surfaced",
+      "The 'session not updating' issue was incorrectly attributed to Gossamer code multiple times before discovering the real cause was missing Entire hooks in cosmos-graphql's .claude/settings.json",
+      "Per-message author attribution required 3 separate attempts: (1) git blame on jsonl file (wrong approach), (2) shadow branch tip author (incomplete), (3) checkpoint commit author (correct)",
+      "Client-side sort in ActiveSessions.tsx was overriding the server's carefully computed tiered sort order, requiring a separate 'default' sort key to preserve server ordering",
+      "Copy button on hover caused text layout shift in multiple components (EventItem, ToolUseItem, SessionDetail ClaudeTurnCard) — required fixing opacity-vs-conditional-mount in all three places independently"
+    ],
+    "open_items": [
+      "SessionDetailPanel.ts does not inject window.__GOSSAMER_REPO_PATH__, so localPath is never sent on API calls from the session detail view — cross-repo DB resolution relies on the probe fallback",
+      "Multi-window server spawn conflict: when 3 VS Code windows activate simultaneously, EADDRINUSE losers spin on 'Starting gossamer server' forever — the installed extension's bundled-server doesn't have the probe-before-spawn fix",
+      "Cross-node search term highlighting (matches spanning multiple inline nodes like bold + plain text) is not implemented; documented as a known gap in MarkdownView",
+      "Author backfill for LogEvents that have no sessionLinkId and whose originating shadow branch has been pruned (e.g. mux-thumbnail-refactor) cannot be resolved via checkpoint commits and falls back to 'You'",
+      "Entire CLI not writing to full.jsonl in cosmos-graphql because hooks were missing from .claude/settings.json — fixed the hooks file but underlying cause (hooks getting removed) is not addressed",
+      "Checkpoint remote feature (bare repo cloning from entireio separate checkpoint repo) was implemented but not tested end-to-end against a real checkpoint remote URL",
+      "Live session indexer (indexLiveSessions from .entire/metadata/) was added but may have been reverted along with other changes — the transcript references a revert and suggests the feature may not be in the final build"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-24T22:18:32.709389Z",
+    "agent_lines": 240,
+    "agent_removed": 22,
+    "human_added": 166,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 437,
+    "total_lines_changed": 463,
+    "agent_percentage": 56.587473002159825,
+    "metric_version": 2
+  }
+}
