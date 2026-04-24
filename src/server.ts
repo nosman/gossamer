@@ -92,6 +92,8 @@ async function pushSchema(db: PrismaClient): Promise<void> {
   for (const { table, col, type } of [
     { table: "ShadowSession", col: "gitUserName",  type: "TEXT" },
     { table: "ShadowSession", col: "gitUserEmail", type: "TEXT" },
+    { table: "LogEvent",      col: "gitUserName",  type: "TEXT" },
+    { table: "LogEvent",      col: "gitUserEmail", type: "TEXT" },
   ]) {
     try {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ADD COLUMN "${col}" ${type}`);
@@ -99,6 +101,31 @@ async function pushSchema(db: PrismaClient): Promise<void> {
       if (!/duplicate column/i.test(String(err))) throw err;
     }
   }
+
+  // Backfill LogEvent.gitUserName/Email from the checkpoint that produced it.
+  // Every LogEvent row with a sessionLinkId came from a CheckpointMetadata
+  // transcript, and the commit that created that checkpoint is its author.
+  // Runs once per server start; subsequent rows are populated at insert time.
+  await db.$executeRawUnsafe(`
+    UPDATE LogEvent
+    SET gitUserName = (
+      SELECT cm.gitUserName FROM SessionLink sl
+      JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
+      WHERE sl.id = LogEvent.sessionLinkId
+    )
+    WHERE LogEvent.gitUserName IS NULL
+      AND LogEvent.sessionLinkId IS NOT NULL
+  `);
+  await db.$executeRawUnsafe(`
+    UPDATE LogEvent
+    SET gitUserEmail = (
+      SELECT cm.gitUserEmail FROM SessionLink sl
+      JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
+      WHERE sl.id = LogEvent.sessionLinkId
+    )
+    WHERE LogEvent.gitUserEmail IS NULL
+      AND LogEvent.sessionLinkId IS NOT NULL
+  `);
 }
 
 // ─── Git user ─────────────────────────────────────────────────────────────────
@@ -441,24 +468,25 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         };
       });
 
-      // Three-tier sort:
-      //   0 = session's cwd is (under) the active workspace dir
-      //   1 = same repo, just elsewhere on disk or another machine (matched by repo name)
-      //   2 = everything else
-      // Within each tier, newest updatedAt wins.
+      // Filter to the current workspace's repo (matched by repo name, since
+      // paths differ across machines). If we can't identify a workspace repo
+      // name, fall through and return everything — better than showing nothing.
       const sortRepoName = sortDir ? basename(sortDir) : null;
       const inWorkspace = (cwd: string | null) =>
         !!sortDir && !!cwd && (cwd === sortDir || cwd.startsWith(sortDir + "/"));
-      const tier = (s: SessionResponse) =>
-        inWorkspace(s.cwd)                                   ? 0
-        : sortRepoName && s.repoName === sortRepoName        ? 1
-        :                                                      2;
-      result.sort((a, b) => {
-        const t = tier(a) - tier(b);
+      const filtered = sortRepoName
+        ? result.filter((s) => inWorkspace(s.cwd) || s.repoName === sortRepoName)
+        : result;
+
+      // Within the filtered set: sessions whose cwd is the active workspace
+      // first, then cross-machine same-repo sessions. Newest updatedAt wins
+      // inside each tier.
+      filtered.sort((a, b) => {
+        const t = (inWorkspace(a.cwd) ? 0 : 1) - (inWorkspace(b.cwd) ? 0 : 1);
         if (t !== 0) return t;
         return b.updatedAt.localeCompare(a.updatedAt);
       });
-      res.json(result);
+      res.json(filtered);
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -604,6 +632,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         isSidechain:     e.isSidechain,
         toolUseId:       e.toolUseId,
         parentToolUseId: e.parentToolUseId,
+        gitUserName:     e.gitUserName,
+        gitUserEmail:    e.gitUserEmail,
         contents: e.contents.map((c) => ({
           contentType:       c.contentType,
           contentIndex:      c.contentIndex,
@@ -680,6 +710,8 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         isSidechain:     e.isSidechain,
         toolUseId:       e.toolUseId,
         parentToolUseId: e.parentToolUseId,
+        gitUserName:     e.gitUserName,
+        gitUserEmail:    e.gitUserEmail,
         contents: e.contents.map((c) => ({
           contentType:       c.contentType,
           contentIndex:      c.contentIndex,

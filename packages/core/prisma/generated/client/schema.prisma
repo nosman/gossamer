@@ -239,6 +239,8 @@ model LogEvent {
   parentToolUseId String?
   requestId       String? // present on assistant events
   data            String // full raw JSON of the event line
+  gitUserName     String? // author of the shadow commit that introduced this event line
+  gitUserEmail    String?
   sessionLinkId   Int?
   sessionLink     SessionLink?     @relation(fields: [sessionLinkId], references: [id])
   shadowSessionId Int?

@@ -305,7 +305,13 @@ export async function indexCheckpointV2(
     }
 
     if (transcriptVal) {
-      await indexFullJsonl(db, transcriptVal, sessionLink.id);
+      // The commit that produced this checkpoint was authored by `author`
+      // (freshly looked up) or, on re-indexing, the value we already stored.
+      // Every event in this transcript belongs to that commit — it's the
+      // authoritative per-turn author the user asked us to use.
+      const cpAuthor = author
+        ?? (existingMeta ? { name: existingMeta.gitUserName, email: existingMeta.gitUserEmail } : null);
+      await indexFullJsonl(db, transcriptVal, sessionLink.id, undefined, cpAuthor);
     }
 
     if (!existsSync(metadataFile)) continue;
@@ -523,9 +529,10 @@ export async function indexFullJsonl(
   transcriptPath: string,
   sessionLinkId?: number,
   shadowSessionId?: number,
+  defaultAuthor?: { name: string | null; email: string | null } | null,
 ): Promise<{ events: number }> {
   const content = readFileSync(transcriptPath, "utf8");
-  return indexFullJsonlContent(db, content, sessionLinkId, shadowSessionId);
+  return indexFullJsonlContent(db, content, sessionLinkId, shadowSessionId, undefined, defaultAuthor);
 }
 
 export async function indexFullJsonlContent(
@@ -533,6 +540,8 @@ export async function indexFullJsonlContent(
   content: string,
   sessionLinkId?: number,
   shadowSessionId?: number,
+  authorByKey?: Map<string, { name: string | null; email: string | null }>,
+  defaultAuthor?: { name: string | null; email: string | null } | null,
 ): Promise<{ events: number }> {
   const events = parseFullJsonl(content);
 
@@ -547,9 +556,33 @@ export async function indexFullJsonlContent(
   let count = 0;
 
   for (const event of events) {
+    // Author resolution: per-line blame map wins; fall back to the checkpoint's
+    // author (when indexing a checkpointed transcript); otherwise null so the
+    // server can do its own fallback at request time.
+    const byUuid    = event.uuid      ? authorByKey?.get(event.uuid)      : undefined;
+    const byMessage = event.messageId ? authorByKey?.get(event.messageId) : undefined;
+    const resolvedAuthor: { name: string | null; email: string | null } =
+      byUuid ?? byMessage ?? defaultAuthor ?? { name: null, email: null };
+
     // Deduplication: skip if this event was already indexed.
-    if (event.uuid && existingUuids.has(event.uuid)) continue;
-    if (event.messageId && existingMessageIds.has(event.messageId)) continue;
+    if (event.uuid && existingUuids.has(event.uuid)) {
+      if (resolvedAuthor.name || resolvedAuthor.email) {
+        await db.logEvent.updateMany({
+          where: { uuid: event.uuid, OR: [{ gitUserName: null }, { gitUserEmail: null }] },
+          data:  { gitUserName: resolvedAuthor.name, gitUserEmail: resolvedAuthor.email },
+        });
+      }
+      continue;
+    }
+    if (event.messageId && existingMessageIds.has(event.messageId)) {
+      if (resolvedAuthor.name || resolvedAuthor.email) {
+        await db.logEvent.updateMany({
+          where: { messageId: event.messageId, OR: [{ gitUserName: null }, { gitUserEmail: null }] },
+          data:  { gitUserName: resolvedAuthor.name, gitUserEmail: resolvedAuthor.email },
+        });
+      }
+      continue;
+    }
 
     const msg = event.message as Record<string, unknown> | undefined;
 
@@ -571,6 +604,8 @@ export async function indexFullJsonlContent(
         parentToolUseId: event.parentToolUseID ?? null,
         requestId:       (event.requestId as string | undefined) ?? null,
         data:            JSON.stringify(event),
+        gitUserName:     resolvedAuthor.name,
+        gitUserEmail:    resolvedAuthor.email,
         sessionLinkId:   sessionLinkId         ?? null,
         shadowSessionId: shadowSessionId       ?? null,
       },
@@ -803,6 +838,68 @@ function getShadowBranchAuthor(repoPath: string, branch: string): { name: string
   } catch { return { name: null, email: null }; }
 }
 
+/**
+ * Per-line authorship for a session's full.jsonl at a given revision (branch
+ * name or commit SHA). Returns a map keyed by each event's `uuid` (or
+ * `messageId` if uuid is absent) to the author of the shadow-branch commit
+ * that introduced that line.
+ *
+ * Entire rewrites the full file each turn, but git blame correctly carries
+ * unchanged lines forward to their original commit.
+ */
+function getJsonlLineAuthors(
+  repoPath: string,
+  rev: string,
+  sessionId: string,
+): Map<string, { name: string | null; email: string | null }> {
+  const map = new Map<string, { name: string | null; email: string | null }>();
+  const jsonPath = `.entire/metadata/${sessionId}/full.jsonl`;
+  let porcelain: string;
+  try {
+    porcelain = gitExec(`blame --line-porcelain ${rev} -- ${JSON.stringify(jsonPath)}`, repoPath);
+  } catch { return map; }
+
+  // Porcelain format per line:
+  //   <sha> <orig-lineno> <final-lineno> [<group-size>]
+  //   author <name>
+  //   author-mail <<email>>
+  //   ...
+  //   \t<file contents>
+  let curName: string | null = null;
+  let curEmail: string | null = null;
+  for (const line of porcelain.split("\n")) {
+    if (line.startsWith("author ")) { curName = line.slice("author ".length).trim() || null; }
+    else if (line.startsWith("author-mail ")) {
+      const m = line.slice("author-mail ".length).trim().match(/^<(.*)>$/);
+      curEmail = m ? m[1] || null : null;
+    } else if (line.startsWith("\t")) {
+      // Actual file content for this blame record.
+      const content = line.slice(1).trim();
+      if (!content) continue;
+      try {
+        const obj = JSON.parse(content) as { uuid?: string; messageId?: string };
+        const key = obj.uuid ?? obj.messageId;
+        if (key && !map.has(key)) map.set(key, { name: curName, email: curEmail });
+      } catch { /* skip non-JSON or malformed */ }
+    }
+  }
+  return map;
+}
+
+/**
+ * Locate the most recent commit on any ref that touched this session's
+ * full.jsonl. Useful for sessions whose originating shadow branch has been
+ * pruned — the commits still exist (reachable via other refs) even though
+ * the branch name is gone.
+ */
+function findAnyCommitForSessionJsonl(repoPath: string, sessionId: string): string | null {
+  const jsonPath = `.entire/metadata/${sessionId}/full.jsonl`;
+  try {
+    const out = gitExec(`log --all -1 --format=%H -- ${JSON.stringify(jsonPath)}`, repoPath).trim();
+    return out || null;
+  } catch { return null; }
+}
+
 function readPromptFromBranch(repoPath: string, branch: string, sessionId: string): string | null {
   try {
     return gitExec(`show ${branch}:.entire/metadata/${sessionId}/prompt.txt`, repoPath).trim();
@@ -840,6 +937,27 @@ export async function indexAllShadowBranches(
             data:  { gitUserName: branchAuthor.name, gitUserEmail: branchAuthor.email },
           });
         }
+        // Per-event author backfill: LogEvents with NULL gitUserName need the blame map.
+        // Only pay the cost if this session actually has any such rows.
+        if (existing) {
+          const missing = await db.logEvent.count({ where: { shadowSessionId: existing.id, gitUserName: null } });
+          if (missing > 0) {
+            const authorByKey = getJsonlLineAuthors(repoPath, branch, sessionId);
+            if (authorByKey.size > 0) {
+              const rows = await db.logEvent.findMany({
+                where: { shadowSessionId: existing.id, gitUserName: null },
+                select: { id: true, uuid: true, messageId: true },
+              });
+              for (const r of rows) {
+                const key = r.uuid ?? r.messageId;
+                const a = key ? authorByKey.get(key) : undefined;
+                if (a && (a.name || a.email)) {
+                  await db.logEvent.update({ where: { id: r.id }, data: { gitUserName: a.name ?? null, gitUserEmail: a.email ?? null } });
+                }
+              }
+            }
+          }
+        }
         continue;
       }
 
@@ -869,7 +987,8 @@ export async function indexAllShadowBranches(
         },
       });
 
-      const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id);
+      const authorByKey = getJsonlLineAuthors(repoPath, branch, sessionId);
+      const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id, authorByKey);
 
       process.stderr.write(`shadow indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from ${branch}\n`);
       totalSessions++;
@@ -929,7 +1048,33 @@ export async function indexLiveSessions(
     // Skip if we've already indexed this exact (mtime, size) version.
     const existing = await db.shadowSession.findUnique({ where: { sessionId } });
     const seenShas: string[] = existing ? (JSON.parse(existing.seenBlobShas) as string[]) : [];
-    if (seenShas.includes(liveTag)) continue;
+    if (seenShas.includes(liveTag)) {
+      // Per-event author backfill for sessions indexed before we tracked authorship.
+      if (existing) {
+        const missing = await db.logEvent.count({ where: { shadowSessionId: existing.id, gitUserName: null } });
+        if (missing > 0) {
+          const rev = findAnyCommitForSessionJsonl(repoPath, sessionId);
+          const authorByKey = rev ? getJsonlLineAuthors(repoPath, rev, sessionId) : null;
+          if (authorByKey && authorByKey.size > 0) {
+            const rows = await db.logEvent.findMany({
+              where: { shadowSessionId: existing.id, gitUserName: null },
+              select: { id: true, uuid: true, messageId: true },
+            });
+            let patched = 0;
+            for (const r of rows) {
+              const key = r.uuid ?? r.messageId;
+              const a = key ? authorByKey.get(key) : undefined;
+              if (a && (a.name || a.email)) {
+                await db.logEvent.update({ where: { id: r.id }, data: { gitUserName: a.name ?? null, gitUserEmail: a.email ?? null } });
+                patched++;
+              }
+            }
+            if (patched > 0) process.stderr.write(`live indexer: backfilled author on ${patched} event(s) of ${sessionId.slice(0, 8)} from ${rev!.slice(0, 8)}\n`);
+          }
+        }
+      }
+      continue;
+    }
 
     let fullJsonlContent: string;
     try { fullJsonlContent = readFileSync(jsonlPath, "utf8"); }
@@ -956,14 +1101,20 @@ export async function indexLiveSessions(
     // Append the new tag to seenBlobShas so subsequent unchanged scans are no-ops.
     const newSeenShas = JSON.stringify([...seenShas, liveTag]);
 
+    // Find any commit (on any ref) that touched this session's full.jsonl so
+    // we can blame per-line authors even after the originating shadow branch
+    // has been pruned. Falls back to an empty map if nothing is found.
+    const blameRev = findAnyCommitForSessionJsonl(repoPath, sessionId);
+    const authorByKey = blameRev ? getJsonlLineAuthors(repoPath, blameRev, sessionId) : new Map<string, { name: string | null; email: string | null }>();
+
     const shadowSession = await db.shadowSession.upsert({
       where:  { sessionId },
       create: { sessionId, branch: "live", seenBlobShas: newSeenShas, prompt, cwd, gitBranch, createdAt },
       update: { seenBlobShas: newSeenShas, prompt: prompt ?? existing?.prompt ?? null, cwd: cwd ?? existing?.cwd ?? null, gitBranch: gitBranch ?? existing?.gitBranch ?? null, createdAt: createdAt ?? existing?.createdAt ?? null },
     });
 
-    const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id);
-    process.stderr.write(`live indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from disk\n`);
+    const { events: newEvents } = await indexFullJsonlContent(db, fullJsonlContent, undefined, shadowSession.id, authorByKey);
+    process.stderr.write(`live indexer: indexed session ${sessionId.slice(0, 8)} (+${newEvents} events) from disk${authorByKey.size > 0 ? ` (blamed ${authorByKey.size} lines)` : ""}\n`);
     totalSessions++;
   }
 

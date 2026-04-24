@@ -24,6 +24,8 @@ export interface Event {
   data: unknown;
   summary: string | null;
   keywords: string[];
+  gitUserName?: string | null;
+  gitUserEmail?: string | null;
   _sourceLogEventId?: number;
   _extraSourceLogEventIds?: number[];
   _sourceUuid?: string;
@@ -80,7 +82,7 @@ export function logEventsToEvents(logEvents: LogEventItem[]): Event[] {
       } else if (textBlocks.length > 0 || imageBlocks.length > 0) {
         const prompt  = textBlocks.map((b) => b.text ?? "").join("\n\n");
         const images  = imageBlocks.map((b) => ({ data: b.imageData, mediaType: b.imageMediaType })).filter((b) => b.data);
-        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt, images }, summary: null, keywords: [], _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
+        result.push({ id: id--, timestamp: ts, event: "UserPromptSubmit", sessionId: sid, blocked: false, data: { prompt, images }, summary: null, keywords: [], gitUserName: le.gitUserName, gitUserEmail: le.gitUserEmail, _sourceLogEventId: le.id, _sourceUuid: le.uuid ?? undefined });
       }
 
     } else if (le.type === "assistant") {
@@ -370,7 +372,14 @@ export function SessionDetail({ sessionId, title, onBack }: Props) {
   const initialLoadDone = useRef(false);
   const matchTerms = HIGHLIGHT_TERMS;
   const agentLabel = session?.agent ?? "Claude";
-  const userInfo = session?.gitUserName ? { name: session.gitUserName } : undefined;
+  // If any event carries its own author (e.g. a forked session mixing authors),
+  // don't fall back to the session-level user — that would misattribute events
+  // whose author we don't know to whoever forked/owns the session.
+  const hasPerEventAuthor = renderItems.some(
+    (r) => r.kind === "event" && !!r.event.gitUserName,
+  );
+  const userInfo =
+    !hasPerEventAuthor && session?.gitUserName ? { name: session.gitUserName } : undefined;
 
   async function load() {
     try {

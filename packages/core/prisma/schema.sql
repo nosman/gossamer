@@ -205,6 +205,8 @@ CREATE TABLE IF NOT EXISTS "LogEvent" (
     "parentToolUseId" TEXT,
     "requestId" TEXT,
     "data" TEXT NOT NULL,
+    "gitUserName" TEXT,
+    "gitUserEmail" TEXT,
     "sessionLinkId" INTEGER,
     "shadowSessionId" INTEGER,
     CONSTRAINT "LogEvent_sessionLinkId_fkey" FOREIGN KEY ("sessionLinkId") REFERENCES "SessionLink" ("id") ON DELETE SET NULL ON UPDATE CASCADE,

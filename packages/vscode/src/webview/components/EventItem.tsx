@@ -111,7 +111,11 @@ function UserPromptCard({ event, user, matchTerms }: { event: Event; user?: User
   const d = data(event);
   const prompt = str(d.prompt);
   const images = Array.isArray(d.images) ? (d.images as { data: string; mediaType: string }[]) : [];
-  const displayName = user?.name ?? "You";
+  // Prefer the author of this specific event (accurate for forked sessions).
+  // If unknown, fall back to the session-level user only when we have no
+  // better per-event signal — i.e. when NO event in the view carries a
+  // different author. The parent passes `user` only in that case.
+  const displayName = event.gitUserName ?? user?.name ?? "You";
   return (
     <MessageRow
       accentColor="var(--vscode-button-background)"

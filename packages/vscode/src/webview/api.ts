@@ -88,6 +88,8 @@ export interface LogEventItem {
   isSidechain: boolean | null;
   toolUseId: string | null;
   parentToolUseId: string | null;
+  gitUserName: string | null;
+  gitUserEmail: string | null;
   contents: LogContentBlock[];
   usage: {
     model: string | null;
