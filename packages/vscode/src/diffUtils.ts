@@ -19,14 +19,17 @@ export class GossamerDiffProvider implements vscode.TextDocumentContentProvider 
 export const diffProvider = new GossamerDiffProvider();
 export const summaryProvider = new GossamerDiffProvider();
 
-function fetchContent(port: number, checkpointId: string, filePath: string, side: string): Promise<string> {
+function fetchPair(port: number, checkpointId: string, filePath: string): Promise<{ before: string; after: string }> {
   return new Promise((resolve) => {
-    const url = `http://localhost:${port}/api/v2/checkpoints/${encodeURIComponent(checkpointId)}/file?path=${encodeURIComponent(filePath)}&side=${side}`;
+    const url = `http://localhost:${port}/api/v2/checkpoints/${encodeURIComponent(checkpointId)}/file-pair?path=${encodeURIComponent(filePath)}`;
     httpGet(url, (res) => {
       const chunks: Buffer[] = [];
       res.on("data", (c: Buffer) => chunks.push(c));
-      res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    }).on("error", () => resolve(""));
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8"))); }
+        catch { resolve({ before: "", after: "" }); }
+      });
+    }).on("error", () => resolve({ before: "", after: "" }));
   });
 }
 
@@ -37,10 +40,7 @@ export async function openCheckpointSummary(checkpointId: string, text: string):
 }
 
 export async function openCheckpointDiff(port: number, checkpointId: string, filePath: string): Promise<void> {
-  const [before, after] = await Promise.all([
-    fetchContent(port, checkpointId, filePath, "before"),
-    fetchContent(port, checkpointId, filePath, "after"),
-  ]);
+  const { before, after } = await fetchPair(port, checkpointId, filePath);
 
   const fileName  = filePath.split("/").pop() ?? filePath;
   const shortId   = checkpointId.slice(0, 8);

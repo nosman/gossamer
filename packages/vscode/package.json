@@ -64,9 +64,21 @@
       {
         "command": "gossamer.rewindToCheckpoint",
         "title": "Rewind to Checkpoint"
+      },
+      {
+        "command": "gossamer.refreshCheckpoints",
+        "title": "Gossamer: Refresh Checkpoints",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "gossamer.refreshCheckpoints",
+          "when": "view == gossamer.checkpoints",
+          "group": "navigation"
+        }
+      ],
       "view/item/context": [
         {
           "command": "gossamer.rewindToCheckpoint",

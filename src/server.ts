@@ -3,11 +3,83 @@ import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import pty from "node-pty";
-import { execSync, exec as execCb, execFile as execFileCb } from "child_process";
+import { execSync, exec as execCb, execFile as execFileCb, spawn as spawnChild, ChildProcessWithoutNullStreams } from "child_process";
 import { promisify } from "util";
 
 const exec     = promisify(execCb);
 const execFile = promisify(execFileCb);
+
+/**
+ * Persistent `git cat-file --batch` worker per repo.
+ *
+ * Spawning `git show` per request costs ~30-100 ms in process startup and
+ * a fresh repository scan. With 50+ prefetches per checkpoint this dominates.
+ * `cat-file --batch` is git's intended fast path: one process, stdin lines
+ * like `<rev>:<path>\n`, stdout chunks of `<sha> blob <size>\n<bytes>\n`.
+ */
+class GitCatFileBatch {
+  private static workers = new Map<string, GitCatFileBatch>();
+  static for(repoDir: string): GitCatFileBatch {
+    let w = GitCatFileBatch.workers.get(repoDir);
+    if (!w) { w = new GitCatFileBatch(repoDir); GitCatFileBatch.workers.set(repoDir, w); }
+    return w;
+  }
+
+  private proc: ChildProcessWithoutNullStreams | null = null;
+  private buf = Buffer.alloc(0);
+  private queue: { resolve: (v: string) => void; reject: (e: Error) => void }[] = [];
+
+  private constructor(private readonly repoDir: string) {}
+
+  private ensureProc(): ChildProcessWithoutNullStreams {
+    if (this.proc && !this.proc.killed && this.proc.exitCode == null) return this.proc;
+    const p = spawnChild("git", ["-C", this.repoDir, "cat-file", "--batch"], { stdio: ["pipe", "pipe", "pipe"] });
+    this.proc = p;
+    this.buf = Buffer.alloc(0);
+    p.stdout.on("data", (d: Buffer) => { this.buf = Buffer.concat([this.buf, d]); this.drain(); });
+    p.on("exit", () => { this.proc = null; while (this.queue.length) this.queue.shift()!.reject(new Error("cat-file exited")); });
+    p.on("error", () => { this.proc = null; });
+    return p;
+  }
+
+  private drain(): void {
+    while (this.queue.length > 0) {
+      const nl = this.buf.indexOf(0x0a);
+      if (nl === -1) return;
+      const header = this.buf.slice(0, nl).toString("utf8");
+      const missing = / missing$/.test(header);
+      if (missing) {
+        this.buf = this.buf.slice(nl + 1);
+        this.queue.shift()!.resolve("");
+        continue;
+      }
+      const m = header.match(/^[0-9a-f]+ \w+ (\d+)$/);
+      if (!m) {
+        // Unparseable — bail, kill the process so subsequent calls re-spawn.
+        const err = new Error(`cat-file: unexpected header ${JSON.stringify(header)}`);
+        while (this.queue.length) this.queue.shift()!.reject(err);
+        try { this.proc?.kill(); } catch { /* noop */ }
+        this.proc = null;
+        return;
+      }
+      const size = parseInt(m[1], 10);
+      const start = nl + 1;
+      const end = start + size;
+      if (this.buf.length < end + 1) return; // wait for the rest + trailing \n
+      const body = this.buf.slice(start, end).toString("utf8");
+      this.buf = this.buf.slice(end + 1);
+      this.queue.shift()!.resolve(body);
+    }
+  }
+
+  show(rev: string, filePath: string): Promise<string> {
+    const p = this.ensureProc();
+    return new Promise<string>((resolve, reject) => {
+      this.queue.push({ resolve, reject });
+      p.stdin.write(`${rev}:${filePath}\n`);
+    });
+  }
+}
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, watch as fsWatch, FSWatcher } from "fs";
 import { homedir } from "os";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
@@ -106,26 +178,36 @@ async function pushSchema(db: PrismaClient): Promise<void> {
   // Every LogEvent row with a sessionLinkId came from a CheckpointMetadata
   // transcript, and the commit that created that checkpoint is its author.
   // Runs once per server start; subsequent rows are populated at insert time.
-  await db.$executeRawUnsafe(`
-    UPDATE LogEvent
-    SET gitUserName = (
-      SELECT cm.gitUserName FROM SessionLink sl
-      JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
-      WHERE sl.id = LogEvent.sessionLinkId
-    )
-    WHERE LogEvent.gitUserName IS NULL
-      AND LogEvent.sessionLinkId IS NOT NULL
-  `);
-  await db.$executeRawUnsafe(`
-    UPDATE LogEvent
-    SET gitUserEmail = (
-      SELECT cm.gitUserEmail FROM SessionLink sl
-      JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
-      WHERE sl.id = LogEvent.sessionLinkId
-    )
-    WHERE LogEvent.gitUserEmail IS NULL
-      AND LogEvent.sessionLinkId IS NOT NULL
-  `);
+  // We probe first because the UPDATE walks the join even when nothing changes
+  // — a 6 s+ stall on big DBs in the hot path of every cold connection.
+  const probe = await db.$queryRawUnsafe<{ n: number }[]>(
+    `SELECT 1 AS n FROM LogEvent
+       WHERE sessionLinkId IS NOT NULL
+         AND (gitUserName IS NULL OR gitUserEmail IS NULL)
+       LIMIT 1`,
+  );
+  if (probe.length > 0) {
+    await db.$executeRawUnsafe(`
+      UPDATE LogEvent
+      SET gitUserName = (
+        SELECT cm.gitUserName FROM SessionLink sl
+        JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
+        WHERE sl.id = LogEvent.sessionLinkId
+      )
+      WHERE LogEvent.gitUserName IS NULL
+        AND LogEvent.sessionLinkId IS NOT NULL
+    `);
+    await db.$executeRawUnsafe(`
+      UPDATE LogEvent
+      SET gitUserEmail = (
+        SELECT cm.gitUserEmail FROM SessionLink sl
+        JOIN CheckpointMetadata cm ON sl.checkpointMetadataId = cm.id
+        WHERE sl.id = LogEvent.sessionLinkId
+      )
+      WHERE LogEvent.gitUserEmail IS NULL
+        AND LogEvent.sessionLinkId IS NOT NULL
+    `);
+  }
 }
 
 // ─── Git user ─────────────────────────────────────────────────────────────────
@@ -140,11 +222,24 @@ function gitConfigGet(key: string, cwd?: string): string | null {
   } catch { return null; }
 }
 
+// Cache git config lookups — they shell out per call and dominate session
+// detail latency when nothing's cached. Config changes are rare; a 60 s TTL
+// is safe and re-reads on demand are still possible after expiry.
+const gitUserCache = new Map<string, { value: { name: string | null; email: string | null }; expires: number }>();
+const GIT_USER_TTL_MS = 60_000;
+
 function getGitUser(cwd?: string): { name: string | null; email: string | null } {
+  const key = cwd ?? "<global>";
+  const now = Date.now();
+  const hit = gitUserCache.get(key);
+  if (hit && hit.expires > now) return hit.value;
+
   // Try local config first (cwd), then fall back to global
   const name  = (cwd ? gitConfigGet("user.name", cwd)  : null) ?? gitConfigGet("--global user.name");
   const email = (cwd ? gitConfigGet("user.email", cwd) : null) ?? gitConfigGet("--global user.email");
-  return { name, email };
+  const value = { name, email };
+  gitUserCache.set(key, { value, expires: now + GIT_USER_TTL_MS });
+  return value;
 }
 
 /**
@@ -546,17 +641,26 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       const startedAt = firstTimestampEvent?.timestamp ?? shadow?.createdAt ?? null;
       const updatedAt = lastEvent?.timestamp  ?? shadow?.createdAt ?? null;
       const cwdExists = cwd ? existsSync(cwd) : false;
-      const repoLocalPath = findRepoForPath(cwd)?.localPath ?? cwd;
-      const gitUserName  = cpMeta?.gitUserName  || shadow?.gitUserName  || (cwd ? getGitUser(repoLocalPath).name  : null);
-      const gitUserEmail = cpMeta?.gitUserEmail || shadow?.gitUserEmail || (cwd ? getGitUser(repoLocalPath).email : null);
+      const matchedRepo = cwd ? findRepoForPath(cwd) : null;
+      const repoLocalPath = matchedRepo?.localPath ?? cwd;
+      // Resolve the local git user once; the fields are reused below for the
+      // user name, email, and the "is this me?" comparison. Avoids 4-12 redundant
+      // git execSyncs per request.
+      const localUser = cwd ? getGitUser(repoLocalPath) : { name: null, email: null };
+      const gitUserName  = cpMeta?.gitUserName  || shadow?.gitUserName  || localUser.name;
+      const gitUserEmail = cpMeta?.gitUserEmail || shadow?.gitUserEmail || localUser.email;
+      const isLocalSession = cwdExists && cwd
+        ? !!((localUser.email && gitUserEmail && localUser.email === gitUserEmail)
+          || (localUser.name  && gitUserName  && localUser.name  === gitUserName))
+        : false;
       res.json({
         sessionId:       id,
         startedAt:       startedAt?.toISOString() ?? new Date(0).toISOString(),
         updatedAt:       updatedAt?.toISOString() ?? new Date(0).toISOString(),
         cwd,
         cwdExists,
-        isLocalSession:  cwdExists && cwd ? isSessionLocalUser(gitUserName, gitUserEmail, cwd) : false,
-        repoRoot:        findRepoForPath(cwd)?.localPath ?? repoDir ?? null,
+        isLocalSession,
+        repoRoot:        matchedRepo?.localPath ?? repoDir ?? null,
         repoName:        basename(cwd) || repoName,
         parentSessionId: null,
         childSessionIds: [],
@@ -951,6 +1055,79 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     }
   });
 
+  // GET /api/v2/checkpoints/:id/file-pair?path=<path>
+  // Returns both before and after contents in one call — saves a HTTP round-trip
+  // and one git process fork per file open.
+  const filePairCache = new Map<string, { before: string; after: string }>();
+  const filePairInflight = new Map<string, Promise<{ before: string; after: string }>>();
+  app.get("/api/v2/checkpoints/:id/file-pair", async (req, res) => {
+    try {
+      const checkpointId = req.params.id;
+      const filePath = typeof req.query.path === "string" ? req.query.path : null;
+      const qLocalPath = typeof req.query.localPath === "string" ? req.query.localPath : null;
+      if (!filePath) { res.status(400).end(); return; }
+      const cdb = await resolveDb(qLocalPath, (d) => d.checkpointIdGitOidJoin.findFirst({ where: { checkpointId }, select: { checkpointId: true } }));
+      if (!cdb) { res.status(404).end(); return; }
+      const join = await cdb.checkpointIdGitOidJoin.findFirst({
+        where: { checkpointId },
+        select: { gitOid: true },
+      });
+      if (!join) { res.status(404).end(); return; }
+
+      const cacheKey = `${join.gitOid}:${filePath}`;
+      const cached = filePairCache.get(cacheKey);
+      if (cached) {
+        res.set("Content-Type", "application/json; charset=utf-8");
+        res.json(cached);
+        return;
+      }
+
+      const repo = qLocalPath ? findRepo(qLocalPath) : null;
+      let cpRepoDir = repo?.localPath ?? repoDir;
+      if (!cpRepoDir) {
+        const sessionLink = await cdb.checkpointSessionMetadata.findFirst({
+          where: { checkpointId },
+          select: { sessionId: true },
+        });
+        if (sessionLink) {
+          const shadow = await cdb.shadowSession.findUnique({
+            where: { sessionId: sessionLink.sessionId },
+            select: { cwd: true },
+          });
+          if (shadow?.cwd) cpRepoDir = shadow.cwd;
+        }
+      }
+      if (!cpRepoDir) { res.status(400).end(); return; }
+
+      // De-duplicate concurrent requests: if a fetch is already running for
+      // this same (oid, path), share its result instead of starting a second
+      // git lookup. Big win when prefetch + click race for the same file.
+      let inflight = filePairInflight.get(cacheKey);
+      if (!inflight) {
+        const batch = GitCatFileBatch.for(cpRepoDir);
+        inflight = (async () => {
+          const [before, after] = await Promise.all([
+            batch.show(`${join.gitOid}^`, filePath).catch(() => ""),
+            batch.show(join.gitOid,        filePath).catch(() => ""),
+          ]);
+          if (filePairCache.size >= 256) {
+            const firstKey = filePairCache.keys().next().value;
+            if (firstKey) filePairCache.delete(firstKey);
+          }
+          filePairCache.set(cacheKey, { before, after });
+          return { before, after };
+        })();
+        filePairInflight.set(cacheKey, inflight);
+        inflight.finally(() => filePairInflight.delete(cacheKey));
+      }
+      const result = await inflight;
+      res.set("Content-Type", "application/json; charset=utf-8");
+      res.json(result);
+    } catch {
+      res.status(500).end();
+    }
+  });
+
   // GET /api/v2/checkpoints/:id/file?path=<path>&side=before|after
   // Returns the raw file content at the commit (after) or its parent (before).
   app.get("/api/v2/checkpoints/:id/file", async (req, res) => {
@@ -1083,7 +1260,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       }
 
       const page = typeof req.query.page === "string" ? Math.max(0, parseInt(req.query.page, 10) || 0) : 0;
-      const PAGE_SIZE = 50;
+      const PAGE_SIZE = 100;
 
       const repo = findRepoForPath(localPath);
       if (!repo) { res.status(404).json({ error: "Repo not found in config" }); return; }

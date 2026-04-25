@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { get as httpGet } from "http";
 import { join } from "path";
+import { execFileSync } from "child_process";
 
 interface CheckpointSummary {
   intent: string;
@@ -31,7 +32,8 @@ export type CheckpointTreeItem =
   | { kind: "checkpoint"; cp: Checkpoint; port: number; index: number; repoPath: string }
   | { kind: "summary";    checkpointId: string; text: string }
   | { kind: "dir";        label: string; fullPath: string; absPath: string; children: CheckpointTreeItem[] }
-  | { kind: "file";       name: string;  fullPath: string; absPath: string; checkpointId: string; port: number };
+  | { kind: "file";       name: string;  fullPath: string; absPath: string; checkpointId: string; port: number }
+  | { kind: "note";       label: string };
 
 function fetchJson<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -46,6 +48,18 @@ function fetchJson<T>(url: string): Promise<T> {
     req.on("error", reject);
     req.setTimeout(5000, () => { req.destroy(); reject(new Error("timeout")); });
   });
+}
+
+/**
+ * Fire-and-forget warm-up of the server-side file-pair cache. By the time the
+ * user clicks the file, both `git show` calls have already run and their
+ * output is sitting in the server's LRU.
+ */
+function prefetchFilePair(port: number, checkpointId: string, filePath: string): void {
+  const url = `http://localhost:${port}/api/v2/checkpoints/${encodeURIComponent(checkpointId)}/file-pair?path=${encodeURIComponent(filePath)}`;
+  const req = httpGet(url, (res) => { res.resume(); });
+  req.on("error", () => undefined);
+  req.setTimeout(15_000, () => req.destroy());
 }
 
 function buildItems(
@@ -94,10 +108,67 @@ export class CheckpointTreeProvider
   private currentPort: number | null = null;
   private currentRepoPath: string = "";
 
+  /**
+   * Load checkpoints for an explicit (repoPath, branch) pair. The caller is
+   * responsible for picking the right branch — typically the workspace's
+   * current HEAD, but a fork tool or the like could pass a different one.
+   */
+  async setBranch(repoPath: string, branch: string, port: number): Promise<void> {
+    this.currentPort = port;
+    this.currentRepoPath = repoPath;
+    this.currentBranch = branch;
+
+    try {
+      const log = await fetchJson<{ entries: BranchLogEntry[] }>(
+        `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(repoPath)}&branch=${encodeURIComponent(branch)}`,
+      );
+      const seen = new Set<string>();
+      const entries: Checkpoint[] = [];
+      for (const entry of log.entries) {
+        if (seen.has(entry.checkpointId)) continue;
+        seen.add(entry.checkpointId);
+        entries.push({
+          checkpointId:  entry.checkpointId,
+          createdAt:     entry.createdAt,
+          filesTouched:  entry.filesTouched,
+          summary:       entry.summary,
+          commitMessage: entry.commitMessage,
+          commitHash:    entry.commitHash,
+        });
+      }
+      this.branchCheckpoints = entries;
+    } catch {
+      this.branchCheckpoints = [];
+    }
+    this._onDidChangeTreeData.fire();
+  }
+
+  /** Convenience: detect the workspace's current HEAD branch and load it. */
+  async setBranchFromWorkspace(repoPath: string, port: number): Promise<void> {
+    let branch: string;
+    try {
+      branch = execFileSync("git", ["-C", repoPath, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim();
+    } catch {
+      this.currentPort = port;
+      this.currentRepoPath = repoPath;
+      this.branchCheckpoints = [];
+      this.currentBranch = null;
+      this._onDidChangeTreeData.fire();
+      return;
+    }
+    if (!branch) return;
+    return this.setBranch(repoPath, branch, port);
+  }
+
+  /**
+   * Populate the "Session" group with checkpoints from a specific session.
+   * Does NOT touch the branch group — that's owned by setBranch / the
+   * workspace's current branch and shouldn't change just because the user
+   * focused a different session.
+   */
   async setSession(sessionId: string, port: number): Promise<void> {
     this.currentPort = port;
 
-    // Fetch session info and checkpoints in parallel.
     const [allSessionCheckpoints, sessionInfo] = await Promise.all([
       fetchJson<Checkpoint[]>(
         `http://localhost:${port}/api/v2/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
@@ -107,18 +178,9 @@ export class CheckpointTreeProvider
       ).catch(() => ({ cwd: "", repoRoot: null, branch: null, updatedAt: "", isLive: false })),
     ]);
 
-    // Prefer repoRoot (the server's known local path for this repo) over the
-    // session's stored cwd, which may be from a different machine or empty
-    // (e.g. when the first event is a permission-mode event with no cwd).
-    const repoPath = sessionInfo.repoRoot ?? sessionInfo.cwd;
-    if (repoPath) this.currentRepoPath = repoPath;
-
-    // For completed sessions, restrict "Session" to checkpoints that were created
-    // during the agent's active run (at or before the last log event, plus a small
-    // buffer for indexing lag). Post-session commits tagged to the same session ID
-    // by Entire are excluded here and will appear in Branch History instead.
-    // Skip the filter when updatedAt is missing or clearly invalid (e.g. epoch
-    // fallback from sessions whose LogEvents haven't been indexed yet).
+    // Restrict to checkpoints created during the agent's active run (plus a
+    // 2-minute buffer for indexing lag). Skip when updatedAt is the epoch
+    // fallback for unindexed sessions.
     let sessionCheckpoints = allSessionCheckpoints;
     const updatedMs = sessionInfo.updatedAt ? new Date(sessionInfo.updatedAt).getTime() : 0;
     if (!sessionInfo.isLive && updatedMs > 1_000_000_000_000) {
@@ -128,54 +190,7 @@ export class CheckpointTreeProvider
       );
     }
 
-    // Deduplicate branch history against session checkpoints so each commit
-    // appears in exactly one section.
-    const sessionIds = new Set(sessionCheckpoints.map((cp) => cp.checkpointId));
-
-    let branchCheckpoints: Checkpoint[] = [];
-    try {
-      if (repoPath && sessionInfo.branch) {
-        this.currentBranch = sessionInfo.branch;
-        const log = await fetchJson<{ entries: BranchLogEntry[] }>(
-          `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(repoPath)}&branch=${encodeURIComponent(sessionInfo.branch)}`,
-        );
-
-        // Build a message map from ALL branch-log entries before dedup, so session
-        // checkpoints missing a commit message can fall back to the branch-log value.
-        const branchMessageMap = new Map<string, string>();
-        const branchHashMap    = new Map<string, string>();
-        for (const entry of log.entries) {
-          if (entry.commitMessage) branchMessageMap.set(entry.checkpointId, entry.commitMessage);
-          if (entry.commitHash)    branchHashMap.set(entry.checkpointId, entry.commitHash);
-        }
-
-        // Enrich session checkpoints that have a null commit message.
-        sessionCheckpoints = sessionCheckpoints.map((cp) => ({
-          ...cp,
-          commitMessage: cp.commitMessage ?? branchMessageMap.get(cp.checkpointId) ?? null,
-          commitHash:    cp.commitHash    ?? branchHashMap.get(cp.checkpointId)    ?? null,
-        }));
-
-        const seen = new Set<string>(sessionIds);
-        for (const entry of log.entries) {
-          if (!seen.has(entry.checkpointId)) {
-            seen.add(entry.checkpointId);
-            branchCheckpoints.push({
-              checkpointId:  entry.checkpointId,
-              createdAt:     entry.createdAt,
-              filesTouched:  entry.filesTouched,
-              summary:       entry.summary,
-              commitMessage: entry.commitMessage,
-              commitHash:    entry.commitHash,
-            });
-          }
-        }
-      }
-    } catch { /* branch-log unavailable or repo not registered */ }
-
     this.sessionCheckpoints = sessionCheckpoints;
-    this.branchCheckpoints  = branchCheckpoints;
-    if (branchCheckpoints.length === 0) this.currentBranch = null;
     this._onDidChangeTreeData.fire();
   }
 
@@ -226,6 +241,11 @@ export class CheckpointTreeProvider
       item.resourceUri = vscode.Uri.file(element.absPath);
       return item;
     }
+    if (element.kind === "note") {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+      item.iconPath = new vscode.ThemeIcon("info");
+      return item;
+    }
     // file
     const item = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.None);
     item.resourceUri = vscode.Uri.file(element.absPath);
@@ -240,12 +260,13 @@ export class CheckpointTreeProvider
 
   getChildren(element?: CheckpointTreeItem): vscode.ProviderResult<CheckpointTreeItem[]> {
     if (!element) {
-      if (!this.currentPort) return [];
+      if (!this.currentPort) return [{ kind: "note", label: "Waiting for Gossamer server…" }];
       const port = this.currentPort;
       const repoPath = this.currentRepoPath;
-      const groups: CheckpointTreeItem[] = [
-        { kind: "group", label: "Session", checkpoints: this.sessionCheckpoints, port, startIndex: 0, repoPath },
-      ];
+      const groups: CheckpointTreeItem[] = [];
+      if (this.sessionCheckpoints.length > 0) {
+        groups.push({ kind: "group", label: "Session", checkpoints: this.sessionCheckpoints, port, startIndex: 0, repoPath });
+      }
       if (this.branchCheckpoints.length > 0) {
         const branchLabel = this.currentBranch
           ? `Branch History (${this.currentBranch})`
@@ -258,6 +279,12 @@ export class CheckpointTreeProvider
           startIndex: this.sessionCheckpoints.length,
           repoPath,
         });
+      } else if (this.currentBranch) {
+        // Make it obvious the load ran and produced nothing, so the user can
+        // distinguish "no data" from "code didn't run".
+        groups.push({ kind: "note", label: `No checkpoints on ${this.currentBranch}` });
+      } else {
+        groups.push({ kind: "note", label: "No branch detected for the workspace" });
       }
       return groups;
     }
@@ -279,6 +306,11 @@ export class CheckpointTreeProvider
       lines.push(`Checkpoint: ${cp.checkpointId}`);
       if (cp.createdAt) lines.push(`Created:    ${new Date(cp.createdAt).toLocaleString()}`);
       if (cp.commitHash) lines.push(`Commit:     ${cp.commitHash}${cp.commitMessage ? `  ${cp.commitMessage}` : ""}`);
+
+      // Files first — most useful at-a-glance signal, right under the commit line.
+      if (cp.filesTouched.length > 0) {
+        lines.push("", section("Files Touched", cp.filesTouched.map((f) => `  ${f}`).join("\n")));
+      }
 
       const s = cp.summary;
       if (s) {
@@ -303,12 +335,15 @@ export class CheckpointTreeProvider
         }
       }
 
-      if (cp.filesTouched.length > 0) {
-        lines.push("", section("Files Touched", cp.filesTouched.map((f) => `  ${f}`).join("\n")));
-      }
-
       const summaryText = lines.join("\n").trimEnd();
       const summaryItem: CheckpointTreeItem = { kind: "summary", checkpointId: cp.checkpointId, text: summaryText };
+      // Warm the server-side file-pair cache for every touched file so that
+      // clicking any of them is instant. Files cap at ~50 to avoid overwhelming
+      // git on huge checkpoints.
+      const PREFETCH_LIMIT = 50;
+      for (const f of cp.filesTouched.slice(0, PREFETCH_LIMIT)) {
+        prefetchFilePair(element.port, cp.checkpointId, f);
+      }
       return [summaryItem, ...buildItems(cp.filesTouched, cp.checkpointId, element.port, element.repoPath)];
     }
     if (element.kind === "dir") {

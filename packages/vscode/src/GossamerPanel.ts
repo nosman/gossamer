@@ -126,7 +126,7 @@ function probeServerVersion(port: number): Promise<boolean> {
 }
 
 /** Poll until the server responds or we time out (default 30s). */
-async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
+export async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await probeServer(port)) return;
@@ -137,7 +137,7 @@ async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
 
 const DEFAULT_PORT = 3456;
 
-function getConfiguredPort(): number {
+export function getConfiguredPort(): number {
   try {
     const raw = readFileSync(join(homedir(), ".gossamer", "config.json"), "utf8");
     const cfg = JSON.parse(raw) as { port?: number };
@@ -230,24 +230,41 @@ export class GossamerPanel {
   }
 
   /** Kill and restart the server process, then re-signal the panel when ready. */
-  static restart(repoPath: string) {
+  static async restart(repoPath: string) {
     const port = getConfiguredPort();
+
+    // Kill via PID lookup so we hit any process owning the port, not just one
+    // we happen to have a handle on. This catches servers spawned by another
+    // window, a previous extension-host activation, or our own untracked spawn.
     GossamerPanel.server?.kill();
     GossamerPanel.server = undefined;
     GossamerPanel.serverPort = undefined;
+    try {
+      const pids = execFileSync("lsof", ["-ti", `tcp:${port}`], { encoding: "utf8" })
+        .trim().split(/\s+/).filter(Boolean);
+      for (const pid of pids) {
+        try { process.kill(Number(pid), 9); } catch { /* already gone */ }
+      }
+      // Give the OS a moment to free the port.
+      if (pids.length > 0) await new Promise((r) => setTimeout(r, 300));
+    } catch { /* lsof found nothing — fine */ }
+
     const instance = GossamerPanel.instance;
     if (instance) {
       instance.serverReady = false;
       instance.panel.webview.postMessage({ type: "server_starting" });
-      instance.spawnServer();
-      waitForServer(port)
-        .then(() => instance.ensureRepoRegistered())
-        .then(() => {
-          instance.serverReady = true;
-          instance.panel.webview.postMessage({ type: "server_ready" });
-        })
-        .catch((err) => instance.reportServerError(String(err)));
+      try {
+        await instance.spawnServer();
+        await waitForServer(port);
+        await instance.ensureRepoRegistered();
+        instance.serverReady = true;
+        instance.panel.webview.postMessage({ type: "server_ready" });
+        instance.checkpointProvider.setBranchFromWorkspace(instance.repoPath, instance.port).catch(console.error);
+      } catch (err) {
+        instance.reportServerError(String(err));
+      }
     } else {
+      // No panel — spawn a detached server anyway so the sidebar still works.
       const nodeExec = getSystemNode();
       if (existsSync(SERVE_SCRIPT)) {
         const proc = spawn(nodeExec, [SERVE_SCRIPT, "--repo-dir", repoPath, "--port", String(port)], {
@@ -336,8 +353,39 @@ export class GossamerPanel {
     this.spawnServer()
       .then(() => waitForServer(this.port))
       .then(() => this.ensureRepoRegistered())
-      .then(() => { this.serverReady = true; return this.panel.webview.postMessage({ type: "server_ready" }); })
+      .then(() => {
+        this.serverReady = true;
+        this.panel.webview.postMessage({ type: "server_ready" });
+        this.checkpointProvider.setBranchFromWorkspace(this.repoPath, this.port).catch(console.error);
+        this.watchBranchForCheckpointReload();
+      })
       .catch((err) => this.reportServerError(String(err)));
+  }
+
+  /**
+   * Reload the checkpoint tree when the branch changes (.git/HEAD rewrites)
+   * or new commits land on the current branch (.git/refs/heads/<branch>).
+   * The ref file is small, rewritten atomically by git on commit, and poll-free.
+   */
+  private watchBranchForCheckpointReload(): void {
+    const headPath = join(this.repoPath, ".git", "HEAD");
+    const reload = () => this.checkpointProvider.setBranchFromWorkspace(this.repoPath, this.port).catch(() => undefined);
+    try {
+      const headWatcher = watch(headPath, { persistent: false }, reload);
+      this.disposables.push({ dispose: () => headWatcher.close() });
+    } catch { /* HEAD missing — non-fatal */ }
+    try {
+      const refsDir = join(this.repoPath, ".git", "refs", "heads");
+      const refsWatcher = watch(refsDir, { persistent: false, recursive: true }, reload);
+      this.disposables.push({ dispose: () => refsWatcher.close() });
+    } catch { /* refs/heads missing — non-fatal */ }
+  }
+
+  /** Refresh the checkpoint tree on demand. */
+  static refreshCheckpointTree(): void {
+    const inst = GossamerPanel.instance;
+    if (!inst || !inst.serverReady) return;
+    inst.checkpointProvider.setBranchFromWorkspace(inst.repoPath, inst.port).catch(console.error);
   }
 
   private async spawnServer() {

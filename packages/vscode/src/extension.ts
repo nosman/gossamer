@@ -2,7 +2,8 @@ import * as vscode from "vscode";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { GossamerPanel, AGENT_CLI } from "./GossamerPanel.js";
+import { GossamerPanel, AGENT_CLI, getConfiguredPort, waitForServer } from "./GossamerPanel.js";
+import { watch } from "fs";
 import { OnboardingPanel } from "./OnboardingPanel.js";
 import { CheckpointTreeProvider, type CheckpointTreeItem } from "./CheckpointTreeProvider.js";
 import { openCheckpointDiff, diffProvider, openCheckpointSummary, summaryProvider } from "./diffUtils.js";
@@ -88,10 +89,15 @@ export function activate(context: vscode.ExtensionContext) {
   if (entireWorkspace) {
     GossamerPanel.createOrShow(context, entireWorkspace, checkpointProvider).catch(console.error);
     checkEntireHooks(entireWorkspace);
+    // Drive the checkpoints tree directly — independent of the panel's promise
+    // chain, so the sidebar populates even if the panel construction fails or
+    // is delayed for any reason.
+    primeCheckpointsTree(context, checkpointProvider, entireWorkspace);
   } else if (vscode.workspace.workspaceFolders?.length) {
     OnboardingPanel.createOrShow(context, (ws) => {
       GossamerPanel.createOrShow(context, ws, checkpointProvider).catch(console.error);
       checkEntireHooks(ws);
+      primeCheckpointsTree(context, checkpointProvider, ws);
     });
   }
 
@@ -155,6 +161,15 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Manual refresh of the checkpoints tree (useful after a rebase or branch reset)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("gossamer.refreshCheckpoints", () => {
+      const ws = findEntireWorkspace();
+      if (!ws) return;
+      checkpointProvider.setBranchFromWorkspace(ws, getConfiguredPort()).catch(console.error);
+    }),
+  );
+
   // Watch for new workspace folders being added
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -167,6 +182,35 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   GossamerPanel.dispose();
   OnboardingPanel.dispose();
+}
+
+/**
+ * Wait for the Gossamer server to be reachable, then load the checkpoints tree
+ * for the workspace's current branch and watch git refs for changes. Decoupled
+ * from GossamerPanel so the sidebar works whether or not the panel is open.
+ */
+function primeCheckpointsTree(
+  context: vscode.ExtensionContext,
+  provider: CheckpointTreeProvider,
+  workspacePath: string,
+): void {
+  const port = getConfiguredPort();
+  const reload = () =>
+    provider.setBranchFromWorkspace(workspacePath, port).catch(() => undefined);
+
+  waitForServer(port).then(reload).catch((err) => {
+    console.error("[Gossamer] checkpoints tree: server never came up:", err);
+  });
+
+  // Reload when HEAD changes (branch switch) or refs/heads is rewritten (new commits)
+  try {
+    const headWatcher = watch(join(workspacePath, ".git", "HEAD"), { persistent: false }, reload);
+    context.subscriptions.push({ dispose: () => headWatcher.close() });
+  } catch { /* HEAD missing — non-fatal */ }
+  try {
+    const refsWatcher = watch(join(workspacePath, ".git", "refs", "heads"), { persistent: false, recursive: true }, reload);
+    context.subscriptions.push({ dispose: () => refsWatcher.close() });
+  } catch { /* refs/heads missing — non-fatal */ }
 }
 
 function findEntireWorkspace(): string | undefined {
