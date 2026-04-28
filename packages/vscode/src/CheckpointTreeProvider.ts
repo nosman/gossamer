@@ -107,6 +107,7 @@ export class CheckpointTreeProvider
   private currentBranch: string | null = null;
   private currentPort: number | null = null;
   private currentRepoPath: string = "";
+  private branchLoadGen = 0;
 
   /**
    * Load checkpoints for an explicit (repoPath, branch) pair. The caller is
@@ -114,6 +115,9 @@ export class CheckpointTreeProvider
    * current HEAD, but a fork tool or the like could pass a different one.
    */
   async setBranch(repoPath: string, branch: string, port: number): Promise<void> {
+    // Drop stale results: when the user switches branches faster than the
+    // fetch completes, only the latest call should commit its results.
+    const gen = ++this.branchLoadGen;
     this.currentPort = port;
     this.currentRepoPath = repoPath;
     this.currentBranch = branch;
@@ -122,6 +126,7 @@ export class CheckpointTreeProvider
       const log = await fetchJson<{ entries: BranchLogEntry[] }>(
         `http://localhost:${port}/api/branch-log?localPath=${encodeURIComponent(repoPath)}&branch=${encodeURIComponent(branch)}`,
       );
+      if (gen !== this.branchLoadGen) return; // a newer load supersedes us
       const seen = new Set<string>();
       const entries: Checkpoint[] = [];
       for (const entry of log.entries) {
@@ -138,6 +143,7 @@ export class CheckpointTreeProvider
       }
       this.branchCheckpoints = entries;
     } catch {
+      if (gen !== this.branchLoadGen) return;
       this.branchCheckpoints = [];
     }
     this._onDidChangeTreeData.fire();

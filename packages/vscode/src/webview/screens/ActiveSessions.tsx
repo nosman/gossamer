@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  Center, Loader, Alert, Text, Table, Box, Group, Button, Switch, Tooltip,
+  Center, Loader, Alert, Text, Table, Box, Group, Button, Tooltip,
   UnstyledButton,
 } from "@mantine/core";
 import {
-  fetchSessions, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions,
+  fetchSessions, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, repoPath,
   type Session,
 } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
@@ -12,13 +12,12 @@ import { postToExtension } from "../vscodeApi";
 
 // "default" preserves the order the server returned (workspace tier,
 // then same-repo, then everything else, by updatedAt desc within each tier).
-type SortKey = "default" | "updated" | "user" | "repo" | "branch";
+type SortKey = "default" | "updated" | "user" | "branch";
 type SortDir = "asc" | "desc";
 
 const SESSION_COLUMNS: { label: string; width: number; sortKey?: SortKey }[] = [
   { label: "Name",       width: COL_WIDTHS.sessionId                    },
   { label: "Branch",     width: COL_WIDTHS.branch,     sortKey: "branch"  },
-  { label: "Repo",       width: COL_WIDTHS.repo,       sortKey: "repo"    },
   { label: "Updated",    width: COL_WIDTHS.updated,    sortKey: "updated" },
   { label: "User",       width: COL_WIDTHS.user,       sortKey: "user"    },
   { label: "Intent",     width: COL_WIDTHS.intent                       },
@@ -33,7 +32,6 @@ function sortSessions(sessions: Session[], key: SortKey, dir: SortDir): Session[
     let av = "", bv = "";
     if (key === "updated") { av = a.updatedAt; bv = b.updatedAt; }
     else if (key === "user")  { av = a.gitUserName ?? a.gitUserEmail ?? ""; bv = b.gitUserName ?? b.gitUserEmail ?? ""; }
-    else if (key === "repo")  { av = a.repoName ?? ""; bv = b.repoName ?? ""; }
     else if (key === "branch"){ av = a.branch ?? ""; bv = b.branch ?? ""; }
     return av < bv ? -1 : av > bv ? 1 : 0;
   });
@@ -62,7 +60,6 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   const [sessions, setSessions]     = useState<Session[]>([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState<string | null>(null);
-  const [showArchived, setShowArchived] = useState(false);
   const [syncing, setSyncing]       = useState(false);
   const [archivedIds, setArchivedIds] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey]       = useState<SortKey>("default");
@@ -96,13 +93,13 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
     return () => window.removeEventListener("message", handler);
   }, []);
 
-  const load = useCallback(async (archived = false) => {
+  const load = useCallback(async () => {
     try {
       const [data, archivedData] = await Promise.all([
         fetchSessions(false),
         fetchSessions(true),
       ]);
-      setSessions(archived ? archivedData : data);
+      setSessions(data);
       setArchivedIds(new Set(archivedData.map((s) => s.sessionId)));
       setError(null);
     } catch (err) {
@@ -113,16 +110,16 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
   // Fetch + subscribe only after server is ready
   useEffect(() => {
     if (startup !== "ready") return;
-    load(showArchived).finally(() => setLoading(false));
-    return subscribeToUpdates(() => { load(showArchived).catch(() => undefined); });
-  }, [startup, load, showArchived]);
+    load().finally(() => setLoading(false));
+    return subscribeToUpdates(() => { load().catch(() => undefined); });
+  }, [startup, load]);
 
   async function handleArchive(sessionId: string) {
     const isCurrentlyArchived = archivedIds.has(sessionId);
     try {
       if (isCurrentlyArchived) await unarchiveSession(sessionId);
       else await archiveSession(sessionId);
-      await load(showArchived);
+      await load();
     } catch { /* ignore */ }
   }
 
@@ -144,7 +141,7 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
     setSyncing(true);
     try {
       await syncSessions();
-      await load(showArchived);
+      await load();
     } catch { /* ignore */ } finally {
       setSyncing(false);
     }
@@ -239,18 +236,27 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
         px={12}
         py={8}
         justify="space-between"
+        wrap="nowrap"
         style={{
           borderBottom: "1px solid var(--vscode-panel-border)",
           flexShrink: 0,
         }}
       >
-        <Switch
-          size="xs"
-          label="Archived"
-          checked={showArchived}
-          onChange={(e) => setShowArchived(e.currentTarget.checked)}
-        />
-        <Group gap={8}>
+        {(() => {
+          const cwd  = repoPath();
+          const name = cwd ? (cwd.split("/").filter(Boolean).pop() ?? cwd) : null;
+          return (
+            <Group gap={10} wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+              {name && <Text size="sm" fw={600} style={{ flexShrink: 0 }}>{name}</Text>}
+              {cwd && (
+                <Text size="xs" c="dimmed" ff="monospace" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                  {cwd}
+                </Text>
+              )}
+            </Group>
+          );
+        })()}
+        <Group gap={8} wrap="nowrap">
           <Button size="xs" variant="filled" onClick={() => postToExtension({ type: "new_session" })}>
             + New Session
           </Button>

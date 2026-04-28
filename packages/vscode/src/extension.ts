@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { GossamerPanel, AGENT_CLI, getConfiguredPort, waitForServer } from "./GossamerPanel.js";
-import { watch } from "fs";
+import { watch, watchFile, unwatchFile } from "fs";
 import { OnboardingPanel } from "./OnboardingPanel.js";
 import { CheckpointTreeProvider, type CheckpointTreeItem } from "./CheckpointTreeProvider.js";
 import { openCheckpointDiff, diffProvider, openCheckpointSummary, summaryProvider } from "./diffUtils.js";
@@ -202,10 +202,26 @@ function primeCheckpointsTree(
     console.error("[Gossamer] checkpoints tree: server never came up:", err);
   });
 
-  // Reload when HEAD changes (branch switch) or refs/heads is rewritten (new commits)
+  // Watch the .git directory itself rather than HEAD directly: git updates HEAD
+  // via atomic rename (`HEAD.lock` → `HEAD`), which destroys the original
+  // inode. An fs.watch bound to the file then silently stops firing — that's
+  // why the sidebar stuck on a stale branch until manual reload. Directory
+  // watches survive child-file replacement.
+  const headPath = join(workspacePath, ".git", "HEAD");
   try {
-    const headWatcher = watch(join(workspacePath, ".git", "HEAD"), { persistent: false }, reload);
-    context.subscriptions.push({ dispose: () => headWatcher.close() });
+    const dirWatcher = watch(join(workspacePath, ".git"), { persistent: false }, (_evt, fname) => {
+      if (fname === "HEAD" || fname === null) reload();
+    });
+    context.subscriptions.push({ dispose: () => dirWatcher.close() });
+  } catch { /* .git missing — non-fatal */ }
+  // Belt-and-suspenders: a 2 s stat poll on HEAD covers platforms / filesystems
+  // where neither the file watch nor the dir watch fires reliably (network
+  // mounts, FUSE, etc.). Cheap — it's just a stat call.
+  try {
+    watchFile(headPath, { interval: 2000, persistent: false }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs) reload();
+    });
+    context.subscriptions.push({ dispose: () => unwatchFile(headPath) });
   } catch { /* HEAD missing — non-fatal */ }
   try {
     const refsWatcher = watch(join(workspacePath, ".git", "refs", "heads"), { persistent: false, recursive: true }, reload);
