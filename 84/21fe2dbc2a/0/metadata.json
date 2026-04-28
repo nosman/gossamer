@@ -1,0 +1,146 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "8421fe2dbc2a",
+  "session_id": "09c156ba-df0a-45ab-b979-4a1c62eddc13",
+  "strategy": "manual-commit",
+  "created_at": "2026-04-28T01:44:37.200727Z",
+  "branch": "main",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "packages/vscode/src/CheckpointTreeProvider.ts",
+    "packages/vscode/src/extension.ts",
+    "packages/vscode/src/webview/components/SessionRow.tsx",
+    "packages/vscode/src/webview/screens/ActiveSessions.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0c82a9e8fdff",
+  "token_usage": {
+    "input_tokens": 1334,
+    "cache_creation_tokens": 5116939,
+    "cache_read_tokens": 168939667,
+    "output_tokens": 451635,
+    "api_call_count": 990
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Improve the Gossamer VS Code extension across multiple dimensions: fix server lifecycle bugs (EADDRINUSE, orphaned processes), refactor from a single 'primary' DB to per-repo DB clients, fix checkpoint indexing, improve session attribution with correct git user, add Entire.io checkpoint remote support, and polish the UI (session detail layout, agent colors, markdown rendering, search highlighting, copy-on-hover).",
+    "outcome": "All major bugs were fixed and features shipped: server port conflicts resolved via lsof-kill-before-spawn, pushSchema fixed (was silently discarding all 56 SQL statements due to comment-line filter), multi-repo DB registry implemented, live session indexing from .entire/metadata/ added, git user attribution fixed per-message via checkpoint commit author, checkpoint tree view wired to current workspace branch, and extensive UI polish applied.",
+    "learnings": {
+      "repo": [
+        "pushSchema was splitting schema.sql on ';\\n' then filtering chunks with !s.startsWith('--') — every chunk starts with '-- CreateTable', so ALL 56 CREATE TABLE statements were silently discarded, leaving DBs with zero tables.",
+        "The gitlog npm package defaults to nameStatus: true, which appends --name-status to git log. On large repos this exceeds Node's execFile maxBuffer, causing a silent throw caught by the saveGitOidMapping catch block — resulting in zero git OID mappings.",
+        "GossamerPanel.server is a static variable that is undefined after VS Code reloads (fresh JS context). Old server processes survive the reload, so spawnServer() tries to bind the same port → EADDRINUSE.",
+        "macOS assigns com.apple.provenance xattr to downloaded/created files; SQLite interprets this as a disk I/O error. Deleting and recreating the .db file clears it.",
+        "Entire writes session transcripts to .entire/metadata/\u003csessionId\u003e/full.jsonl continuously, but only commits to the shadow branch (entire/\u003chash\u003e) at checkpoint boundaries — so new sessions can take minutes to appear if only shadow branches are indexed.",
+        "Multiple installed VS Code extensions with identical view ID registrations conflict silently — only one wins, the others' tree providers never get called. Stale old VSIX installs cause this.",
+        "fs.watch on a specific file path breaks on macOS when that file is replaced via atomic rename (git does HEAD.lock → HEAD), causing the branch-switch watcher to silently stop firing after the first switch.",
+        "The dbCache in packages/core/src/db.ts caches broken Prisma clients — deleting a corrupt .db file doesn't help within the same process unless the cache is also evicted.",
+        "Git per-checkpoint author info is reliably available on the entire/checkpoints/v1 branch commits, not on the main feature branch — main branch commits may not be locally reachable on other machines.",
+        "The checkpoint worktree was created inside the user's repo at \u003crepo\u003e/.gossamer/checkpoints/, interfering with their working tree; it should live at ~/.gossamer/checkpoints/\u003crepo-name\u003e/ instead."
+      ],
+      "code": [
+        {
+          "path": "src/server.ts",
+          "line": 171,
+          "end_line": 171,
+          "finding": "pushSchema only ran on the primary DB passed via CLI args; repos already in config at startup never had schema applied until first registered via POST /api/repos."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 853,
+          "end_line": 853,
+          "finding": "GET /api/v2/sessions/:id/checkpoints used bare `db` (primary client) — would return empty for any session not in the startup repo's DB."
+        },
+        {
+          "path": "packages/core/src/gitUtils.ts",
+          "line": 1,
+          "end_line": 45,
+          "finding": "findCommitForCheckpoint called gitlog without nameStatus:false — caused stdout maxBuffer overflow on repos with 10k+ commits, silently caught, zero git OID mappings populated."
+        },
+        {
+          "path": "packages/core/src/db.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "dbCache Map caches broken Prisma clients; added evictDb() export so callers can evict then retry with a clean file on disk I/O errors."
+        },
+        {
+          "path": "packages/vscode/src/GossamerPanel.ts",
+          "line": 258,
+          "end_line": 275,
+          "finding": "spawnServer() guard only checked in-memory GossamerPanel.server static. After VS Code reload, static is undefined but orphaned server still holds the port."
+        },
+        {
+          "path": "packages/vscode/src/webview/components/MarkdownView.tsx",
+          "line": 1,
+          "end_line": 200,
+          "finding": "In-parser search highlighting via HighlightTermsCtx broke markdown on edge cases (e.g. **Code Change** showed asterisks). Replaced with post-render TreeWalker DOM walk that wraps text node matches in \u003cmark\u003e elements, decoupled from parsing."
+        },
+        {
+          "path": "packages/vscode/src/webview/screens/SessionDetail.tsx",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ClaudeTurnCard was branching matchTerms.length \u003e 0 to render plain Text vs MarkdownView — always use MarkdownView and pass highlightTerms. Also: toolsExpanded/thinkingExpanded state never auto-opened when search hits were inside them."
+        },
+        {
+          "path": "src/server.ts",
+          "line": 388,
+          "end_line": 391,
+          "finding": "GET /api/sessions sorted by repoDir (server startup dir), not by git remote — so the same repo on two machines with different paths sorted separately. Fixed to compare repo remote URL."
+        },
+        {
+          "path": "packages/core/src/indexer.ts",
+          "line": 141,
+          "end_line": 144,
+          "finding": "saveGitOidMapping catch block swallowed ALL errors silently — including the maxBuffer overflow from gitlog. This is why git OID mappings were always zero on large repos."
+        },
+        {
+          "path": "packages/vscode/src/SessionDetailPanel.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "SessionDetailPanel does not inject window.__GOSSAMER_REPO_PATH__, so localPath is never sent on fetchSession/fetchLogEvents API calls from the session detail webview."
+        }
+      ],
+      "workflow": [
+        "When multiple VS Code extensions register the same view ID, only one wins and the others silently fail — always uninstall old VSIX versions before installing new ones.",
+        "The bundled-server/serve.js inside the VSIX is what actually runs; npm run build updates dist/serve.js but NOT bundled-server/. Must run package-vsix.sh to update the installed extension's server.",
+        "git cat-file --batch keeps a persistent process open per repo, replacing one process spawn per blob lookup with sub-millisecond stdin/stdout — critical for checkpoint diff prefetching.",
+        "Post-render DOM walking for search highlighting (TreeWalker API) is more robust than injecting highlight logic into a markdown parser — it can handle cross-node matches and never breaks rendering.",
+        "The Entire CLI hooks must be in .claude/settings.json (not .entire/settings.json) for session capture to work — hooks go in the agent's config, not Entire's own config."
+      ]
+    },
+    "friction": [
+      "pushSchema fix required 3+ separate debugging iterations before finding the real cause (comment-line filter silently discarding all statements).",
+      "macOS com.apple.provenance xattr on DB files caused a 'disk I/O error' that looked like a schema push failure — hard to diagnose.",
+      "gitlog npm package's nameStatus:true default caused silent maxBuffer overflow caught by a broad catch — zero observable signal that git OID mappings were being discarded.",
+      "Three stale Gossamer VSIX versions installed simultaneously with the same view ID registration caused the checkpoint tree to silently not render for most of the debugging session.",
+      "bundled-server/serve.js is separate from dist/serve.js — repeatedly tested against old server code because the installed extension wasn't updated after each build.",
+      "GossamerPanel.restart() was a no-op when the server wasn't spawned by the current extension host — needed lsof-based kill to actually restart orphaned servers.",
+      "fs.watch on macOS stops firing after a file is atomically replaced (git's HEAD.lock rename) — caused stale 'no checkpoints found' state after branch switches.",
+      "The Entire CLI had stopped writing to .entire/metadata/ in cosmos-graphql because hooks were removed from .claude/settings.json — looked like a Gossamer indexing bug but was an external config issue."
+    ],
+    "open_items": [
+      "SessionDetailPanel.ts does not inject window.__GOSSAMER_REPO_PATH__ — log-events and session-detail calls resolve via slow DB probe instead of direct localPath lookup.",
+      "MarkdownView cross-node search matches still not highlighted (e.g. searching 'bold text' where 'bold' is in a \u003cstrong\u003e node and 'text' is in a text node).",
+      "Shallow git clone of entire/checkpoints/v1 branch limits findCommitForCheckpoint's ability to traverse commit history — some git OID mappings silently missing.",
+      "indexLiveSessions path (reading .entire/metadata/ directly) does not run git blame for author attribution when no reachable git commit references the jsonl file.",
+      "The installed bundled-server/serve.js must be manually updated via package-vsix.sh — no automated step in the build pipeline to keep it in sync with dist/serve.js.",
+      "cosmos-graphql repo's Entire hooks were disabled (removed from .claude/settings.json) — new sessions in that repo won't be captured until re-enabled with `entire enable`.",
+      "Checkpoint prefetching (git cat-file --batch) improves diff load time but first-expansion of a large checkpoint still fires 50 parallel git show calls — could be further optimized with batch reads.",
+      "The GET /api/sessions filter (repo name matching) may be too narrow if a user has repos where the basename doesn't uniquely identify them — no UI to override the filter."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-04-28T01:43:11.96855Z",
+    "agent_lines": 52,
+    "agent_removed": 31,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 52,
+    "total_lines_changed": 83,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
