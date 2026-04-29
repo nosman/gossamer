@@ -28,10 +28,66 @@ export async function setupLogContentFts(db: PrismaClient): Promise<void> {
 
 /**
  * Insert any LogContent rows not yet present in the FTS index.
- * Safe to call repeatedly — already-indexed rows are skipped via rowid check.
+ * Safe to call repeatedly — uses a high-watermark check against the existing
+ * FTS rowids so the common "nothing new" case is a single MAX/MIN scan instead
+ * of an anti-join over the whole table.
  * Returns the number of rows inserted.
  */
 export async function syncLogContentFts(db: PrismaClient): Promise<number> {
+  // Watermarks: every row whose id ≤ MAX(rowid_in_fts) is already in FTS *if*
+  // FTS hasn't been partially populated. We confirm that by checking that
+  // (count_in_fts == count_of_logcontent_with_id≤watermark). If they match,
+  // we only need to pick up rows above the watermark — no anti-join.
+  const probe = await db.$queryRawUnsafe<{
+    ftsCount: number | bigint;
+    ftsMax:   number | bigint | null;
+    lcMax:    number | bigint | null;
+  }[]>(`
+    SELECT
+      (SELECT COUNT(*)         FROM LogContentFts) AS ftsCount,
+      (SELECT MAX(rowid)       FROM LogContentFts) AS ftsMax,
+      (SELECT MAX(id)          FROM LogContent)    AS lcMax
+  `);
+  const ftsCount = Number(probe[0]?.ftsCount ?? 0);
+  const ftsMax   = probe[0]?.ftsMax === null || probe[0]?.ftsMax === undefined ? 0 : Number(probe[0].ftsMax);
+  const lcMax    = probe[0]?.lcMax  === null || probe[0]?.lcMax  === undefined ? 0 : Number(probe[0].lcMax);
+
+  // Nothing to do — common cold-start case once a DB has been seen.
+  if (lcMax <= ftsMax) return 0;
+
+  // Confirm the watermark covers every row up to it. A mismatch means an older
+  // partial sync left holes; fall back to the anti-join just for that case.
+  const lcCovered = await db.$queryRawUnsafe<{ n: number | bigint }[]>(
+    `SELECT COUNT(*) AS n FROM LogContent WHERE id <= ?`,
+    ftsMax,
+  );
+  const watermarkIntact = Number(lcCovered[0]?.n ?? 0) === ftsCount;
+
+  if (watermarkIntact) {
+    // Fast path: append only rows beyond the watermark.
+    return db.$executeRawUnsafe(`
+      INSERT INTO LogContentFts(
+        rowid, text, thinking, toolResultContent, toolInput,
+        contentType, logEventId, sessionId, timestamp, toolName
+      )
+      SELECT
+        lc.id,
+        COALESCE(lc.text,              ''),
+        COALESCE(lc.thinking,          ''),
+        COALESCE(lc.toolResultContent, ''),
+        COALESCE(lc.toolInput,         ''),
+        lc.contentType,
+        lc.logEventId,
+        COALESCE(le.sessionId,  ''),
+        COALESCE(le.timestamp,  ''),
+        COALESCE(lc.toolName,   '')
+      FROM LogContent lc
+      LEFT JOIN LogEvent le ON le.id = lc.logEventId
+      WHERE lc.id > ?
+    `, ftsMax);
+  }
+
+  // Slow path (rare): backfill any holes via the original anti-join.
   return db.$executeRawUnsafe(`
     INSERT INTO LogContentFts(
       rowid, text, thinking, toolResultContent, toolInput,

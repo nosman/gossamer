@@ -1,4 +1,3 @@
-import gitlog from "gitlog";
 import { execFile as execFileCb } from "child_process";
 import { promisify } from "util";
 
@@ -45,32 +44,32 @@ export async function findCommitForCheckpoint(
     (b, i, arr) => arr.indexOf(b) === i,
   );
 
-  for (const b of branches) {
-    let commits: Awaited<ReturnType<typeof gitlog>>;
-    try {
-      commits = await gitlog({
-        repo: repoPath,
-        branch: b,
-        fields: ["hash", "subject", "body", "authorName", "authorEmail"] as const,
-        number: 10_000,
-        nameStatus: false,
-        execOptions: { maxBuffer: 100 * 1024 * 1024 },
-      });
-    } catch {
-      continue;
-    }
+  // Match the trailer line that the indexer parses (`^Entire-Checkpoint: <id>$`).
+  // `-F` keeps the id literal, `-E` enables anchors, `--grep` narrows to commits
+  // whose body contains the trailer — no full history scan in JS.
+  const grep = `^Entire-Checkpoint: ${checkpointId}$`;
+  const FORMAT = "%H%x00%s%x00%an%x00%ae";
 
-    for (const commit of commits) {
-      const id = getCheckpointIdFromCommitMessage(commit.body ?? "");
-      if (id === checkpointId) {
-        return {
-          hash: commit.hash,
-          subject: commit.subject,
-          branch: b,
-          authorName: commit.authorName,
-          authorEmail: commit.authorEmail,
-        };
-      }
+  for (const b of branches) {
+    try {
+      const { stdout } = await execFile(
+        "git",
+        ["-C", repoPath, "log", "-1", `--format=${FORMAT}`, "-E", "--grep", grep, b, "--"],
+        { maxBuffer: 1024 * 1024 },
+      );
+      const line = stdout.trim();
+      if (!line) continue;
+      const [hash, subject, authorName, authorEmail] = line.split("\0");
+      if (!hash) continue;
+      return {
+        hash,
+        subject:     subject     ?? "",
+        branch:      b,
+        authorName:  authorName  ?? "",
+        authorEmail: authorEmail ?? "",
+      };
+    } catch {
+      // ref unknown / git unavailable — try the next candidate
     }
   }
 

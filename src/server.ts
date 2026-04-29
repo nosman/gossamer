@@ -146,30 +146,40 @@ const SCHEMA_SQL_DEV     = join(SCRIPT_DIR, "schema.sql");
 const SCHEMA_SQL_BUNDLED = join(SCRIPT_DIR, "schema.sql"); // same name, different dir
 const SCHEMA_SQL_PATH    = existsSync(SCHEMA_SQL_DEV) ? SCHEMA_SQL_DEV : SCHEMA_SQL_BUNDLED;
 
+// Read + parse schema.sql once at module load so per-repo init doesn't repeat it.
+const SCHEMA_STATEMENTS: string[] = readFileSync(SCHEMA_SQL_PATH, "utf8")
+  .split(/;\s*\n/)
+  .map((s) => s.replace(/^(\s*--.*\n)*/gm, "").trim())
+  .filter((s) => s.length > 0);
+
+const ADHOC_COLUMNS: { table: string; col: string; type: string }[] = [
+  { table: "ShadowSession", col: "gitUserName",  type: "TEXT" },
+  { table: "ShadowSession", col: "gitUserEmail", type: "TEXT" },
+  { table: "LogEvent",      col: "gitUserName",  type: "TEXT" },
+  { table: "LogEvent",      col: "gitUserEmail", type: "TEXT" },
+];
+
 async function pushSchema(db: PrismaClient): Promise<void> {
-  const sql = readFileSync(SCHEMA_SQL_PATH, "utf8");
-  // Split on statement boundaries (semicolon + newline) and execute each one.
-  // Strip leading SQL comment lines (e.g. "-- CreateTable") from each chunk
-  // so that they don't prevent execution.
-  const stmts = sql
-    .split(/;\s*\n/)
-    .map((s) => s.replace(/^(\s*--.*\n)*/gm, "").trim())
-    .filter((s) => s.length > 0);
-  for (const stmt of stmts) {
+  for (const stmt of SCHEMA_STATEMENTS) {
     await db.$executeRawUnsafe(stmt);
   }
 
-  // Ad-hoc ADD COLUMN migrations for DBs created before a column was added.
-  // SQLite has no IF NOT EXISTS for ADD COLUMN, so we swallow "duplicate column".
-  for (const { table, col, type } of [
-    { table: "ShadowSession", col: "gitUserName",  type: "TEXT" },
-    { table: "ShadowSession", col: "gitUserEmail", type: "TEXT" },
-    { table: "LogEvent",      col: "gitUserName",  type: "TEXT" },
-    { table: "LogEvent",      col: "gitUserEmail", type: "TEXT" },
-  ]) {
+  // Ad-hoc ADD COLUMN migrations: SQLite has no IF NOT EXISTS for ADD COLUMN,
+  // so we used to attempt+catch "duplicate column" — but each failed attempt
+  // still costs a write transaction with WAL fsync. Instead, probe table_info
+  // once per table and only ALTER columns that are actually missing.
+  const tablesToProbe = [...new Set(ADHOC_COLUMNS.map((c) => c.table))];
+  const existingByTable = new Map<string, Set<string>>();
+  for (const table of tablesToProbe) {
+    const rows = await db.$queryRawUnsafe<{ name: string }[]>(`PRAGMA table_info("${table}")`);
+    existingByTable.set(table, new Set(rows.map((r) => r.name)));
+  }
+  for (const { table, col, type } of ADHOC_COLUMNS) {
+    if (existingByTable.get(table)?.has(col)) continue;
     try {
       await db.$executeRawUnsafe(`ALTER TABLE "${table}" ADD COLUMN "${col}" ${type}`);
     } catch (err) {
+      // Tolerate the race where another process added the column between probe and ALTER.
       if (!/duplicate column/i.test(String(err))) throw err;
     }
   }
@@ -283,6 +293,8 @@ interface SessionResponse {
   agent: string | null;
   /** true when this session is currently indexed in a shadow branch */
   isLive: boolean;
+  /** true when the user archived this session via POST /api/sessions/:id/archive */
+  archived: boolean;
 }
 
 interface OverviewResponse {
@@ -349,9 +361,10 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
     }
   }
 
-  for (const repo of readConfig().repos) {
-    await initRepoDb(repo);
-  }
+  // Init all repo DBs concurrently — each is its own SQLite file, so there's no
+  // contention. Sequential init was a startup tax that grew linearly with the
+  // number of registered repos.
+  await Promise.all(readConfig().repos.map(initRepoDb));
 
   /** All registered DB clients. */
   function allDbs(): PrismaClient[] { return [...dbRegistry.values()]; }
@@ -404,18 +417,22 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       const sortDir = qLocalPath ?? repoDir;
       const dbs = allDbs();
 
-      // Gather data from every repo DB in parallel.
+      // Gather data from every repo DB in parallel. We deliberately don't
+      // ask LogEvent for "any extra sessionIds" — that used to be a `distinct
+      // sessionId` scan over the entire table just to surface sessions whose
+      // metadata.json had no session_id. Every well-formed session has either
+      // a CheckpointSessionMetadata row or a ShadowSession row, so the scan
+      // was paying full LogEvent cost for an edge case that shouldn't happen.
       const perDb = await Promise.all(dbs.map(async (rdb) => {
-        const [metas, shadows, archivedRows, logEventSessionRows] = await Promise.all([
+        const [metas, shadows, archivedRows] = await Promise.all([
           rdb.checkpointSessionMetadata.findMany({
             select: { sessionId: true, checkpointId: true, branch: true, agent: true, summary: { select: { intent: true } } },
             orderBy: { createdAt: "asc" },
           }),
           rdb.shadowSession.findMany(),
           rdb.archivedSession.findMany({ select: { sessionId: true } }),
-          rdb.logEvent.findMany({ distinct: ["sessionId"], where: { sessionId: { not: null } }, select: { sessionId: true } }),
         ]);
-        return { rdb, metas, shadows, archivedRows, logEventSessionRows };
+        return { rdb, metas, shadows, archivedRows };
       }));
 
       // Merge checkpoint meta across all DBs
@@ -458,19 +475,28 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         }));
       }
 
-      // Merge shadows, archived, logEvent sessions
+      // Merge shadows + archived
       const shadowMap = new Map<string, (typeof perDb)[0]["shadows"][0]>();
       const archivedSet = new Set<string>();
       const knownIds = new Set<string>([...cpMap.keys()]);
-      for (const { shadows, archivedRows, logEventSessionRows } of perDb) {
+      for (const { shadows, archivedRows } of perDb) {
         for (const s of shadows) { shadowMap.set(s.sessionId, s); knownIds.add(s.sessionId); }
         for (const r of archivedRows) archivedSet.add(r.sessionId);
-        for (const r of logEventSessionRows) { if (r.sessionId) knownIds.add(r.sessionId); }
       }
 
-      const showArchived = _req.query.archived === "1";
-      const allIds = [...knownIds]
-        .filter((id) => showArchived ? archivedSet.has(id) : !archivedSet.has(id));
+      // ?archived=1 → archived only; ?archived=all → everything (single round-trip
+      // for the webview, which used to call this endpoint twice). Anything else
+      // (or omitted) → unarchived only, matching the old default for MCP callers.
+      const archivedQ = _req.query.archived;
+      const archivedFilter: "yes" | "no" | "all" =
+        archivedQ === "1"   ? "yes" :
+        archivedQ === "all" ? "all" :
+        "no";
+      const allIds = [...knownIds].filter((id) =>
+        archivedFilter === "all" ? true :
+        archivedFilter === "yes" ? archivedSet.has(id) :
+        !archivedSet.has(id),
+      );
       if (allIds.length === 0) { res.json([]); return; }
 
       // Timestamps, cwd, slug, parent — aggregate from all DBs
@@ -560,6 +586,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
           customTitle:     customTitleCache.get(sessionId) ?? null,
           agent:           cp?.agent ?? null,
           isLive:          shadow !== null,
+          archived:        archivedSet.has(sessionId),
         };
       });
 
@@ -599,7 +626,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
       );
       if (!sdb) { res.status(404).json({ error: "Session not found" }); return; }
 
-      const [latestMeta, shadow, firstCwdEvent, firstTimestampEvent, lastEvent, latestSlugEvent] = await Promise.all([
+      const [latestMeta, shadow, firstCwdEvent, firstTimestampEvent, lastEvent, latestSlugEvent, archivedRow] = await Promise.all([
         sdb.checkpointSessionMetadata.findFirst({
           where: { sessionId: id },
           select: { branch: true, checkpointId: true, agent: true, summary: { select: { intent: true } } },
@@ -626,6 +653,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
           orderBy: { id: "desc" },
           select: { slug: true },
         }),
+        sdb.archivedSession.findUnique({ where: { sessionId: id }, select: { sessionId: true } }),
       ]);
       if (!latestMeta && !shadow) {
         res.status(404).json({ error: "Session not found" });
@@ -675,6 +703,7 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         customTitle:     customTitleCache.get(id) ?? null,
         agent:           latestMeta?.agent ?? null,
         isLive:          shadow !== null,
+        archived:        archivedRow !== null,
       } satisfies SessionResponse);
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -1211,19 +1240,48 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         ...readConfig().repos.map((r) => r.localPath).filter((p) => p !== primaryDir),
       ].filter(Boolean) as string[];
 
-      // Fetch commit subject lines in parallel for all checkpoints that have a gitOid
-      const commitMessages = new Map<string, string>();
-      await Promise.all(
-        gitOidRows.map(async ({ checkpointId, gitOid }) => {
-          for (const dir of candidateDirs) {
-            try {
-              const { stdout } = await execFile("git", ["-C", dir, "log", "--format=%s", "-1", gitOid]);
-              const msg = stdout.trim();
-              if (msg) { commitMessages.set(checkpointId, msg); return; }
-            } catch { /* try next repo */ }
+      // Resolve commit subjects for every gitOid in one git process per repo.
+      // `git log --no-walk` accepts a list of revs and prints one line each, so a
+      // session with N checkpoints costs 1 fork instead of N. If git rejects the
+      // batch (one rev not reachable in this dir), fall back to per-oid lookups
+      // *inside that dir* before moving on — bad revs shouldn't void the others.
+      const subjectByOid = new Map<string, string>();
+      let unresolvedOids = gitOidRows.map((r) => r.gitOid);
+      for (const dir of candidateDirs) {
+        if (unresolvedOids.length === 0) break;
+        let found = new Map<string, string>();
+        try {
+          const { stdout } = await execFile(
+            "git",
+            ["-C", dir, "log", "--no-walk", "--format=%H%x00%s", ...unresolvedOids],
+            { maxBuffer: 16 * 1024 * 1024 },
+          );
+          for (const line of stdout.split("\n")) {
+            if (!line) continue;
+            const i = line.indexOf("\0");
+            if (i === -1) continue;
+            found.set(line.slice(0, i), line.slice(i + 1));
           }
-        }),
-      );
+        } catch {
+          // One rev wasn't reachable in this dir — retry per-oid in parallel so
+          // any reachable revs still get resolved before we move to the next dir.
+          const pairs = await Promise.all(unresolvedOids.map(async (oid): Promise<[string, string] | null> => {
+            try {
+              const { stdout } = await execFile("git", ["-C", dir, "log", "-1", "--format=%s", oid]);
+              const msg = stdout.trim();
+              return msg ? [oid, msg] : null;
+            } catch { return null; }
+          }));
+          found = new Map(pairs.filter((p): p is [string, string] => p !== null));
+        }
+        for (const [oid, subj] of found) subjectByOid.set(oid, subj);
+        unresolvedOids = unresolvedOids.filter((o) => !subjectByOid.has(o));
+      }
+      const commitMessages = new Map<string, string>();
+      for (const { checkpointId, gitOid } of gitOidRows) {
+        const subj = subjectByOid.get(gitOid);
+        if (subj) commitMessages.set(checkpointId, subj);
+      }
 
       res.json(sessionRows.map((s) => ({
         checkpointId:  s.checkpointId,
@@ -1298,28 +1356,50 @@ export async function startServer(port: number, repoDir?: string): Promise<void>
         }
       } catch { /* git unavailable or branch not found */ }
 
+      // Pull every checkpoint's sessions + cpMeta in two queries instead of 2N,
+      // and answer the per-session "has any LogEvent?" question with one SQL
+      // join instead of N findFirst calls.
+      const [allSessions, allCpMeta] = await Promise.all([
+        findManyInChunks(orderedIds, (chunk) => repoDb.checkpointSessionMetadata.findMany({
+          where:   { checkpointId: { in: chunk } },
+          orderBy: { createdAt: "asc" },
+          include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
+        })),
+        findManyInChunks(orderedIds, (chunk) => repoDb.checkpointMetadata.findMany({
+          where:  { checkpointId: { in: chunk } },
+          select: { checkpointId: true, gitUserName: true, gitUserEmail: true },
+        })),
+      ]);
+      const cpMetaMap = new Map(allCpMeta.map((m) => [m.checkpointId, m]));
+      const sessionsByCheckpoint = new Map<string, typeof allSessions>();
+      for (const s of allSessions) {
+        const arr = sessionsByCheckpoint.get(s.checkpointId);
+        if (arr) arr.push(s); else sessionsByCheckpoint.set(s.checkpointId, [s]);
+      }
+
+      // Determine which (sessionId, checkpointId) pairs actually have LogEvent
+      // rows. One join, chunked to stay under SQLite's 999-bind-var limit.
+      const hasEventsKeys = new Set<string>();
+      for (let i = 0; i < orderedIds.length; i += SQLITE_IN_CHUNK) {
+        const chunk = orderedIds.slice(i, i + SQLITE_IN_CHUNK);
+        const placeholders = chunk.map(() => "?").join(",");
+        const rows = await repoDb.$queryRawUnsafe<{ sessionId: string; checkpointId: string }[]>(
+          `SELECT DISTINCT le.sessionId AS sessionId, cm.checkpointId AS checkpointId
+           FROM LogEvent le
+           JOIN SessionLink sl       ON sl.id = le.sessionLinkId
+           JOIN CheckpointMetadata cm ON cm.id = sl.checkpointMetadataId
+           WHERE cm.checkpointId IN (${placeholders}) AND le.sessionId IS NOT NULL`,
+          ...chunk,
+        );
+        for (const r of rows) hasEventsKeys.add(`${r.sessionId}\x00${r.checkpointId}`);
+      }
+
       const result = [];
       for (const checkpointId of orderedIds) {
-        const [sessions, cpMeta] = await Promise.all([
-          repoDb.checkpointSessionMetadata.findMany({
-            where:   { checkpointId },
-            orderBy: { createdAt: "asc" },
-            include: { ...V2_SESSION_INCLUDE, tokenUsage: true, filesTouched: { include: { filePath: true } } },
-          }),
-          repoDb.checkpointMetadata.findUnique({
-            where:  { checkpointId },
-            select: { gitUserName: true, gitUserEmail: true },
-          }),
-        ]);
+        const sessions = sessionsByCheckpoint.get(checkpointId) ?? [];
+        const cpMeta   = cpMetaMap.get(checkpointId);
         for (const s of sessions) {
-          const hasEvents = await repoDb.logEvent.findFirst({
-            where: {
-              sessionId: s.sessionId,
-              sessionLink: { checkpointMetadata: { checkpointId: s.checkpointId } },
-            },
-            select: { id: true },
-          });
-          if (!hasEvents) continue;
+          if (!hasEventsKeys.has(`${s.sessionId}\x00${s.checkpointId}`)) continue;
           result.push({
             checkpointId:  s.checkpointId,
             sessionId:     s.sessionId,

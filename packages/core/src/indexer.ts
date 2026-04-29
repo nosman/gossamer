@@ -546,11 +546,43 @@ export async function indexFullJsonlContent(
   const events = parseFullJsonl(content);
 
   // Pre-load known uuids / messageIds to skip duplicates without per-row queries.
+  // Scope to the keys actually present in this file — previously we loaded every
+  // uuid/messageId in the entire LogEvent table on every call, which dominated
+  // re-index cost as the DB grew.
+  const fileUuids: string[]      = [];
+  const fileMessageIds: string[] = [];
+  for (const e of events) {
+    if (e.uuid)      fileUuids.push(e.uuid);
+    if (e.messageId) fileMessageIds.push(e.messageId);
+  }
+
+  // SQLite caps bound parameters per statement at 999; chunk to stay safely under.
+  const CHUNK = 500;
+  async function lookupUuids(keys: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (let i = 0; i < keys.length; i += CHUNK) {
+      const rows = await db.logEvent.findMany({
+        where:  { uuid: { in: keys.slice(i, i + CHUNK) } },
+        select: { uuid: true },
+      });
+      for (const r of rows) if (r.uuid) out.add(r.uuid);
+    }
+    return out;
+  }
+  async function lookupMessageIds(keys: string[]): Promise<Set<string>> {
+    const out = new Set<string>();
+    for (let i = 0; i < keys.length; i += CHUNK) {
+      const rows = await db.logEvent.findMany({
+        where:  { messageId: { in: keys.slice(i, i + CHUNK) } },
+        select: { messageId: true },
+      });
+      for (const r of rows) if (r.messageId) out.add(r.messageId);
+    }
+    return out;
+  }
   const [existingUuids, existingMessageIds] = await Promise.all([
-    db.logEvent.findMany({ where: { uuid: { not: null } }, select: { uuid: true } })
-      .then((rows) => new Set(rows.map((r) => r.uuid as string))),
-    db.logEvent.findMany({ where: { messageId: { not: null } }, select: { messageId: true } })
-      .then((rows) => new Set(rows.map((r) => r.messageId as string))),
+    lookupUuids(fileUuids),
+    lookupMessageIds(fileMessageIds),
   ]);
 
   let count = 0;

@@ -4,7 +4,7 @@ import {
   UnstyledButton,
 } from "@mantine/core";
 import {
-  fetchSessions, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, repoPath,
+  fetchAllSessions, subscribeToUpdates, archiveSession, unarchiveSession, syncSessions, repoPath,
   type Session,
 } from "../api";
 import { SessionRow, COL_WIDTHS } from "../components/SessionRow";
@@ -95,12 +95,9 @@ export function ActiveSessions({ onSessionPress }: ActiveSessionsProps) {
 
   const load = useCallback(async () => {
     try {
-      const [data, archivedData] = await Promise.all([
-        fetchSessions(false),
-        fetchSessions(true),
-      ]);
-      setSessions(data);
-      setArchivedIds(new Set(archivedData.map((s) => s.sessionId)));
+      const all = await fetchAllSessions();
+      setSessions(all.filter((s) => !s.archived));
+      setArchivedIds(new Set(all.filter((s) => s.archived).map((s) => s.sessionId)));
       setError(null);
     } catch (err) {
       setError(String(err));

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -24,17 +24,36 @@ export function getConfigPath(): string {
   return CONFIG_PATH;
 }
 
+// readConfig() is on the hot path of every API request (findRepoForPath, dbForRepo, …)
+// — a fresh fs.readFileSync + JSON.parse per call adds up fast. Cache by mtime: if the
+// file hasn't been touched since the last read, return the cached parse.
+let cachedConfig: GossamerConfig | null = null;
+let cachedMtimeMs = -1;
+
 export function readConfig(): GossamerConfig {
-  if (!existsSync(CONFIG_PATH)) {
-    return { repos: [] };
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(CONFIG_PATH).mtimeMs;
+  } catch {
+    // File missing — return empty config and remember that.
+    if (cachedConfig && cachedMtimeMs === -1) return cachedConfig;
+    cachedConfig = { repos: [] };
+    cachedMtimeMs = -1;
+    return cachedConfig;
   }
+  if (cachedConfig && cachedMtimeMs === mtimeMs) return cachedConfig;
   const raw = readFileSync(CONFIG_PATH, "utf-8");
-  return JSON.parse(raw) as GossamerConfig;
+  cachedConfig = JSON.parse(raw) as GossamerConfig;
+  cachedMtimeMs = mtimeMs;
+  return cachedConfig;
 }
 
 export function writeConfig(config: GossamerConfig): void {
   mkdirSync(CONFIG_DIR, { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  // Refresh cache immediately so the next reader doesn't race the mtime check.
+  cachedConfig = config;
+  try { cachedMtimeMs = statSync(CONFIG_PATH).mtimeMs; } catch { cachedMtimeMs = -1; }
 }
 
 export function addRepo(repo: RepoConfig): void {

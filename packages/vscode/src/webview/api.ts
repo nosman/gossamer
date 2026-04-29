@@ -32,14 +32,19 @@ export interface Session {
   customTitle: string | null;
   agent: string | null;
   isLive: boolean;
+  archived: boolean;
 }
 
-export async function fetchSessions(includeArchived = false): Promise<Session[]> {
+/**
+ * Returns every session (archived and not) in one call. The server includes an
+ * `archived` flag per row, so the UI partitions client-side instead of paying
+ * for two full aggregations.
+ */
+export async function fetchAllSessions(): Promise<Session[]> {
   const params = new URLSearchParams();
-  if (includeArchived) params.set("archived", "1");
+  params.set("archived", "all");
   if (repoPath()) params.set("localPath", repoPath());
-  const qs = params.toString() ? `?${params}` : "";
-  const res = await fetch(`${API_BASE()}/sessions${qs}`);
+  const res = await fetch(`${API_BASE()}/sessions?${params}`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json() as Promise<Session[]>;
 }

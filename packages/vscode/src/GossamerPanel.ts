@@ -97,7 +97,10 @@ function probeServer(port: number): Promise<boolean> {
       resolve(true);
     });
     req.on("error", () => resolve(false));
-    req.setTimeout(500, () => { req.destroy(); resolve(false); });
+    // Each probe runs against localhost — failures are immediate (ECONNREFUSED).
+    // The timeout only matters if the OS is being slow accepting connections,
+    // so 200ms is plenty.
+    req.setTimeout(200, () => { req.destroy(); resolve(false); });
   });
 }
 
@@ -128,9 +131,17 @@ function probeServerVersion(port: number): Promise<boolean> {
 /** Poll until the server responds or we time out (default 30s). */
 export async function waitForServer(port: number, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+  // Tight cadence at the start (server usually comes up in <1s), then back off
+  // to the original 500ms after a couple of seconds to avoid burning CPU on a
+  // genuinely-slow start. The old fixed 500ms wait added up to half a second
+  // of pure latency between "server ready" and the panel showing content.
+  let interval = 75;
+  let elapsed = 0;
   while (Date.now() < deadline) {
     if (await probeServer(port)) return;
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, interval));
+    elapsed += interval;
+    if (elapsed > 2_000) interval = 500;
   }
   throw new Error("Gossamer server did not start within 30s");
 }
