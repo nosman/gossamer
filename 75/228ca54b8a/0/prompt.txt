@@ -1,0 +1,17 @@
+We're going to focus on making gossamer faster. Go through and look for anything like missing database indexes, redundant git calls, redundant network calls, etc.
+
+---
+
+Great, let's do 1, 2, 3.
+
+---
+
+Yes keep going down the list. I hope these will speed up the time it takes for a) the plugin to start up and b) the time it takes for a new sessionDetail tab to open
+
+---
+
+For the new indexes, did you migrate the databases?
+
+---
+
+App startup still takes 10+ seconds, let's focus on why that is
