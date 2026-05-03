@@ -1,0 +1,29 @@
+When displaying the long session names, truncate output to 50 chars
+
+---
+
+Instead of name, use the last prompt that the user input. Also add color coding for each of the agents that entire supports. use the main color of each agent's logo to show the text, ie claude code is orange, etc.
+
+---
+
+The background is light great now, it's illegible. and claude code still prints in white
+
+---
+
+In gossamer init, we should add git hooks that retrigger the gossamer index command right after the entireio hook runs. This will make sure we always index the latest sessions and checkpoints.
+
+---
+
+Can you render the entries for createdAt and updatedAt in times relative to now? aka "5 mins ago" etc
+
+---
+
+the sessions should show up in descending order of updatedAt
+
+---
+
+Would it be better to create a file watcher on the entire checkpoints branch so that we can avoid adding the extra git hook config? i think it would also have the benefit of indexing automatically
+
+---
+
+If the session has been active recently (in the span of 1 hour) add a green dot next to the session id. If the session has been active within the past day, add an amber dot.
