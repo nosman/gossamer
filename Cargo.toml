@@ -1,0 +1,13 @@
+[package]
+name = "gossamer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7.2.2"
+dirs = "5"
+sea-orm = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "chrono"] }
+sea-orm-migration = { version = "1", features = ["sqlx-sqlite", "runtime-tokio-rustls"] }
+tokio = { version = "1", features = ["full"] }
