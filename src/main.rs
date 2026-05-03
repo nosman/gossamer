@@ -21,6 +21,8 @@ enum Commands {
     Repo,
     /// Print all sessions
     Sessions,
+    /// Scan checkpoint logs and index sessions into the database
+    Index,
 }
 
 #[tokio::main]
@@ -30,6 +32,7 @@ async fn main() -> Result<()> {
         Commands::Init => commands::init::run().await?,
         Commands::Repo => commands::status::run().await?,
         Commands::Sessions => commands::sessions::run().await?,
+        Commands::Index => commands::index::run().await?,
     }
     Ok(())
 }
