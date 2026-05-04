@@ -1,20 +1,16 @@
-use std::{
-    fs::File,
-    io::{BufRead, BufReader},
-    path::Path,
-};
-
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use dirs::home_dir;
 use sea_orm::{sea_query::OnConflict, ActiveValue::Set, DatabaseConnection, EntityTrait};
 use serde::Deserialize;
 use serde_json::Value;
+use std::{path::Path, process::Command};
 
 use crate::{
     db,
     entity::{repository, session},
 };
+
+const BRANCH: &str = "entire/checkpoints/v1";
 
 pub async fn run() -> Result<()> {
     let db = db::connect().await?;
@@ -25,21 +21,11 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    let checkpoints_root = home_dir()
-        .context("cannot determine home directory")?
-        .join(".gossamer")
-        .join("checkpoints");
-
     let mut grand_total = 0usize;
 
     for repo in &repos {
-        let repo_dir = checkpoints_root.join(&repo.name);
-        if !repo_dir.exists() {
-            println!("'{}': no checkpoints directory found, skipping.", repo.name);
-            continue;
-        }
-
-        match index_repo(&db, &repo_dir).await {
+        match index_repo(&db, &repo.directory, &repo.name).await {
+            Ok(0) => println!("'{}': no {} branch found.", repo.name, BRANCH),
             Ok(n) => {
                 println!("'{}': indexed {} session(s).", repo.name, n);
                 grand_total += n;
@@ -52,67 +38,131 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-async fn index_repo(db: &DatabaseConnection, repo_dir: &Path) -> Result<usize> {
+async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -> Result<usize> {
+    // If a checkpoint remote is configured, fetch the branch from there first.
+    if let Some(remote_url) = checkpoint_remote_url(repo_dir) {
+        let _ = Command::new("git")
+            .args(["fetch", &remote_url, &format!("{}:{}", BRANCH, BRANCH)])
+            .current_dir(repo_dir)
+            .output();
+    }
+
+    // Bail early if the branch doesn't exist in this repo.
+    let check = Command::new("git")
+        .args(["rev-parse", "--verify", BRANCH])
+        .current_dir(repo_dir)
+        .output()
+        .context("failed to run git")?;
+
+    if !check.status.success() {
+        return Ok(0);
+    }
+
+    // List every file tracked on the branch.
+    let ls = Command::new("git")
+        .args(["ls-tree", "-r", "--name-only", BRANCH])
+        .current_dir(repo_dir)
+        .output()
+        .context("git ls-tree failed")?;
+
+    let listing = String::from_utf8(ls.stdout)?;
+
+    // Session metadata lives at XX/yyyyyyyyyy/N/metadata.json where N is all digits.
+    let meta_paths: Vec<&str> = listing
+        .lines()
+        .filter(|l| {
+            l.ends_with("/metadata.json")
+                && l.matches('/').count() == 3
+                && l.split('/').nth(2).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
+        })
+        .collect();
+
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
 
     let mut count = 0;
 
-    // Walk XX/ prefix dirs, skipping hidden entries like .git
-    for prefix_entry in std::fs::read_dir(repo_dir)? {
-        let prefix_dir = prefix_entry?.path();
-        if !prefix_dir.is_dir() || is_hidden(&prefix_dir) {
-            continue;
-        }
+    for meta_path in meta_paths {
+        let jsonl_path = format!("{}full.jsonl", &meta_path[..meta_path.len() - "metadata.json".len()]);
 
-        // Walk yyyyyyyyyy/ checkpoint dirs
-        for checkpoint_entry in std::fs::read_dir(&prefix_dir)? {
-            let checkpoint_dir = checkpoint_entry?.path();
-            if !checkpoint_dir.is_dir() {
-                continue;
+        let meta_bytes = match git_show(repo_dir, meta_path) {
+            Ok(b) => b,
+            Err(e) => { eprintln!("  skipping {}: {}", meta_path, e); continue; }
+        };
+        let jsonl_bytes = match git_show(repo_dir, &jsonl_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        match parse_session(&meta_bytes, &jsonl_bytes, &user) {
+            Ok(model) => {
+                upsert_session(db, model).await?;
+                count += 1;
             }
-
-            // Walk session index dirs: 0/, 1/, 2/ ...
-            for session_entry in std::fs::read_dir(&checkpoint_dir)? {
-                let session_dir = session_entry?.path();
-                if !session_dir.is_dir() {
-                    continue;
-                }
-
-                // Only process numeric session index directories
-                let is_index_dir = session_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.chars().all(|c| c.is_ascii_digit()))
-                    .unwrap_or(false);
-                if !is_index_dir {
-                    continue;
-                }
-
-                let metadata_path = session_dir.join("metadata.json");
-                let jsonl_path = session_dir.join("full.jsonl");
-                if !metadata_path.exists() || !jsonl_path.exists() {
-                    continue;
-                }
-
-                match parse_session(&metadata_path, &jsonl_path, &user) {
-                    Ok(model) => {
-                        upsert_session(db, model).await?;
-                        count += 1;
-                    }
-                    Err(e) => eprintln!("  skipping {:?}: {}", session_dir, e),
-                }
-            }
+            Err(e) => eprintln!("  skipping {}: {}", meta_path, e),
         }
     }
 
     Ok(count)
 }
 
-fn parse_session(metadata_path: &Path, jsonl_path: &Path, user: &str) -> Result<session::ActiveModel> {
-    let meta: SessionMetadata = serde_json::from_reader(BufReader::new(File::open(metadata_path)?))
-        .with_context(|| format!("failed to parse {:?}", metadata_path))?;
+fn git_show(repo_dir: &str, path: &str) -> Result<Vec<u8>> {
+    let out = Command::new("git")
+        .args(["show", &format!("{}:{}", BRANCH, path)])
+        .current_dir(repo_dir)
+        .output()
+        .context("failed to run git show")?;
+
+    if !out.status.success() {
+        anyhow::bail!("object not found: {}", path);
+    }
+    Ok(out.stdout)
+}
+
+/// Reads .entire/settings.json and returns a git URL for the checkpoint remote if configured.
+/// Mirrors the SSH/HTTPS protocol of the project's own origin remote.
+fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct EntireSettings {
+        strategy_options: Option<StrategyOptions>,
+    }
+    #[derive(Deserialize)]
+    struct StrategyOptions {
+        checkpoint_remote: Option<CheckpointRemote>,
+    }
+    #[derive(Deserialize)]
+    struct CheckpointRemote {
+        repo: String,
+    }
+
+    let settings_path = Path::new(repo_dir).join(".entire").join("settings.json");
+    let raw = std::fs::read_to_string(settings_path).ok()?;
+    let settings: EntireSettings = serde_json::from_str(&raw).ok()?;
+    let cp_repo = settings.strategy_options?.checkpoint_remote?.repo;
+
+    // Derive the URL protocol from the project's own origin remote.
+    let use_ssh = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(repo_dir)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|u| u.trim_start().starts_with("git@") || u.trim_start().starts_with("ssh://"))
+        .unwrap_or(true);
+
+    let url = if use_ssh {
+        format!("git@github.com:{}.git", cp_repo)
+    } else {
+        format!("https://github.com/{}.git", cp_repo)
+    };
+
+    Some(url)
+}
+
+fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8], user: &str) -> Result<session::ActiveModel> {
+    let meta: SessionMetadata = serde_json::from_slice(meta_bytes)
+        .context("failed to parse metadata.json")?;
 
     let created_at = meta
         .created_at
@@ -129,17 +179,15 @@ fn parse_session(metadata_path: &Path, jsonl_path: &Path, user: &str) -> Result<
 
     let agent_name = meta.agent.unwrap_or_else(|| "unknown".to_string());
 
-    // Scan JSONL: latest timestamp, first cwd, and last human-typed user prompt
     let mut latest: Option<DateTime<Utc>> = None;
     let mut cwd = String::new();
     let mut last_prompt: Option<String> = None;
 
-    for line in BufReader::new(File::open(jsonl_path)?).lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    for line in jsonl_bytes.split(|&b| b == b'\n') {
+        if line.is_empty() {
             continue;
         }
-        let v: Value = match serde_json::from_str(&line) {
+        let v: Value = match serde_json::from_slice(line) {
             Ok(v) => v,
             Err(_) => continue,
         };
@@ -159,7 +207,6 @@ fn parse_session(metadata_path: &Path, jsonl_path: &Path, user: &str) -> Result<
             }
         }
 
-        // Only capture plain string content — arrays are tool results, not human prompts
         if v.get("type").and_then(Value::as_str) == Some("user") {
             if let Some(Value::String(text)) = v.get("message").and_then(|m| m.get("content")) {
                 let text = text.trim().to_string();
@@ -201,14 +248,6 @@ async fn upsert_session(db: &DatabaseConnection, model: session::ActiveModel) ->
     Ok(())
 }
 
-fn is_hidden(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .map(|s| s.starts_with('.'))
-        .unwrap_or(false)
-}
-
-// Only the fields we need from the session-level metadata.json
 #[derive(Deserialize)]
 struct SessionMetadata {
     session_id: String,
