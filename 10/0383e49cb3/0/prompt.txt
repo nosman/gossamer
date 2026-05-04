@@ -1,0 +1,81 @@
+When displaying the long session names, truncate output to 50 chars
+
+---
+
+Instead of name, use the last prompt that the user input. Also add color coding for each of the agents that entire supports. use the main color of each agent's logo to show the text, ie claude code is orange, etc.
+
+---
+
+The background is light great now, it's illegible. and claude code still prints in white
+
+---
+
+In gossamer init, we should add git hooks that retrigger the gossamer index command right after the entireio hook runs. This will make sure we always index the latest sessions and checkpoints.
+
+---
+
+Can you render the entries for createdAt and updatedAt in times relative to now? aka "5 mins ago" etc
+
+---
+
+the sessions should show up in descending order of updatedAt
+
+---
+
+Would it be better to create a file watcher on the entire checkpoints branch so that we can avoid adding the extra git hook config? i think it would also have the benefit of indexing automatically
+
+---
+
+If the session has been active recently (in the span of 1 hour) add a green dot next to the session id. If the session has been active within the past day, add an amber dot.
+
+---
+
+Is the git precommit hook in this very repo? if not, update this repo. Ideally gossamer init is idempotent and will detect if entire is already installed.
+
+---
+
+there must be a problem then because calling gossamer sessions prints an earliest session from 4 days ago, so we are missing the current session.
+
+---
+
+Ok but the entire/checkpoints/v1 branch already exists with commits on it, in this repo. Why isn't it being indexed?
+
+---
+
+How do you know the current session shows at the top with a green dot?
+
+---
+
+Great it works. let's only print sessions from within the past 3 days by default. Adding a flag --all should print out older sessions as well.
+
+---
+
+reinstall the gossamer cli every time you change the code
+
+---
+
+let's also subscribe to claude code hooks as part of the gossamer init command. We should for now subscribe to the session start hook so that we can write a new row to our sessions db even if entire isn't tracking it.
+
+---
+
+Are we handling the case where the checkpoints are being saved to a different repo?
+
+---
+
+1. is ok, i will add a command to run "entire attach" on the sessions if the user wants later. 2. is the gap we care about- here is the documentation, see the section about "checkpoint remote"
+
+---
+
+https://docs.entire.io/cli/checkpoints#checkpoint-remote sorry here is the page
+
+---
+
+Can you get rid of the vertical lines between table columns? Only show the horizontal ones
+
+---
+
+If i run the gossamer repo command, and i'm currently in one of the repos, highlight that repo. If i run the gossamer sessions command and i'm currently in one of the repos where the session has its cwd, show those sessions at the top of the table.
+
+---
+
+Choose a lighter green for the highlight, or light yellow. Also make the table color light grey, and only the highlighted rows should be white, everything else light grey.'
