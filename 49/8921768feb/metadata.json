@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "498921768feb",
+  "strategy": "manual-commit",
+  "branch": "master",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "src/commands/index.rs",
+    "src/commands/session_start.rs",
+    "src/commands/sessions.rs",
+    "src/commands/status.rs",
+    "src/db.rs",
+    "src/entity/session.rs",
+    "src/migration/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/49/8921768feb/0/metadata.json",
+      "transcript": "/49/8921768feb/0/full.jsonl",
+      "content_hash": "/49/8921768feb/0/content_hash.txt",
+      "prompt": "/49/8921768feb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 607,
+    "cache_creation_tokens": 47534,
+    "cache_read_tokens": 1045601,
+    "output_tokens": 22118,
+    "api_call_count": 27
+  }
+}

@@ -1,0 +1,9 @@
+resume
+
+---
+
+Can we use pglite instead of sqlite? Also make a table called event_log. It should have a session_id, a message_id, a type, and a data field as a string to put the raw event text into it.
+
+---
+
+I wanted to use embedded postgres that would have json operators
