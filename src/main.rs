@@ -4,7 +4,8 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod db;
 mod entity;
-mod migration;
+mod ingest;
+mod watermark;
 
 #[derive(Parser)]
 #[command(name = "gossamer", about = "Manage AI sessions with entireio")]
@@ -27,20 +28,47 @@ enum Commands {
     },
     /// Scan checkpoint logs and index sessions into the database
     Index,
+    /// Browse a session's messages interactively (arrow keys to navigate)
+    Show {
+        /// Session ID or path to a JSONL file
+        session: String,
+    },
+    /// Semantic search across indexed sessions
+    Search {
+        /// Search query (separate words are joined into one query)
+        #[arg(required = true)]
+        query: Vec<String>,
+        /// Number of results to return
+        #[arg(short = 'n', long, default_value = "10")]
+        top_k: usize,
+    },
+    /// Attach an existing session with entireio and index it into witchcraft
+    Attach {
+        /// Session ID to attach
+        session_id: String,
+        /// Agent name passed to `entire attach`
+        #[arg(short, long, default_value = "claude-code")]
+        agent: String,
+        /// Pass --force to `entire attach`
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Called by the Claude Code SessionStart hook — reads JSON from stdin
     #[command(hide = true)]
     SessionStart,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Init => commands::init::run().await?,
-        Commands::Repo => commands::status::run().await?,
-        Commands::Sessions { all } => commands::sessions::run(all).await?,
-        Commands::Index => commands::index::run().await?,
-        Commands::SessionStart => commands::session_start::run().await?,
+        Commands::Init => commands::init::run()?,
+        Commands::Repo => commands::status::run()?,
+        Commands::Sessions { all } => commands::sessions::run(all)?,
+        Commands::Index => commands::index::run()?,
+        Commands::Show { session } => commands::show::run(&session)?,
+        Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k)?,
+        Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force)?,
+        Commands::SessionStart => commands::session_start::run()?,
     }
     Ok(())
 }

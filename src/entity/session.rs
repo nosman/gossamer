@@ -1,19 +1,12 @@
-use sea_orm::entity::prelude::*;
+use chrono::{DateTime, Utc};
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "sessions")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
+pub struct Session {
     pub session_id: String,
     pub agent_name: String,
     pub user: String,
-    pub created_at: DateTimeUtc,
-    pub updated_at: DateTimeUtc,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
     pub cwd: String,
     pub session_name: String,
+    pub tokens_used: i64,
 }
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
-
-impl ActiveModelBehavior for ActiveModel {}

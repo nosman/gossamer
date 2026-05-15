@@ -1,20 +1,20 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sea_orm::{sea_query::OnConflict, ActiveValue::Set, DatabaseConnection, EntityTrait};
 use serde::Deserialize;
 use serde_json::Value;
-use std::{path::Path, process::Command};
+use std::process::Command;
 
-use crate::{
-    db,
-    entity::{repository, session},
-};
+use crate::{db, ingest};
 
 const BRANCH: &str = "entire/checkpoints/v1";
 
-pub async fn run() -> Result<()> {
-    let db = db::connect().await?;
-    let repos = repository::Entity::find().all(&db).await?;
+pub fn run() -> Result<()> {
+    let conn = db::connect()?;
+
+    let mut stmt = conn.prepare("SELECT directory, name FROM repositories")?;
+    let repos: Vec<(String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
 
     if repos.is_empty() {
         println!("No repositories tracked. Run `gossamer init` first.");
@@ -23,23 +23,34 @@ pub async fn run() -> Result<()> {
 
     let mut grand_total = 0usize;
 
-    for repo in &repos {
-        match index_repo(&db, &repo.directory, &repo.name).await {
-            Ok(0) => println!("'{}': no {} branch found.", repo.name, BRANCH),
+    for (dir, name) in &repos {
+        match index_repo(&conn, dir, name) {
+            Ok(0) => println!("'{}': no {} branch found.", name, BRANCH),
             Ok(n) => {
-                println!("'{}': indexed {} session(s).", repo.name, n);
+                println!("'{}': indexed {} session(s).", name, n);
                 grand_total += n;
             }
-            Err(e) => eprintln!("'{}': error — {}", repo.name, e),
+            Err(e) => eprintln!("'{}': error — {}", name, e),
         }
     }
 
     println!("\n{} session(s) indexed.", grand_total);
+
+    // Ingest Claude Code sessions into the witchcraft semantic search DB.
+    println!("\nIndexing Claude Code sessions into search DB...");
+    let mut wc_db = ingest::open_search_db()?;
+    let turns = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
+    if turns > 0 {
+        println!("{turns} turn(s) ingested.");
+        ingest::embed_and_index(&wc_db)?;
+    } else {
+        println!("No new Claude Code sessions to index.");
+    }
+
     Ok(())
 }
 
-async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -> Result<usize> {
-    // If a checkpoint remote is configured, fetch the branch from there first.
+fn index_repo(conn: &rusqlite::Connection, repo_dir: &str, _repo_name: &str) -> Result<usize> {
     if let Some(remote_url) = checkpoint_remote_url(repo_dir) {
         let _ = Command::new("git")
             .args(["fetch", &remote_url, &format!("{}:{}", BRANCH, BRANCH)])
@@ -47,7 +58,6 @@ async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -
             .output();
     }
 
-    // Bail early if the branch doesn't exist in this repo.
     let check = Command::new("git")
         .args(["rev-parse", "--verify", BRANCH])
         .current_dir(repo_dir)
@@ -58,7 +68,6 @@ async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -
         return Ok(0);
     }
 
-    // List every file tracked on the branch.
     let ls = Command::new("git")
         .args(["ls-tree", "-r", "--name-only", BRANCH])
         .current_dir(repo_dir)
@@ -67,7 +76,6 @@ async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -
 
     let listing = String::from_utf8(ls.stdout)?;
 
-    // Session metadata lives at XX/yyyyyyyyyy/N/metadata.json where N is all digits.
     let meta_paths: Vec<&str> = listing
         .lines()
         .filter(|l| {
@@ -96,8 +104,8 @@ async fn index_repo(db: &DatabaseConnection, repo_dir: &str, _repo_name: &str) -
         };
 
         match parse_session(&meta_bytes, &jsonl_bytes, &user) {
-            Ok(model) => {
-                upsert_session(db, model).await?;
+            Ok((session_id, agent_name, created_at, updated_at, cwd, session_name)) => {
+                upsert_session(conn, &session_id, &agent_name, &user, &created_at, &updated_at, &cwd, &session_name)?;
                 count += 1;
             }
             Err(e) => eprintln!("  skipping {}: {}", meta_path, e),
@@ -120,8 +128,6 @@ fn git_show(repo_dir: &str, path: &str) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// Reads .entire/settings.json and returns a git URL for the checkpoint remote if configured.
-/// Mirrors the SSH/HTTPS protocol of the project's own origin remote.
 fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct EntireSettings {
@@ -136,12 +142,11 @@ fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
         repo: String,
     }
 
-    let settings_path = Path::new(repo_dir).join(".entire").join("settings.json");
+    let settings_path = std::path::Path::new(repo_dir).join(".entire").join("settings.json");
     let raw = std::fs::read_to_string(settings_path).ok()?;
     let settings: EntireSettings = serde_json::from_str(&raw).ok()?;
     let cp_repo = settings.strategy_options?.checkpoint_remote?.repo;
 
-    // Derive the URL protocol from the project's own origin remote.
     let use_ssh = Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(repo_dir)
@@ -160,15 +165,32 @@ fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
     Some(url)
 }
 
-fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8], user: &str) -> Result<session::ActiveModel> {
+#[allow(clippy::type_complexity)]
+fn parse_session(
+    meta_bytes: &[u8],
+    jsonl_bytes: &[u8],
+    user: &str,
+) -> Result<(String, String, String, String, String, String)> {
+    #[derive(Deserialize)]
+    struct SessionMetadata {
+        session_id: String,
+        agent: Option<String>,
+        created_at: Option<String>,
+        summary: Option<Summary>,
+    }
+    #[derive(Deserialize)]
+    struct Summary {
+        intent: Option<String>,
+    }
+
     let meta: SessionMetadata = serde_json::from_slice(meta_bytes)
         .context("failed to parse metadata.json")?;
 
-    let created_at = meta
+    let created_at: DateTime<Utc> = meta
         .created_at
         .as_deref()
         .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt: DateTime<chrono::FixedOffset>| dt.with_timezone(&Utc))
+        .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(Utc::now);
 
     let session_name = meta
@@ -220,43 +242,35 @@ fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8], user: &str) -> Result<se
     let updated_at = latest.unwrap_or(created_at);
     let session_name = last_prompt.unwrap_or(session_name);
 
-    Ok(session::ActiveModel {
-        session_id: Set(meta.session_id),
-        agent_name: Set(agent_name),
-        user: Set(user.to_string()),
-        created_at: Set(created_at),
-        updated_at: Set(updated_at),
-        cwd: Set(cwd),
-        session_name: Set(session_name),
-    })
+    Ok((
+        meta.session_id,
+        agent_name,
+        created_at.to_rfc3339(),
+        updated_at.to_rfc3339(),
+        cwd,
+        session_name,
+    ))
 }
 
-async fn upsert_session(db: &DatabaseConnection, model: session::ActiveModel) -> Result<()> {
-    session::Entity::insert(model)
-        .on_conflict(
-            OnConflict::column(session::Column::SessionId)
-                .update_columns([
-                    session::Column::AgentName,
-                    session::Column::UpdatedAt,
-                    session::Column::Cwd,
-                    session::Column::SessionName,
-                ])
-                .to_owned(),
-        )
-        .exec(db)
-        .await?;
+fn upsert_session(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    agent_name: &str,
+    user: &str,
+    created_at: &str,
+    updated_at: &str,
+    cwd: &str,
+    session_name: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO sessions (session_id, agent_name, user, created_at, updated_at, cwd, session_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(session_id) DO UPDATE SET
+           agent_name   = excluded.agent_name,
+           updated_at   = excluded.updated_at,
+           cwd          = excluded.cwd,
+           session_name = excluded.session_name",
+        rusqlite::params![session_id, agent_name, user, created_at, updated_at, cwd, session_name],
+    )?;
     Ok(())
-}
-
-#[derive(Deserialize)]
-struct SessionMetadata {
-    session_id: String,
-    agent: Option<String>,
-    created_at: Option<String>,
-    summary: Option<Summary>,
-}
-
-#[derive(Deserialize)]
-struct Summary {
-    intent: Option<String>,
 }

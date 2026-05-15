@@ -1,0 +1,670 @@
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local, Utc};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::io::{self, Write};
+use std::path::PathBuf;
+
+// ── Data model ────────────────────────────────────────────────────────────────
+
+enum Card {
+    Header    { title: Option<String>, cwd: String, branch: String, ts: String },
+    UserMsg   { ts: String, parts: Vec<UserPart> },
+    AsstMsg   { ts: String, parts: Vec<AsstPart> },
+    ToolRound { parts: Vec<AsstPart> },
+    System    { ts: String, subtype: String, content: String },
+}
+
+enum UserPart {
+    Text(String),
+    ToolResult { id: String, name: String, content: String, is_error: bool },
+}
+
+enum AsstPart {
+    Text(String),
+    ToolCall { id: String, name: String, input: Value, result: Option<(String, bool)> },
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+pub fn run(session_id: &str) -> Result<()> {
+    let path = find_session(session_id)
+        .with_context(|| format!("no session file found for '{session_id}'"))?;
+
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("cannot read {}", path.display()))?;
+
+    let cards = parse(&raw);
+    if cards.is_empty() {
+        println!("No messages found.");
+        return Ok(());
+    }
+
+    pager(cards)
+}
+
+fn find_session(id: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(id);
+    if p.exists() { return Some(p); }
+    let home = std::env::var("HOME").ok()?;
+    let projects = PathBuf::from(&home).join(".claude/projects");
+    for entry in std::fs::read_dir(&projects).ok()? {
+        let dir = entry.ok()?.path();
+        let candidate = dir.join(format!("{id}.jsonl"));
+        if candidate.exists() { return Some(candidate); }
+    }
+    None
+}
+
+// ── Parsing ───────────────────────────────────────────────────────────────────
+
+fn parse(raw: &str) -> Vec<Card> {
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+    for line in raw.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(blocks) = v["message"]["content"].as_array() {
+                for b in blocks {
+                    if b["type"].as_str() == Some("tool_use") {
+                        if let (Some(id), Some(name)) = (b["id"].as_str(), b["name"].as_str()) {
+                            tool_names.insert(id.to_string(), name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cards: Vec<Card> = Vec::new();
+    let mut first_cwd    = String::new();
+    let mut first_branch = String::new();
+    let mut first_ts     = String::new();
+    let mut title: Option<String> = None;
+
+    for line in raw.lines() {
+        if line.trim().is_empty() { continue; }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let ts = v["timestamp"].as_str().unwrap_or("").to_string();
+        if first_ts.is_empty() && !ts.is_empty() { first_ts = ts.clone(); }
+
+        match v["type"].as_str() {
+            Some("custom-title") => {
+                title = v["customTitle"].as_str().map(str::to_string);
+            }
+            Some("system") => {
+                if let Some(c) = v["cwd"].as_str() { if first_cwd.is_empty() { first_cwd = c.to_string(); } }
+                let content = v["content"].as_str().unwrap_or("").to_string();
+                if !content.is_empty() {
+                    let subtype = v["subtype"].as_str().unwrap_or("system").replace('_', " ");
+                    cards.push(Card::System { ts, subtype, content });
+                }
+            }
+            Some("user") => {
+                if let Some(c) = v["cwd"].as_str()       { if first_cwd.is_empty()    { first_cwd    = c.to_string(); } }
+                if let Some(b) = v["gitBranch"].as_str() { if first_branch.is_empty() { first_branch = b.to_string(); } }
+                let parts = parse_user(&v["message"]["content"], &tool_names);
+                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts }); }
+            }
+            Some("assistant") => {
+                let parts = parse_asst(&v["message"]["content"]);
+                if !parts.is_empty() { cards.push(Card::AsstMsg { ts, parts }); }
+            }
+            _ => {}
+        }
+    }
+
+    let mut result = vec![Card::Header { title, cwd: first_cwd, branch: first_branch, ts: first_ts }];
+    result.extend(cards);
+
+    // Merge each pure tool-result UserMsg into the preceding AsstMsg.
+    let mut i = 1;
+    while i < result.len() {
+        let is_pure_results = if let Card::UserMsg { parts, .. } = &result[i] {
+            parts.iter().all(|p| matches!(p, UserPart::ToolResult { .. }))
+        } else { false };
+
+        if is_pure_results && matches!(&result[i - 1], Card::AsstMsg { .. }) {
+            let tool_results: Vec<(String, String, bool)> =
+                if let Card::UserMsg { parts, .. } = &result[i] {
+                    parts.iter().filter_map(|p| {
+                        if let UserPart::ToolResult { id, content, is_error, .. } = p {
+                            Some((id.clone(), content.clone(), *is_error))
+                        } else { None }
+                    }).collect()
+                } else { vec![] };
+
+            if let Card::AsstMsg { parts: asst_parts, .. } = &mut result[i - 1] {
+                for part in asst_parts.iter_mut() {
+                    if let AsstPart::ToolCall { id, result: res, .. } = part {
+                        if let Some((_, content, is_error)) =
+                            tool_results.iter().find(|(rid, _, _)| rid == id)
+                        {
+                            *res = Some((content.clone(), *is_error));
+                        }
+                    }
+                }
+            }
+            result.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    // Merge consecutive AsstMsg cards so the assistant name appears only once per run.
+    let mut i = 1;
+    while i < result.len() {
+        if matches!(&result[i - 1], Card::AsstMsg { .. }) && matches!(&result[i], Card::AsstMsg { .. }) {
+            if let Card::AsstMsg { parts: new_parts, .. } = result.remove(i) {
+                if let Card::AsstMsg { parts, .. } = &mut result[i - 1] {
+                    parts.extend(new_parts);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Split each AsstMsg into a text-only AsstMsg (if any text) + a ToolRound (if any tools).
+    let mut split: Vec<Card> = Vec::with_capacity(result.len());
+    for card in result {
+        match card {
+            Card::AsstMsg { ts, parts } => {
+                let (text_parts, tool_parts): (Vec<AsstPart>, Vec<AsstPart>) =
+                    parts.into_iter().partition(|p| matches!(p, AsstPart::Text(_)));
+                if !text_parts.is_empty() { split.push(Card::AsstMsg  { ts, parts: text_parts }); }
+                if !tool_parts.is_empty() { split.push(Card::ToolRound { parts: tool_parts }); }
+            }
+            other => split.push(other),
+        }
+    }
+    let mut result = split;
+
+    // Merge adjacent ToolRound cards (can arise when consecutive asst turns were all-tools).
+    let mut i = 1;
+    while i < result.len() {
+        if matches!(&result[i - 1], Card::ToolRound { .. }) && matches!(&result[i], Card::ToolRound { .. }) {
+            if let Card::ToolRound { parts: new_parts } = result.remove(i) {
+                if let Card::ToolRound { parts } = &mut result[i - 1] {
+                    parts.extend(new_parts);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    result
+}
+
+fn parse_user(content: &Value, tool_names: &HashMap<String, String>) -> Vec<UserPart> {
+    let mut out = Vec::new();
+    match content {
+        Value::String(s) if !s.trim().is_empty() => out.push(UserPart::Text(s.clone())),
+        Value::Array(blocks) => {
+            for b in blocks {
+                match b["type"].as_str() {
+                    Some("text") => {
+                        if let Some(t) = b["text"].as_str() {
+                            if !t.trim().is_empty() { out.push(UserPart::Text(t.to_string())); }
+                        }
+                    }
+                    Some("tool_result") => {
+                        let id = b["tool_use_id"].as_str().unwrap_or("").to_string();
+                        let name = tool_names.get(&id).cloned().unwrap_or_else(|| "tool".to_string());
+                        let is_error = b["is_error"].as_bool().unwrap_or(false);
+                        let content = match &b["content"] {
+                            Value::String(s) => s.clone(),
+                            Value::Array(arr) => arr.iter()
+                                .filter(|x| x["type"].as_str() == Some("text"))
+                                .filter_map(|x| x["text"].as_str())
+                                .collect::<Vec<_>>().join("\n"),
+                            _ => String::new(),
+                        };
+                        out.push(UserPart::ToolResult { id, name, content, is_error });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn parse_asst(content: &Value) -> Vec<AsstPart> {
+    let mut out = Vec::new();
+    match content {
+        Value::String(s) if !s.trim().is_empty() => out.push(AsstPart::Text(s.clone())),
+        Value::Array(blocks) => {
+            for b in blocks {
+                match b["type"].as_str() {
+                    Some("text") => {
+                        if let Some(t) = b["text"].as_str() {
+                            if !t.trim().is_empty() { out.push(AsstPart::Text(t.to_string())); }
+                        }
+                    }
+                    Some("tool_use") => {
+                        out.push(AsstPart::ToolCall {
+                            id:     b["id"].as_str().unwrap_or("").to_string(),
+                            name:   b["name"].as_str().unwrap_or("unknown").to_string(),
+                            input:  b["input"].clone(),
+                            result: None,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+// ── Text extraction (for clipboard) ──────────────────────────────────────────
+
+fn card_text(card: &Card) -> String {
+    let mut out = String::new();
+    match card {
+        Card::Header { title, cwd, branch, .. } => {
+            if let Some(t) = title { out.push_str(t); out.push('\n'); }
+            if !cwd.is_empty()    { out.push_str(cwd);               out.push('\n'); }
+            if !branch.is_empty() { out.push_str(&format!("[{branch}]")); out.push('\n'); }
+        }
+        Card::System { content, .. } => { if !content.is_empty() { out.push_str(content); out.push('\n'); } }
+        Card::UserMsg { parts, .. } => {
+            for part in parts {
+                match part {
+                    UserPart::Text(t) => { out.push_str(t); out.push('\n'); }
+                    UserPart::ToolResult { name, content, .. } => {
+                        out.push_str(&format!("[Result: {name}]\n{content}\n"));
+                    }
+                }
+            }
+        }
+        Card::AsstMsg { parts, .. } => {
+            for part in parts {
+                if let AsstPart::Text(t) = part { out.push_str(t); out.push('\n'); }
+            }
+        }
+        Card::ToolRound { parts } => {
+            for part in parts {
+                if let AsstPart::ToolCall { name, input, result, .. } = part {
+                    out.push_str(&format!("[Tool: {name}]\n"));
+                    if let Some(obj) = input.as_object() {
+                        for (k, v) in obj {
+                            let val = if let Value::String(s) = v { s.clone() } else { v.to_string() };
+                            out.push_str(&format!("{k}: {val}\n"));
+                        }
+                    }
+                    if let Some((content, _)) = result {
+                        out.push_str(&format!("[Result]\n{content}\n"));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
+        if let Some(stdin) = child.stdin.take() {
+            let mut stdin = stdin;
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+
+fn render_card(card: &Card, width: usize, expanded: bool) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let w = width.saturating_sub(2);
+
+    match card {
+        Card::Header { title, cwd, branch, ts } => {
+            let t = title.as_deref().unwrap_or("(untitled session)");
+            lines.push(format!("\x1b[1;38;5;229m{t}\x1b[0m"));
+            if !cwd.is_empty()    { lines.push(format!("\x1b[38;5;240m{cwd}\x1b[0m")); }
+            if !branch.is_empty() { lines.push(format!("\x1b[38;5;220m[{branch}]\x1b[0m")); }
+            if !ts.is_empty()     { lines.push(format!("\x1b[38;5;240m{}\x1b[0m", rel_time(ts))); }
+        }
+        Card::System { ts, subtype, content } => {
+            lines.push(format!("\x1b[38;5;240m── {subtype}  {}\x1b[0m", rel_time(ts)));
+            lines.push(String::new());
+            for l in wrap(content, w) {
+                lines.push(format!("  \x1b[38;5;240m{l}\x1b[0m"));
+            }
+        }
+        Card::UserMsg { ts, parts } => {
+            lines.push(format!("\x1b[1;38;5;82m── user  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
+            for part in parts {
+                match part {
+                    UserPart::Text(text) => {
+                        lines.push(String::new());
+                        for l in wrap(text, w) {
+                            lines.push(format!("  \x1b[38;5;255m{l}\x1b[0m"));
+                        }
+                    }
+                    UserPart::ToolResult { name, content, is_error, .. } => {
+                        let col = if *is_error { "38;5;196" } else { "38;5;177" };
+                        lines.push(format!("\x1b[{col}m  ◀ {name}\x1b[0m"));
+                        let visible: Vec<&str> = content.lines()
+                            .filter(|l| !l.trim().is_empty()).take(8).collect();
+                        for l in wrap(&visible.join("\n"), w.saturating_sub(4)) {
+                            lines.push(format!("\x1b[38;5;240m    {l}\x1b[0m"));
+                        }
+                        let total = content.lines().filter(|l| !l.trim().is_empty()).count();
+                        if total > 8 {
+                            lines.push(format!("\x1b[38;5;238m    … {} more lines\x1b[0m", total - 8));
+                        }
+                    }
+                }
+            }
+        }
+        Card::AsstMsg { ts, parts } => {
+            lines.push(format!("\x1b[1;38;5;75m── claude  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
+            for part in parts {
+                if let AsstPart::Text(text) = part {
+                    lines.push(String::new());
+                    for l in wrap(text, w) {
+                        lines.push(format!("  \x1b[38;5;252m{l}\x1b[0m"));
+                    }
+                }
+            }
+        }
+        Card::ToolRound { parts } => {
+            let tool_calls: Vec<&AsstPart> = parts.iter()
+                .filter(|p| matches!(p, AsstPart::ToolCall { .. }))
+                .collect();
+            let count = tool_calls.len();
+
+            if !expanded {
+                let mut seen = std::collections::HashSet::new();
+                let unique: Vec<&str> = tool_calls.iter().filter_map(|p| {
+                    if let AsstPart::ToolCall { name, .. } = p {
+                        if seen.insert(name.as_str()) { Some(name.as_str()) } else { None }
+                    } else { None }
+                }).collect();
+                let names = unique.join(", ");
+                lines.push(format!("\x1b[38;5;240m  ▶ ({count} tool call{}: {names})\x1b[0m",
+                    if count == 1 { "" } else { "s" }));
+            } else {
+                for part in parts {
+                    if let AsstPart::ToolCall { name, input, result, .. } = part {
+                        lines.push(format!("\x1b[38;5;220m  ▶ {name}\x1b[0m"));
+                        if let Some(obj) = input.as_object() {
+                            let mut is_first = true;
+                            for (_, v) in obj.iter().take(4) {
+                                let raw_val = if let Value::String(s) = v { s.clone() } else { v.to_string() };
+                                let first_line = raw_val.lines().next().unwrap_or("");
+                                let preview: String = first_line.chars().take(120).collect();
+                                let suffix = if raw_val.lines().count() > 1 || first_line.chars().count() > 120 { " …" } else { "" };
+                                let col = if is_first { "38;5;255" } else { "38;5;245" };
+                                lines.push(format!("\x1b[{col}m    {preview}{suffix}\x1b[0m"));
+                                is_first = false;
+                            }
+                            if obj.len() > 4 {
+                                lines.push(format!("\x1b[38;5;238m    … {} more fields\x1b[0m", obj.len() - 4));
+                            }
+                        }
+                        if let Some((content, is_error)) = result {
+                            lines.push(format!("\x1b[38;5;238m  ────────────────────────────────────────\x1b[0m"));
+                            let col = if *is_error { "38;5;196" } else { "38;5;240" };
+                            let visible: Vec<&str> = content.lines()
+                                .filter(|l| !l.trim().is_empty()).take(8).collect();
+                            for l in wrap(&visible.join("\n"), w.saturating_sub(4)) {
+                                lines.push(format!("\x1b[{col}m    {l}\x1b[0m"));
+                            }
+                            let total = content.lines().filter(|l| !l.trim().is_empty()).count();
+                            if total > 8 {
+                                lines.push(format!("\x1b[38;5;238m    … {} more lines\x1b[0m", total - 8));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    lines.push(String::new());
+    lines
+}
+
+// Visible character width, skipping ANSI escape sequences.
+fn visible_width(s: &str) -> usize {
+    let mut w = 0usize;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // consume up to and including the final byte of the CSI sequence
+            for nc in chars.by_ref() {
+                if nc.is_ascii_alphabetic() { break; }
+            }
+        } else {
+            w += 1;
+        }
+    }
+    w
+}
+
+// Apply a background color code to a pre-colored ANSI string by re-inserting
+// the background after every reset sequence.
+fn with_bg(s: &str, bg: &str) -> String {
+    let reinsert = format!("\x1b[0m\x1b[{bg}m");
+    let body = s.replace("\x1b[0m", &reinsert);
+    format!("\x1b[{bg}m{body}")
+}
+
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    if width < 4 { return text.lines().map(str::to_string).collect(); }
+    let mut out = Vec::new();
+    for raw_line in text.lines() {
+        if raw_line.is_empty() { out.push(String::new()); continue; }
+        let mut remaining = raw_line;
+        loop {
+            if remaining.chars().count() <= width {
+                out.push(remaining.to_string());
+                break;
+            }
+            let break_pos = remaining.chars().take(width)
+                .collect::<String>()
+                .rfind(' ')
+                .unwrap_or(width);
+            let byte_pos = remaining.char_indices().nth(break_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(remaining.len());
+            out.push(remaining[..byte_pos].to_string());
+            remaining = remaining[byte_pos..].trim_start_matches(' ');
+        }
+    }
+    out
+}
+
+fn rel_time(iso: &str) -> String {
+    let Ok(dt) = DateTime::parse_from_rfc3339(iso) else { return iso.to_string(); };
+    let secs = (Utc::now() - dt.with_timezone(&Utc)).num_seconds().max(0);
+    if secs < 604_800 {
+        match secs {
+            s if s < 60     => "just now".into(),
+            s if s < 3_600  => format!("{} min{} ago", s/60,     if s/60==1     {""} else {"s"}),
+            s if s < 86_400 => format!("{} hr{} ago",  s/3_600,  if s/3_600==1  {""} else {"s"}),
+            s               => format!("{} day{} ago", s/86_400, if s/86_400==1 {""} else {"s"}),
+        }
+    } else {
+        dt.with_timezone(&Local).format("%m/%d/%y").to_string()
+    }
+}
+
+// ── Pager ─────────────────────────────────────────────────────────────────────
+
+fn build_flat(cards: &[Card], term_w: usize, collapsed: &std::collections::HashSet<usize>) -> (Vec<(usize, String)>, Vec<usize>) {
+    let content_w = term_w.saturating_sub(2);
+    let mut flat: Vec<(usize, String)> = Vec::new();
+    let mut starts: Vec<usize> = Vec::with_capacity(cards.len());
+    for (i, card) in cards.iter().enumerate() {
+        starts.push(flat.len());
+        for l in render_card(card, content_w, !collapsed.contains(&i)) { flat.push((i, l)); }
+    }
+    (flat, starts)
+}
+
+fn pager(cards: Vec<Card>) -> Result<()> {
+    let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
+    let mut w = term_w as usize;
+    let mut h = (term_h as usize).saturating_sub(1);
+
+    let mut collapsed: std::collections::HashSet<usize> = cards.iter().enumerate()
+        .filter_map(|(i, c)| if matches!(c, Card::ToolRound { .. }) { Some(i) } else { None })
+        .collect();
+
+    let (mut flat, mut starts) = build_flat(&cards, w, &collapsed);
+
+    let mut stdout = io::stdout();
+
+    // Restore terminal on panic so we don't leave the shell in raw mode.
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut out = io::stdout();
+        let _ = execute!(out, LeaveAlternateScreen, cursor::Show);
+        let _ = terminal::disable_raw_mode();
+        orig_hook(info);
+    }));
+
+    terminal::enable_raw_mode()?;
+    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+
+    let mut sel:    usize = if cards.len() > 1 { 1 } else { 0 };
+    let mut scroll: usize = 0;
+    let mut flash:  Option<&str> = None; // status bar flash message
+
+    let result: Result<()> = loop {
+        // Keep selected card visible
+        let s = starts[sel];
+        let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
+        if s < scroll          { scroll = s; }
+        else if e > scroll + h { scroll = e.saturating_sub(h); }
+
+        if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, cards.len(), flash) {
+            break Err(err.into());
+        }
+
+        match event::read() {
+            Err(e) => break Err(e.into()),
+            Ok(Event::Key(k)) => {
+                let prev_flash = flash.take();
+                match (k.code, k.modifiers) {
+                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(()),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(()),
+
+                    (KeyCode::Down  | KeyCode::Char('j'), _) => {
+                        if sel + 1 < cards.len() { sel += 1; }
+                    }
+                    (KeyCode::Up | KeyCode::Char('k'), _) => {
+                        if sel > 0 { sel -= 1; }
+                    }
+                    (KeyCode::Char('g'), _) => { sel = 0; }
+                    (KeyCode::Char('G'), _) => { sel = cards.len().saturating_sub(1); }
+                    (KeyCode::Char('d'), _) => { scroll = (scroll + h / 2).min(flat.len().saturating_sub(1)); }
+                    (KeyCode::Char('u'), _) => { scroll = scroll.saturating_sub(h / 2); }
+
+                    // y or c → copy selected card text to clipboard
+                    (KeyCode::Char('y'), _) |
+                    (KeyCode::Char('c'), _) => {
+                        copy_to_clipboard(&card_text(&cards[sel]));
+                        flash = Some("  ✓ copied to clipboard  ");
+                    }
+
+                    // Space → toggle expansion on ToolRound cards
+                    (KeyCode::Char(' '), _) => {
+                        let is_toggleable = matches!(&cards[sel], Card::ToolRound { .. });
+                        if is_toggleable {
+                            if collapsed.contains(&sel) { collapsed.remove(&sel); } else { collapsed.insert(sel); }
+                            let rebuilt = build_flat(&cards, w, &collapsed);
+                            flat   = rebuilt.0;
+                            starts = rebuilt.1;
+                        }
+                    }
+
+                    _ => { flash = prev_flash; } // preserve flash on unknown keys
+                }
+            }
+            Ok(Event::Resize(new_w, new_h)) => {
+                w = new_w as usize;
+                h = (new_h as usize).saturating_sub(1);
+                let rebuilt = build_flat(&cards, w, &collapsed);
+                flat   = rebuilt.0;
+                starts = rebuilt.1;
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
+            Ok(_) => {}
+        }
+    };
+
+    execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
+    terminal::disable_raw_mode()?;
+    result
+}
+
+fn draw(
+    stdout:  &mut impl Write,
+    flat:    &[(usize, String)],
+    starts:  &[usize],
+    sel:     usize,
+    scroll:  usize,
+    h:       usize,
+    w:       usize,
+    total:   usize,
+    flash:   Option<&str>,
+) -> io::Result<()> {
+    const SEL_BG: &str = "48;5;236";
+
+    let end = (scroll + h).min(flat.len());
+
+    for row in 0..h {
+        // Clear the whole row first so tabs and short lines never leave stale chars.
+        execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+
+        if scroll + row < end {
+            let (card_idx, line) = &flat[scroll + row];
+            let is_sel = *card_idx == sel;
+
+            if is_sel {
+                let line_bg = with_bg(line, SEL_BG);
+                let vis = visible_width(line);
+                let pad = w.saturating_sub(vis);
+                write!(stdout, "\x1b[{SEL_BG}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
+            } else {
+                write!(stdout, "{line}")?;
+            }
+        }
+    }
+
+    // Status bar
+    let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
+    let base = format!(
+        "  {}/{} msgs  lines {}-{}  ↑↓/jk msg  space expand  d/u page  g/G ends  y/c copy  q quit  ",
+        sel + 1, total, starts[sel] + 1, sel_end,
+    );
+    let bar = if let Some(msg) = flash {
+        let skip = msg.chars().count();
+        let rest: String = base.chars().skip(skip).collect();
+        format!("{msg}{rest}")
+    } else {
+        base
+    };
+    let bar_display: String = bar.chars().take(w).collect();
+    let padded = format!("{:width$}", bar_display, width = w);
+    execute!(stdout, cursor::MoveTo(0, h as u16))?;
+    write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
+
+    stdout.flush()
+}

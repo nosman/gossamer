@@ -1,9 +1,8 @@
 use anyhow::{Context, Result};
-use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{json, Value};
 use std::{env, fs, io::Write, path::PathBuf, process::Command};
 
-use crate::{db, entity::repository};
+use crate::db;
 
 const HOOK_MARKER: &str = "# gossamer:";
 const HOOK_SNIPPET: &str = r#"
@@ -12,7 +11,20 @@ if git log -1 --format="%B" | grep -q "Entire-Checkpoint:"; then
     gossamer index >/dev/null 2>&1 || true
 fi"#;
 
-pub async fn run() -> Result<()> {
+const SHELL_MARKER: &str = "# gossamer-shell-init";
+const SHELL_SNIPPET: &str = r#"
+# gossamer-shell-init: cd into a repo selected interactively
+gr() {
+  local tmp
+  tmp=$(mktemp)
+  GOSSAMER_CDPATH="$tmp" gossamer repo
+  local dest
+  dest=$(cat "$tmp" 2>/dev/null)
+  rm -f "$tmp"
+  [[ -n "$dest" ]] && cd "$dest"
+}"#;
+
+pub fn run() -> Result<()> {
     let cwd = env::current_dir().context("failed to get current directory")?;
     let cwd_str = cwd.to_string_lossy().to_string();
 
@@ -35,34 +47,33 @@ pub async fn run() -> Result<()> {
 
     install_post_commit_hook(&cwd_str)?;
     install_claude_hook()?;
+    install_shell_function()?;
 
-    let db = db::connect().await?;
+    let conn = db::connect()?;
 
-    let existing = repository::Entity::find()
-        .filter(repository::Column::Directory.eq(&cwd_str))
-        .one(&db)
-        .await?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM repositories WHERE directory = ?1",
+            [&cwd_str],
+            |_| Ok(true),
+        )
+        .unwrap_or(false);
 
-    if existing.is_some() {
+    if exists {
         println!("'{}' is already registered with gossamer.", name);
         return Ok(());
     }
 
-    repository::Entity::insert(repository::ActiveModel {
-        directory: Set(cwd_str.clone()),
-        remote: Set(remote),
-        name: Set(name.clone()),
-        ..Default::default()
-    })
-    .exec(&db)
-    .await
+    conn.execute(
+        "INSERT INTO repositories (directory, remote, name) VALUES (?1, ?2, ?3)",
+        rusqlite::params![cwd_str, remote, name],
+    )
     .context("failed to register repository")?;
 
     println!("Initialized '{}' ({}).", name, cwd_str);
     Ok(())
 }
 
-/// Returns true if entireio has already written its hooks into this repo.
 fn entire_already_configured(repo_dir: &str) -> bool {
     let git_dir = match git_common_dir(repo_dir) {
         Ok(d) => d,
@@ -187,6 +198,40 @@ fn install_claude_hook() -> Result<()> {
     }
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     println!("Registered Claude Code SessionStart hook in {}.", settings_path.display());
+    Ok(())
+}
+
+fn install_shell_function() -> Result<()> {
+    let home = dirs::home_dir().context("could not find home directory")?;
+
+    // Detect which rc file to use based on $SHELL
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let rc_path = if shell.contains("zsh") {
+        home.join(".zshrc")
+    } else if shell.contains("bash") {
+        // Prefer .bash_profile on macOS, .bashrc elsewhere
+        let bp = home.join(".bash_profile");
+        if bp.exists() { bp } else { home.join(".bashrc") }
+    } else {
+        // Unknown shell — skip silently
+        println!("Shell function not installed (unknown shell '{shell}'). Add manually:");
+        println!("  gr() {{ local p; p=$(gossamer repo); [[ -n \"$p\" ]] && cd \"$p\"; }}");
+        return Ok(());
+    };
+
+    // Check if already installed
+    if rc_path.exists() {
+        let content = fs::read_to_string(&rc_path)?;
+        if content.contains(SHELL_MARKER) {
+            println!("Shell function `gr` already in {}, skipping.", rc_path.display());
+            return Ok(());
+        }
+    }
+
+    let mut file = fs::OpenOptions::new().create(true).append(true).open(&rc_path)?;
+    writeln!(file, "{}", SHELL_SNIPPET)?;
+    println!("Added `gr` shell function to {}.", rc_path.display());
+    println!("Run `source {}` or open a new terminal to activate it.", rc_path.display());
     Ok(())
 }
 
