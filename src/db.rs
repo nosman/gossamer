@@ -19,7 +19,13 @@ pub fn connect() -> Result<Connection> {
             directory TEXT NOT NULL UNIQUE,
             remote   TEXT NOT NULL,
             name     TEXT NOT NULL
-        );
+        );")
+    .context("failed to run schema migrations")?;
+
+    // Idempotent column additions (ignored if column already exists)
+    let _ = conn.execute("ALTER TABLE repositories ADD COLUMN last_indexed_commit TEXT", []);
+
+    conn.execute_batch("
         CREATE TABLE IF NOT EXISTS sessions (
             session_id   TEXT PRIMARY KEY,
             agent_name   TEXT NOT NULL,

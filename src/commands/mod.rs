@@ -1,6 +1,7 @@
 pub mod attach;
 pub mod index;
 pub mod init;
+pub mod refresh;
 pub mod search;
 pub mod session_start;
 pub mod show;

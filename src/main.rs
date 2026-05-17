@@ -28,6 +28,8 @@ enum Commands {
     },
     /// Scan checkpoint logs and index sessions into the database
     Index,
+    /// Incrementally index only new checkpoint commits since the last index/refresh
+    Refresh,
     /// Browse a session's messages interactively (arrow keys to navigate)
     Show {
         /// Session ID or path to a JSONL file
@@ -65,6 +67,7 @@ fn main() -> Result<()> {
         Commands::Repo => commands::status::run()?,
         Commands::Sessions { all } => commands::sessions::run(all)?,
         Commands::Index => commands::index::run()?,
+        Commands::Refresh => commands::refresh::run()?,
         Commands::Show { session } => commands::show::run(&session)?,
         Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force)?,

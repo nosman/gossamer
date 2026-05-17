@@ -373,7 +373,8 @@ fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
                         let mut session_name = String::new();
                         let mut cwd_found = String::new();
 
-                        for line in reader.lines().take(100).flatten() {
+                        let mut last_prompt = String::new();
+                        for line in reader.lines().flatten() {
                             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
                             match v["type"].as_str() {
                                 Some("custom-title") => {
@@ -386,12 +387,17 @@ fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
                                 }
                                 _ => {}
                             }
-                            if !session_name.is_empty() && !cwd_found.is_empty() { break }
+                            if v["type"].as_str() == Some("user") {
+                                if let Some(t) = user_text(&v["message"]["content"]) {
+                                    last_prompt = t;
+                                }
+                            }
                         }
 
                         if !cwd_found.starts_with(cwd_prefix) { continue }
 
-                        sessions.push(RepoSession { session_id, session_name, updated_at });
+                        let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
+                        sessions.push(RepoSession { session_id, session_name: display_name, updated_at });
                     }
                 }
             }
@@ -403,6 +409,20 @@ fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn user_text(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        serde_json::Value::Array(blocks) => {
+            blocks.iter().find_map(|b| {
+                if b["type"].as_str() == Some("text") {
+                    b["text"].as_str().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
+                } else { None }
+            })
+        }
+        _ => None,
+    }
+}
 
 fn with_bg(s: &str, bg: &str) -> String {
     let reinsert = format!("\x1b[0m\x1b[{bg}m");

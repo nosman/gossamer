@@ -6,7 +6,7 @@ use std::process::Command;
 
 use crate::{db, ingest};
 
-const BRANCH: &str = "entire/checkpoints/v1";
+pub(crate) const BRANCH: &str = "entire/checkpoints/v1";
 
 pub fn run() -> Result<()> {
     let conn = db::connect()?;
@@ -50,6 +50,12 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn is_meta_path(l: &str) -> bool {
+    l.ends_with("/metadata.json")
+        && l.matches('/').count() == 3
+        && l.split('/').nth(2).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
+}
+
 fn index_repo(conn: &rusqlite::Connection, repo_dir: &str, _repo_name: &str) -> Result<usize> {
     if let Some(remote_url) = checkpoint_remote_url(repo_dir) {
         let _ = Command::new("git")
@@ -76,14 +82,7 @@ fn index_repo(conn: &rusqlite::Connection, repo_dir: &str, _repo_name: &str) -> 
 
     let listing = String::from_utf8(ls.stdout)?;
 
-    let meta_paths: Vec<&str> = listing
-        .lines()
-        .filter(|l| {
-            l.ends_with("/metadata.json")
-                && l.matches('/').count() == 3
-                && l.split('/').nth(2).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
-        })
-        .collect();
+    let meta_paths: Vec<&str> = listing.lines().filter(|l| is_meta_path(l)).collect();
 
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
@@ -112,10 +111,21 @@ fn index_repo(conn: &rusqlite::Connection, repo_dir: &str, _repo_name: &str) -> 
         }
     }
 
+    // Save commit watermark so `gossamer refresh` knows where to start next time.
+    if let Ok(out) = Command::new("git").args(["rev-parse", BRANCH]).current_dir(repo_dir).output() {
+        if out.status.success() {
+            let head = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let _ = conn.execute(
+                "UPDATE repositories SET last_indexed_commit = ?1 WHERE directory = ?2",
+                rusqlite::params![head, repo_dir],
+            );
+        }
+    }
+
     Ok(count)
 }
 
-fn git_show(repo_dir: &str, path: &str) -> Result<Vec<u8>> {
+pub(crate) fn git_show(repo_dir: &str, path: &str) -> Result<Vec<u8>> {
     let out = Command::new("git")
         .args(["show", &format!("{}:{}", BRANCH, path)])
         .current_dir(repo_dir)
@@ -128,7 +138,7 @@ fn git_show(repo_dir: &str, path: &str) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
+pub(crate) fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct EntireSettings {
         strategy_options: Option<StrategyOptions>,
@@ -166,7 +176,7 @@ fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
 }
 
 #[allow(clippy::type_complexity)]
-fn parse_session(
+pub(crate) fn parse_session(
     meta_bytes: &[u8],
     jsonl_bytes: &[u8],
     user: &str,
@@ -252,7 +262,7 @@ fn parse_session(
     ))
 }
 
-fn upsert_session(
+pub(crate) fn upsert_session(
     conn: &rusqlite::Connection,
     session_id: &str,
     agent_name: &str,

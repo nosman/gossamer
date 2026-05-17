@@ -156,8 +156,9 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
             let reader = std::io::BufReader::new(file);
             let mut session_name = String::new();
             let mut cwd = String::new();
+            let mut last_prompt = String::new();
 
-            for line in reader.lines().take(100).flatten() {
+            for line in reader.lines().flatten() {
                 if line.trim().is_empty() { continue }
                 let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
                 match v["type"].as_str() {
@@ -171,12 +172,17 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
                     }
                     _ => {}
                 }
-                if !session_name.is_empty() && !cwd.is_empty() { break }
+                if v["type"].as_str() == Some("user") {
+                    if let Some(t) = user_text(&v["message"]["content"]) {
+                        last_prompt = t;
+                    }
+                }
             }
 
+            let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
             sessions.push(DisplaySession {
                 session_id,
-                session_name,
+                session_name: display_name,
                 cwd,
                 updated_at,
                 agent_name: "Claude Code".to_string(),
@@ -185,6 +191,20 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
     }
 
     sessions
+}
+
+fn user_text(content: &serde_json::Value) -> Option<String> {
+    match content {
+        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        serde_json::Value::Array(blocks) => {
+            blocks.iter().find_map(|b| {
+                if b["type"].as_str() == Some("text") {
+                    b["text"].as_str().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
+                } else { None }
+            })
+        }
+        _ => None,
+    }
 }
 
 fn agent_color(name: &str) -> u8 {
