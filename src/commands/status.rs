@@ -129,7 +129,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool) -> Resu
                     KeyCode::Down | KeyCode::Char('j') => { if *sel + 1 < repos.len() { *sel += 1; } }
                     KeyCode::Char('g') => { *sel = 0; }
                     KeyCode::Char('G') => { *sel = repos.len().saturating_sub(1); }
-                    KeyCode::Char(' ') => {
+                    KeyCode::Char(' ') | KeyCode::Right => {
                         let idx = *sel;
                         let sessions = load_sessions(&repos[idx].directory);
                         screen = Screen::Sessions { repo_idx: idx, sel: 0, sessions };
@@ -150,7 +150,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool) -> Resu
                     KeyCode::Down | KeyCode::Char('j') => { if *sel + 1 < sessions.len() { *sel += 1; } }
                     KeyCode::Char('g') => { *sel = 0; }
                     KeyCode::Char('G') => { *sel = sessions.len().saturating_sub(1); }
-                    KeyCode::Char(' ') => {
+                    KeyCode::Char(' ') | KeyCode::Right => {
                         if !sessions.is_empty() {
                             let session_id = sessions[*sel].session_id.clone();
                             execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
@@ -199,25 +199,18 @@ fn draw_repos(
     let mut row = 0usize;
 
     for (i, repo) in repos.iter().enumerate() {
-        if row + 1 >= content_h { break } // need at least 2 rows per entry
+        if row >= content_h { break }
 
         let is_sel = i == sel;
         let is_cur = current_repo_dir == Some(repo.directory.as_str());
         let dot_col = if is_cur { "38;5;82" } else { "38;5;240" };
-        let name_col = if is_cur { "38;5;255" } else { "38;5;245" };
 
-        let line1 = format!(
-            "\x1b[{dot_col}m*\x1b[0m \x1b[{name_col}m{}\x1b[0m",
-            repo.name
-        );
-        let line2 = format!(
-            "   \x1b[38;5;240m{}  {}\x1b[0m",
-            repo.directory, repo.remote
+        let line = format!(
+            "\x1b[{dot_col}m*\x1b[0m \x1b[38;5;255m{}\x1b[0m  \x1b[38;5;240m{}  {}\x1b[0m",
+            repo.name, repo.directory, repo.remote
         );
 
-        print_row(stdout, &line1, is_sel, SEL_BG, w, row as u16)?;
-        row += 1;
-        print_row(stdout, &line2, is_sel, SEL_BG, w, row as u16)?;
+        print_row(stdout, &line, is_sel, SEL_BG, w, row as u16)?;
         row += 1;
     }
 
