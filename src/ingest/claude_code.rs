@@ -264,10 +264,10 @@ fn parse_session_file(path: &Path) -> (SessionInfo, Vec<Chunk>) {
     (info, chunks)
 }
 
-fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -> Result<usize> {
+fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -> Result<(usize, Option<String>)> {
     let (info, chunks) = parse_session_file(path);
     if chunks.is_empty() {
-        return Ok(0);
+        return Ok((0, info.custom_title));
     }
 
     let project_name = info
@@ -277,6 +277,7 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
         .unwrap_or_else(|| project_name.to_string());
 
     let session_id = path.file_stem().unwrap().to_string_lossy();
+    let custom_title = info.custom_title.clone();
 
     let session_title: String = info.custom_title.unwrap_or_else(|| {
         chunks
@@ -350,7 +351,7 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
         count += 1;
     }
 
-    Ok(count)
+    Ok((count, custom_title))
 }
 
 /// Ingest new or modified Claude Code sessions from ~/.claude/projects/ into
@@ -366,6 +367,8 @@ pub fn ingest_claude_code(db: &mut DB) -> Result<usize> {
 
     let wm_path = watermark::claude_path();
     let wm_ts = watermark::mtime_ms(&wm_path);
+
+    let gossamer_conn = crate::db::connect().ok();
 
     let mut turn_count = 0usize;
 
@@ -397,7 +400,16 @@ pub fn ingest_claude_code(db: &mut DB) -> Result<usize> {
             let mtime_ms = file_mtime_ms(jsonl_path).unwrap_or(0);
             eprintln!("{}", jsonl_path.display());
             match ingest_session(db, jsonl_path, &project_name, mtime_ms) {
-                Ok(n) => turn_count += n,
+                Ok((n, custom_title)) => {
+                    turn_count += n;
+                    if let (Some(conn), Some(title)) = (&gossamer_conn, custom_title) {
+                        let sid = jsonl_path.file_stem().unwrap().to_string_lossy();
+                        let _ = conn.execute(
+                            "UPDATE sessions SET session_name = ?1 WHERE session_id = ?2",
+                            rusqlite::params![title, sid.as_ref()],
+                        );
+                    }
+                }
                 Err(e) => eprintln!("  warning: failed to ingest {}: {e}", jsonl_path.display()),
             }
         }

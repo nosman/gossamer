@@ -14,7 +14,7 @@ use std::path::PathBuf;
 // ── Data model ────────────────────────────────────────────────────────────────
 
 enum Card {
-    Header    { title: Option<String>, cwd: String, branch: String, ts: String },
+    Header    { title: Option<String>, cwd: String, branch: String, ts: String, agent: String },
     UserMsg   { ts: String, parts: Vec<UserPart> },
     AsstMsg   { ts: String, parts: Vec<AsstPart> },
     ToolRound { parts: Vec<AsstPart> },
@@ -41,19 +41,48 @@ enum Selectable {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 pub fn run(session_id: &str) -> Result<()> {
+    run_at(session_id, None)
+}
+
+pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
     let path = find_session(session_id)
         .with_context(|| format!("no session file found for '{session_id}'"))?;
 
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
 
-    let cards = parse(&raw);
+    // Look up agent name from the gossamer DB using the session UUID (file stem).
+    let agent = path.file_stem()
+        .and_then(|s| s.to_str())
+        .and_then(|uuid| {
+            let conn = crate::db::connect().ok()?;
+            conn.query_row(
+                "SELECT agent_name FROM sessions WHERE session_id = ?1",
+                [uuid],
+                |row| row.get::<_, String>(0),
+            ).ok()
+        })
+        .unwrap_or_default();
+
+    let cards = parse(&raw, &agent);
     if cards.is_empty() {
         println!("No messages found.");
         return Ok(());
     }
 
-    pager(cards)
+    // Extract branch and cwd from the Header before cards are consumed by pager.
+    let session_branch = cards.iter().find_map(|c| {
+        if let Card::Header { branch, .. } = c { Some(branch.clone()) } else { None }
+    }).unwrap_or_default();
+    let session_cwd = cards.iter().find_map(|c| {
+        if let Card::Header { cwd, .. } = c { Some(cwd.clone()) } else { None }
+    }).unwrap_or_default();
+
+    if pager(cards, start_ts)? {
+        do_resume(&agent, session_id, &session_branch, &session_cwd);
+    }
+
+    Ok(())
 }
 
 fn find_session(id: &str) -> Option<PathBuf> {
@@ -71,7 +100,7 @@ fn find_session(id: &str) -> Option<PathBuf> {
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
-fn parse(raw: &str) -> Vec<Card> {
+fn parse(raw: &str, agent: &str) -> Vec<Card> {
     let mut tool_names: HashMap<String, String> = HashMap::new();
     for line in raw.lines() {
         if let Ok(v) = serde_json::from_str::<Value>(line) {
@@ -125,7 +154,7 @@ fn parse(raw: &str) -> Vec<Card> {
         }
     }
 
-    let mut result = vec![Card::Header { title, cwd: first_cwd, branch: first_branch, ts: first_ts }];
+    let mut result = vec![Card::Header { title, cwd: first_cwd, branch: first_branch, ts: first_ts, agent: agent.to_string() }];
     result.extend(cards);
 
     // Merge each pure tool-result UserMsg into the preceding AsstMsg.
@@ -277,10 +306,11 @@ fn parse_asst(content: &Value) -> Vec<AsstPart> {
 fn card_text(card: &Card) -> String {
     let mut out = String::new();
     match card {
-        Card::Header { title, cwd, branch, .. } => {
+        Card::Header { title, cwd, branch, agent, .. } => {
             if let Some(t) = title { out.push_str(t); out.push('\n'); }
             if !cwd.is_empty()    { out.push_str(cwd);               out.push('\n'); }
             if !branch.is_empty() { out.push_str(&format!("[{branch}]")); out.push('\n'); }
+            if !agent.is_empty()  { out.push_str(agent); out.push('\n'); }
         }
         Card::System { content, .. } => { if !content.is_empty() { out.push_str(content); out.push('\n'); } }
         Card::UserMsg { parts, .. } => {
@@ -347,17 +377,33 @@ fn copy_to_clipboard(text: &str) {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-fn render_card(card: &Card, width: usize) -> Vec<String> {
+fn agent_color(name: &str) -> u8 {
+    if      name.contains("Claude")   { 214 }
+    else if name.contains("Copilot")  { 99  }
+    else if name.contains("Cursor")   { 33  }
+    else if name.contains("Gemini")   { 75  }
+    else if name.contains("Aider")    { 42  }
+    else if name.contains("ChatGPT")  { 35  }
+    else if name.contains("Windsurf") { 44  }
+    else if name.contains("Amazon Q") { 208 }
+    else                              { 245 }
+}
+
+fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let w = width.saturating_sub(2);
 
     match card {
-        Card::Header { title, cwd, branch, ts } => {
+        Card::Header { title, cwd, branch, ts, agent: hdr_agent } => {
             let t = title.as_deref().unwrap_or("(untitled session)");
             lines.push(format!("\x1b[1;38;5;229m{t}\x1b[0m"));
-            if !cwd.is_empty()    { lines.push(format!("\x1b[38;5;240m{cwd}\x1b[0m")); }
-            if !branch.is_empty() { lines.push(format!("\x1b[38;5;220m[{branch}]\x1b[0m")); }
-            if !ts.is_empty()     { lines.push(format!("\x1b[38;5;240m{}\x1b[0m", rel_time(ts))); }
+            if !cwd.is_empty()       { lines.push(format!("\x1b[38;5;240m{cwd}\x1b[0m")); }
+            if !branch.is_empty()    { lines.push(format!("\x1b[38;5;220m[{branch}]\x1b[0m")); }
+            if !hdr_agent.is_empty() {
+                let col = agent_color(hdr_agent);
+                lines.push(format!("\x1b[38;5;{col}m{hdr_agent}\x1b[0m"));
+            }
+            if !ts.is_empty()        { lines.push(format!("\x1b[38;5;240m{}\x1b[0m", rel_time(ts))); }
         }
         Card::System { ts, subtype, content } => {
             lines.push(format!("\x1b[38;5;240m── {subtype}  {}\x1b[0m", rel_time(ts)));
@@ -389,7 +435,12 @@ fn render_card(card: &Card, width: usize) -> Vec<String> {
             }
         }
         Card::AsstMsg { ts, parts } => {
-            lines.push(format!("\x1b[1;38;5;75m── claude  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
+            let (agent_label, agent_col) = if agent.is_empty() {
+                ("claude".to_string(), 75u8)
+            } else {
+                (agent.to_lowercase(), agent_color(agent))
+            };
+            lines.push(format!("\x1b[1;38;5;{agent_col}m── {agent_label}  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
             for part in parts {
                 if let AsstPart::Text(text) = part {
                     lines.push(String::new());
@@ -533,6 +584,91 @@ fn rel_time(iso: &str) -> String {
     }
 }
 
+// ── Resume logic ─────────────────────────────────────────────────────────────
+
+fn agent_cli(agent: &str) -> &'static str {
+    if agent.contains("Claude")      { "claude" }
+    else if agent.contains("Gemini") { "gemini" }
+    else if agent.contains("Aider")  { "aider"  }
+    else                             { "claude" }
+}
+
+fn git_current_branch(cwd: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() || s == "HEAD" { None } else { Some(s) }
+}
+
+fn create_resume_worktree(cwd: &str, branch: &str) -> Option<String> {
+    let root_out = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .ok()?;
+    if !root_out.status.success() { return None; }
+    let repo_root = String::from_utf8_lossy(&root_out.stdout).trim().to_string();
+
+    let repo_path = std::path::Path::new(&repo_root);
+    let parent = repo_path.parent()?;
+    let repo_name = repo_path.file_name()?.to_str()?;
+    let wt_path = parent.join(format!("{repo_name}-{branch}"));
+
+    // Branch already exists; add a worktree pointing at it.
+    let _ = std::process::Command::new("git")
+        .args(["worktree", "add", wt_path.to_str()?, branch])
+        .current_dir(&repo_root)
+        .output();
+
+    if wt_path.exists() { Some(wt_path.to_string_lossy().to_string()) } else { None }
+}
+
+fn resume_via_entire(dir: &str) {
+    use std::os::unix::process::CommandExt;
+    let Ok(out) = std::process::Command::new("entire")
+        .arg("resume")
+        .current_dir(dir)
+        .output() else { eprintln!("entire resume failed"); return; };
+
+    let cmd_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if cmd_str.is_empty() { eprintln!("entire resume returned no command"); return; }
+
+    let mut parts = cmd_str.split_whitespace();
+    let Some(prog) = parts.next() else { return; };
+    let args: Vec<&str> = parts.collect();
+    let err = std::process::Command::new(prog).args(&args).current_dir(dir).exec();
+    eprintln!("exec failed: {err}");
+}
+
+fn do_resume(agent: &str, session_id: &str, session_branch: &str, session_cwd: &str) {
+    use std::os::unix::process::CommandExt;
+
+    let current = git_current_branch(session_cwd);
+    let same_branch = !session_branch.is_empty()
+        && current.as_deref() == Some(session_branch);
+
+    if same_branch {
+        let err = std::process::Command::new(agent_cli(agent))
+            .arg("--resume")
+            .arg(session_id)
+            .current_dir(session_cwd)
+            .exec();
+        eprintln!("exec failed: {err}");
+    } else {
+        let dir = if !session_branch.is_empty() {
+            create_resume_worktree(session_cwd, session_branch)
+                .unwrap_or_else(|| session_cwd.to_string())
+        } else {
+            session_cwd.to_string()
+        };
+        resume_via_entire(&dir);
+    }
+}
+
 // ── Pager ─────────────────────────────────────────────────────────────────────
 
 fn build_flat(
@@ -544,6 +680,11 @@ fn build_flat(
     let mut flat: Vec<(usize, String)> = Vec::new();
     let mut selectables: Vec<Selectable> = Vec::new();
     let mut starts: Vec<usize> = Vec::new();
+
+    // Pull the agent name from the Header card so render_card can use it.
+    let agent: &str = cards.iter().find_map(|c| {
+        if let Card::Header { agent, .. } = c { Some(agent.as_str()) } else { None }
+    }).unwrap_or("");
 
     for (card_idx, card) in cards.iter().enumerate() {
         if let Card::ToolRound { parts } = card {
@@ -570,14 +711,14 @@ fn build_flat(
             let si = selectables.len();
             starts.push(flat.len());
             selectables.push(Selectable::Card(card_idx));
-            for l in render_card(card, w) { flat.push((si, l)); }
+            for l in render_card(card, w, agent) { flat.push((si, l)); }
         }
     }
 
     (flat, selectables, starts)
 }
 
-fn pager(cards: Vec<Card>) -> Result<()> {
+fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<bool> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
     let mut h = (term_h as usize).saturating_sub(1);
@@ -601,18 +742,33 @@ fn pager(cards: Vec<Card>) -> Result<()> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let mut sel:    usize = if selectables.len() > 1 { 1 } else { 0 };
+    // If a target timestamp was given, jump to the first card whose ts matches.
+    let initial_sel = start_ts.and_then(|ts| {
+        cards.iter().enumerate().find_map(|(ci, card)| {
+            let card_ts = match card {
+                Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => ts.as_str(),
+                _ => return None,
+            };
+            if card_ts == ts {
+                selectables.iter().position(|s| *s == Selectable::Card(ci))
+            } else {
+                None
+            }
+        })
+    }).unwrap_or(if selectables.len() > 1 { 1 } else { 0 });
+
+    let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
     let mut flash:  Option<&str> = None;
 
-    let result: Result<()> = loop {
+    let result: Result<bool> = loop {
         let s = starts[sel];
         let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
         if s < scroll          { scroll = s; }
         else if e > scroll + h { scroll = e.saturating_sub(h); }
 
         if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, selectables.len(), flash) {
-            break Err(err.into());
+            break Err(anyhow::anyhow!(err));
         }
 
         match event::read() {
@@ -620,8 +776,9 @@ fn pager(cards: Vec<Card>) -> Result<()> {
             Ok(Event::Key(k)) => {
                 let prev_flash = flash.take();
                 match (k.code, k.modifiers) {
-                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(()),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(()),
+                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(false),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(false),
+                    (KeyCode::Char('r'), _) => break Ok(true),
 
                     (KeyCode::Down | KeyCode::Char('j'), _) => {
                         if sel + 1 < selectables.len() { sel += 1; }
@@ -729,7 +886,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  ↑↓/jk msg  space expand  d/u page  g/G ends  y/c copy  q quit  ",
+        "  {}/{} msgs  lines {}-{}  ↑↓/jk msg  space expand  d/u page  g/G ends  y/c copy  r resume  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {

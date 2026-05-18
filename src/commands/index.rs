@@ -36,16 +36,14 @@ pub fn run() -> Result<()> {
 
     println!("\n{} session(s) indexed.", grand_total);
 
-    // Ingest Claude Code sessions into the witchcraft semantic search DB.
-    println!("\nIndexing Claude Code sessions into search DB...");
+    // Ingest into witchcraft semantic search DB.
+    println!("\nIndexing into search DB...");
     let mut wc_db = ingest::open_search_db()?;
-    let turns = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
-    if turns > 0 {
-        println!("{turns} turn(s) ingested.");
-        ingest::embed_and_index(&wc_db)?;
-    } else {
-        println!("No new Claude Code sessions to index.");
-    }
+    let turns    = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
+    let sessions = ingest::ingest_sessions(&mut wc_db).unwrap_or(0);
+    let repos    = ingest::ingest_repos(&mut wc_db).unwrap_or(0);
+    println!("{turns} log turn(s), {sessions} session name(s), {repos} repo(s) indexed.");
+    ingest::embed_and_index(&wc_db)?;
 
     Ok(())
 }
@@ -214,11 +212,10 @@ pub(crate) fn parse_session(
     let mut latest: Option<DateTime<Utc>> = None;
     let mut cwd = String::new();
     let mut last_prompt: Option<String> = None;
+    let mut custom_title: Option<String> = None;
 
     for line in jsonl_bytes.split(|&b| b == b'\n') {
-        if line.is_empty() {
-            continue;
-        }
+        if line.is_empty() { continue; }
         let v: Value = match serde_json::from_slice(line) {
             Ok(v) => v,
             Err(_) => continue,
@@ -227,30 +224,33 @@ pub(crate) fn parse_session(
         if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
             if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
                 let dt: DateTime<Utc> = dt.with_timezone(&Utc);
-                if latest.map_or(true, |l| dt > l) {
-                    latest = Some(dt);
-                }
+                if latest.map_or(true, |l| dt > l) { latest = Some(dt); }
             }
         }
 
         if cwd.is_empty() {
-            if let Some(c) = v.get("cwd").and_then(Value::as_str) {
-                cwd = c.to_string();
-            }
+            if let Some(c) = v.get("cwd").and_then(Value::as_str) { cwd = c.to_string(); }
         }
 
-        if v.get("type").and_then(Value::as_str) == Some("user") {
-            if let Some(Value::String(text)) = v.get("message").and_then(|m| m.get("content")) {
-                let text = text.trim().to_string();
-                if !text.is_empty() {
-                    last_prompt = Some(text);
+        match v.get("type").and_then(Value::as_str) {
+            Some("custom-title") => {
+                if let Some(t) = v.get("customTitle").and_then(Value::as_str) {
+                    if !t.trim().is_empty() { custom_title = Some(t.trim().to_string()); }
                 }
             }
+            Some("user") => {
+                if let Some(Value::String(text)) = v.get("message").and_then(|m| m.get("content")) {
+                    let text = text.trim().to_string();
+                    if !text.is_empty() { last_prompt = Some(text); }
+                }
+            }
+            _ => {}
         }
     }
 
     let updated_at = latest.unwrap_or(created_at);
-    let session_name = last_prompt.unwrap_or(session_name);
+    // Priority: explicit rename > last user prompt > metadata summary
+    let session_name = custom_title.or(last_prompt).unwrap_or(session_name);
 
     Ok((
         meta.session_id,

@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 mod commands;
+mod config;
 mod db;
 mod entity;
 mod ingest;
@@ -44,6 +45,11 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         top_k: usize,
     },
+    /// Remove a session: runs `entire clean`, deletes from DB, removes search index entries
+    Clean {
+        /// Session ID to clean up
+        session_id: String,
+    },
     /// Attach an existing session with entireio and index it into witchcraft
     Attach {
         /// Session ID to attach
@@ -55,9 +61,17 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
+    /// Show or set gossamer configuration
+    Config {
+        /// Path to the witchcraft assets directory (enables semantic search)
+        assets: Option<String>,
+    },
     /// Called by the Claude Code SessionStart hook — reads JSON from stdin
     #[command(hide = true)]
     SessionStart,
+    /// Called by the Claude Code Stop hook — ingests the finished session
+    #[command(hide = true)]
+    SessionStop,
 }
 
 fn main() -> Result<()> {
@@ -70,8 +84,12 @@ fn main() -> Result<()> {
         Commands::Refresh => commands::refresh::run()?,
         Commands::Show { session } => commands::show::run(&session)?,
         Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k)?,
+        Commands::Clean { session_id } => commands::clean::run(&session_id)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force)?,
+        Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
+        Commands::Config { assets: None }       => config::show(),
         Commands::SessionStart => commands::session_start::run()?,
+        Commands::SessionStop  => commands::session_stop::run()?,
     }
     Ok(())
 }

@@ -23,11 +23,22 @@ pub fn run() -> Result<()> {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
 
+    let pending_name = read_and_clear_pending_session_name().unwrap_or_default();
+
     conn.execute(
         "INSERT OR IGNORE INTO sessions (session_id, agent_name, user, created_at, updated_at, cwd, session_name)
-         VALUES (?1, 'Claude Code', ?2, ?3, ?3, ?4, '')",
-        rusqlite::params![input.session_id, user, now, input.cwd.unwrap_or_default()],
+         VALUES (?1, 'Claude Code', ?2, ?3, ?3, ?4, ?5)",
+        rusqlite::params![input.session_id, user, now, input.cwd.unwrap_or_default(), pending_name],
     )?;
 
     Ok(())
+}
+
+fn read_and_clear_pending_session_name() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::PathBuf::from(&home).join(".gossamer/pending_session_name");
+    let content = std::fs::read_to_string(&path).ok()?;
+    let _ = std::fs::remove_file(&path);
+    let name = content.trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
 }

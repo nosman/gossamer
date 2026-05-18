@@ -160,44 +160,76 @@ fn install_claude_hook() -> Result<()> {
         json!({})
     };
 
-    let hooks = settings
+    let hooks_obj = settings
         .as_object_mut()
         .context("settings.json is not an object")?
         .entry("hooks")
         .or_insert(json!({}))
         .as_object_mut()
-        .context("hooks is not an object")?
-        .entry("SessionStart")
-        .or_insert(json!([]))
-        .as_array_mut()
-        .context("SessionStart is not an array")?;
+        .context("hooks is not an object")?;
 
-    let already_registered = hooks.iter().any(|entry| {
-        entry
-            .get("hooks")
-            .and_then(Value::as_array)
-            .map_or(false, |cmds| {
-                cmds.iter().any(|c| {
-                    c.get("command").and_then(Value::as_str) == Some("gossamer session-start")
+    // SessionStart
+    {
+        let start_hooks = hooks_obj
+            .entry("SessionStart")
+            .or_insert(json!([]))
+            .as_array_mut()
+            .context("SessionStart is not an array")?;
+
+        let already = start_hooks.iter().any(|e| {
+            e.get("hooks")
+                .and_then(Value::as_array)
+                .map_or(false, |cmds| {
+                    cmds.iter().any(|c| {
+                        c.get("command").and_then(Value::as_str) == Some("gossamer session-start")
+                    })
                 })
-            })
-    });
-
-    if already_registered {
-        println!("Claude Code SessionStart hook already registered, skipping.");
-        return Ok(());
+        });
+        if !already {
+            start_hooks.push(json!({
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "gossamer session-start" }]
+            }));
+            println!("Registered Claude Code SessionStart hook.");
+        } else {
+            println!("Claude Code SessionStart hook already registered, skipping.");
+        }
     }
 
-    hooks.push(json!({
-        "matcher": "",
-        "hooks": [{ "type": "command", "command": "gossamer session-start" }]
-    }));
+    // Stop
+    {
+        let stop_hooks = hooks_obj
+            .entry("Stop")
+            .or_insert(json!([]))
+            .as_array_mut()
+            .context("Stop is not an array")?;
+
+        let already = stop_hooks.iter().any(|e| {
+            e.get("hooks")
+                .and_then(Value::as_array)
+                .map_or(false, |cmds| {
+                    cmds.iter().any(|c| {
+                        c.get("command").and_then(Value::as_str)
+                            == Some("gossamer session-stop >/dev/null 2>&1")
+                    })
+                })
+        });
+        if !already {
+            stop_hooks.push(json!({
+                "matcher": "",
+                "hooks": [{ "type": "command", "command": "gossamer session-stop >/dev/null 2>&1" }]
+            }));
+            println!("Registered Claude Code Stop hook.");
+        } else {
+            println!("Claude Code Stop hook already registered, skipping.");
+        }
+    }
 
     if let Some(parent) = settings_path.parent() {
         fs::create_dir_all(parent)?;
     }
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    println!("Registered Claude Code SessionStart hook in {}.", settings_path.display());
+    println!("Claude Code hooks saved to {}.", settings_path.display());
     Ok(())
 }
 

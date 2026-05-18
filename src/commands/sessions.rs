@@ -87,8 +87,8 @@ pub fn run(all: bool) -> Result<()> {
         let is_local = current_repo_dir.as_deref().map_or(false, |d| s.cwd.starts_with(d));
 
         let dot = match age {
-            a if a < 3_600  => "\x1b[38;5;82m*\x1b[0m",
-            a if a < 86_400 => "\x1b[38;5;214m*\x1b[0m",
+            a if a < 900    => "\x1b[38;5;82m*\x1b[0m",
+            a if a < 3_600  => "\x1b[38;5;214m*\x1b[0m",
             _               => "\x1b[38;5;240m*\x1b[0m",
         };
 
@@ -124,7 +124,7 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
     let projects_dir = PathBuf::from(&home).join(".claude/projects");
     let Ok(projects) = std::fs::read_dir(&projects_dir) else { return vec![] };
 
-    let mut sessions = Vec::new();
+    let mut sessions: Vec<DisplaySession> = Vec::new();
 
     for project_entry in projects.flatten() {
         let project_dir = project_entry.path();
@@ -141,17 +141,13 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
                 None => continue,
             };
 
-            if known_ids.contains(&session_id) { continue }
-
-            // File mtime is fast and close enough for sorting/filtering
-            let updated_at = file_entry.metadata().ok()
+            let file_mtime = file_entry.metadata().ok()
                 .and_then(|m| m.modified().ok())
                 .map(DateTime::<Utc>::from)
                 .unwrap_or_else(Utc::now);
 
-            if !all && updated_at < cutoff { continue }
+            if !all && file_mtime < cutoff { continue }
 
-            // Read only the first 100 lines for name and cwd
             let Ok(file) = std::fs::File::open(&path) else { continue };
             let reader = std::io::BufReader::new(file);
             let mut session_name = String::new();
@@ -180,11 +176,21 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
             }
 
             let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
+
+            if known_ids.contains(&session_id) {
+                // Refresh the existing DB entry's name and timestamp
+                if let Some(existing) = sessions.iter_mut().find(|s| s.session_id == session_id) {
+                    if !display_name.is_empty() { existing.session_name = display_name; }
+                    if file_mtime > existing.updated_at { existing.updated_at = file_mtime; }
+                }
+                continue;
+            }
+
             sessions.push(DisplaySession {
                 session_id,
                 session_name: display_name,
                 cwd,
-                updated_at,
+                updated_at: file_mtime,
                 agent_name: "Claude Code".to_string(),
             });
         }
