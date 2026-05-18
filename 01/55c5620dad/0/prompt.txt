@@ -1,0 +1,9 @@
+What are some good ways to integrate the entireio commands with git and claude commands?
+
+---
+
+let's do 3 then
+
+---
+
+let's write a way to clean up sessions. it should take a session id, then call "entire clean" with it, and then also delete any entries from the db with that session id. Is it also possible to delete hits indexed in the search db?
