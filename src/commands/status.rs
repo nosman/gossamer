@@ -20,6 +20,7 @@ struct RepoSession {
     updated_at: DateTime<Utc>,
     branch: String,
     agent: String,
+    backed_up: bool, // registered in the gossamer DB (tracked by entire)
 }
 
 struct RepoWorktree {
@@ -349,6 +350,9 @@ fn draw_repos(
     let content_h = h.saturating_sub(1);
     let mut row = 0usize;
 
+    let name_w = repos.iter().map(|r| r.name.chars().count()).max().unwrap_or(0);
+    let dir_w  = repos.iter().map(|r| r.directory.chars().count()).max().unwrap_or(0);
+
     for (i, repo) in repos.iter().enumerate() {
         if row >= content_h { break }
 
@@ -356,9 +360,11 @@ fn draw_repos(
         let is_cur = current_repo_dir == Some(repo.directory.as_str());
         let dot_col = if is_cur { "38;5;82" } else { "38;5;240" };
 
+        let name_padded = format!("{:<name_w$}", repo.name);
+        let dir_padded  = format!("{:<dir_w$}",  repo.directory);
         let line = format!(
-            "\x1b[{dot_col}m*\x1b[0m \x1b[38;5;255m{}\x1b[0m  \x1b[38;5;240m{}  {}\x1b[0m",
-            repo.name, repo.directory, repo.remote
+            "\x1b[{dot_col}m*\x1b[0m \x1b[38;5;255m{name_padded}\x1b[0m  \x1b[38;5;240m{dir_padded}  {}\x1b[0m",
+            repo.remote
         );
 
         print_row(stdout, &line, is_sel, SEL_BG, w, row as u16)?;
@@ -444,12 +450,17 @@ fn draw_sessions(
             row += 1;
         }
     } else {
+        // Pre-compute column widths for table alignment
+        let name_w   = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
+        let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
+        let agent_w  = sessions.iter().map(|s| s.agent.chars().count()).max().unwrap_or(0);
+
         for (i, s) in sessions.iter().enumerate().skip(scroll) {
             if row >= content_h { break; }
 
             let id_short: String = s.session_id.chars().take(8).collect();
             let ts = relative_time(s.updated_at);
-            let name = s.session_name.trim();
+            let name: String = s.session_name.trim().chars().take(name_w).collect();
             let age = (Utc::now() - s.updated_at).num_seconds().max(0);
             let dot_col = match age {
                 a if a < 900   => "38;5;82",
@@ -457,21 +468,30 @@ fn draw_sessions(
                 _              => "38;5;240",
             };
 
-            let branch_part = if s.branch.is_empty() {
-                String::new()
+            let (name_col, meta_col, dot_char) = if s.backed_up {
+                ("38;5;255", "38;5;240", "*")
             } else {
-                format!("  \x1b[38;5;75m{}\x1b[0m", s.branch)
+                ("38;5;242", "38;5;238", "·")
             };
-            let agent_part = if s.agent.is_empty() {
-                String::new()
-            } else {
-                format!("  \x1b[38;5;{}m{}\x1b[0m", agent_color(&s.agent), s.agent)
-            };
-            let line = if name.is_empty() {
-                format!("\x1b[{dot_col}m*\x1b[38;5;240m  {id_short}  {ts}\x1b[0m")
-            } else {
-                format!("\x1b[{dot_col}m*\x1b[0m \x1b[38;5;255m{name}\x1b[0m{branch_part}{agent_part}\x1b[38;5;240m  {id_short}  {ts}\x1b[0m")
-            };
+            let branch_col = if s.backed_up { "38;5;75" } else { "38;5;239" };
+
+            let name_padded = format!("{:<name_w$}", name);
+            let mut line = format!("\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m");
+
+            if branch_w > 0 {
+                let b: String = s.branch.chars().take(branch_w).collect();
+                let pad = " ".repeat(branch_w - b.chars().count());
+                line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
+            }
+
+            if agent_w > 0 {
+                let col = if s.backed_up { agent_color(&s.agent) } else { 239 };
+                let a: String = s.agent.chars().take(agent_w).collect();
+                let pad = " ".repeat(agent_w - a.chars().count());
+                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+            }
+
+            line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
             print_row(stdout, &line, i == sel, SEL_BG, w, row as u16)?;
             row += 1;
@@ -580,6 +600,7 @@ fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
                     updated_at,
                     branch: String::new(),
                     agent: row.get(3)?,
+                    backed_up: true,
                 })
             }).map(|rows| {
                 for r in rows.flatten() { sessions.push(r); }
@@ -657,6 +678,7 @@ fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
                             updated_at: file_mtime,
                             branch: git_branch,
                             agent: String::new(),
+                            backed_up: false,
                         });
                     }
                 }

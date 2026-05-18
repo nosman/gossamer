@@ -78,8 +78,10 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
         if let Card::Header { cwd, .. } = c { Some(cwd.clone()) } else { None }
     }).unwrap_or_default();
 
-    if pager(cards, start_ts)? {
-        do_resume(&agent, session_id, &session_branch, &session_cwd);
+    match pager(cards, start_ts)? {
+        PagerOutcome::Resume => do_resume(&agent, session_id, &session_branch, &session_cwd),
+        PagerOutcome::Delete => { super::clean::run(session_id)?; }
+        PagerOutcome::Quit   => {}
     }
 
     Ok(())
@@ -718,7 +720,9 @@ fn build_flat(
     (flat, selectables, starts)
 }
 
-fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<bool> {
+enum PagerOutcome { Quit, Resume, Delete }
+
+fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
     let mut h = (term_h as usize).saturating_sub(1);
@@ -760,8 +764,9 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<bool> {
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
     let mut flash:  Option<&str> = None;
+    let mut awaiting_delete = false;
 
-    let result: Result<bool> = loop {
+    let result: Result<PagerOutcome> = loop {
         let s = starts[sel];
         let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
         if s < scroll          { scroll = s; }
@@ -776,9 +781,17 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<bool> {
             Ok(Event::Key(k)) => {
                 let prev_flash = flash.take();
                 match (k.code, k.modifiers) {
-                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(false),
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(false),
-                    (KeyCode::Char('r'), _) => break Ok(true),
+                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(PagerOutcome::Quit),
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(PagerOutcome::Quit),
+                    (KeyCode::Char('r'), _) => break Ok(PagerOutcome::Resume),
+                    (KeyCode::Char('d'), _) => {
+                        awaiting_delete = true;
+                        flash = Some("  Delete session? Press y to confirm, any other key to cancel  ");
+                        continue;
+                    }
+                    (KeyCode::Char('y'), _) if awaiting_delete => {
+                        break Ok(PagerOutcome::Delete);
+                    }
 
                     (KeyCode::Down | KeyCode::Char('j'), _) => {
                         if sel + 1 < selectables.len() { sel += 1; }
@@ -830,7 +843,7 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<bool> {
                         }
                     }
 
-                    _ => { flash = prev_flash; }
+                    _ => { awaiting_delete = false; flash = prev_flash; }
                 }
             }
             Ok(Event::Resize(new_w, new_h)) => {
@@ -886,7 +899,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  ↑↓/jk msg  space expand  d/u page  g/G ends  y/c copy  r resume  q quit  ",
+        "  {}/{} msgs  lines {}-{}  ↑↓/jk  space expand  d/u page  g/G ends  y/c copy  r resume  d delete  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
