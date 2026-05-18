@@ -1,0 +1,9 @@
+What's the latest changes in this code?
+
+---
+
+in the repo details page, can you align the session list so that it looks more like a clean table? i want the rows to align with each other
+
+---
+
+can you also align the repos page?
