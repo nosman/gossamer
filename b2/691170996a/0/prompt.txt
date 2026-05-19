@@ -1,0 +1,9 @@
+whenever you change the code, reinstall gossamer at the end.
+
+---
+
+For the gossamer resume command, if resuming the session with claude code fails, i want to fall back to resuming it with 'entire resume'. is there a way we can detect if a session exists in claude before handing off control to claude?
+
+---
+
+im `No conversation found with session ID: 67388535-7546-4454-b0a6-0a7894610496` - are we handling directories correctly? maybe we need to cd if the session didn't originate in our directory
