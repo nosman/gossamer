@@ -1,0 +1,1 @@
+Entire has more configuration arguments than that. Please check the https://docs.entire.io/cli/commands#configure docs here. We should do a wizard to collect the options and default to push_sessions false and other sensible defaults. when it asks what agents, we should guess based on if we can detect them or not.
