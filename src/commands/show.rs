@@ -622,11 +622,23 @@ fn create_resume_worktree(cwd: &str, branch: &str) -> Option<String> {
     if wt_path.exists() { Some(wt_path.to_string_lossy().to_string()) } else { None }
 }
 
-fn resume_via_entire(dir: &str) {
+fn resume_via_entire(dir: &str, branch: &str) {
     use std::os::unix::process::CommandExt;
+
+    let launch_dir = if !branch.is_empty() {
+        let current = git_current_branch(dir);
+        if current.as_deref() != Some(branch) {
+            create_resume_worktree(dir, branch).unwrap_or_else(|| dir.to_string())
+        } else {
+            dir.to_string()
+        }
+    } else {
+        dir.to_string()
+    };
+
     let Ok(out) = std::process::Command::new("entire")
         .arg("resume")
-        .current_dir(dir)
+        .current_dir(&launch_dir)
         .output() else { eprintln!("entire resume failed"); return; };
 
     let cmd_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -635,30 +647,35 @@ fn resume_via_entire(dir: &str) {
     let mut parts = cmd_str.split_whitespace();
     let Some(prog) = parts.next() else { return; };
     let args: Vec<&str> = parts.collect();
-    let err = std::process::Command::new(prog).args(&args).current_dir(dir).exec();
+    let err = std::process::Command::new(prog).args(&args).current_dir(&launch_dir).exec();
     eprintln!("exec failed: {err}");
 }
 
-/// Find a Claude session by ID. Returns the session's original cwd (from the JSONL) if found,
-/// so `claude --resume` can be run from the correct project directory.
-fn find_claude_session_cwd(session_id: &str) -> Option<String> {
+/// Find a Claude session by ID. Returns `(cwd, git_branch)` from the JSONL if found,
+/// so `claude --resume` can be run from the correct directory and branch is known.
+fn find_claude_session_cwd(session_id: &str) -> Option<(String, String)> {
     use std::io::BufRead;
     let home = std::env::var("HOME").ok()?;
     let projects = std::path::PathBuf::from(&home).join(".claude/projects");
     for dir in std::fs::read_dir(&projects).ok()?.flatten() {
         let jsonl = dir.path().join(format!("{session_id}.jsonl"));
         if !jsonl.exists() { continue; }
-        // Extract the cwd from the first entry that has one.
-        let Ok(file) = std::fs::File::open(&jsonl) else { return Some(String::new()); };
+        let Ok(file) = std::fs::File::open(&jsonl) else { return Some((String::new(), String::new())); };
+        let mut cwd = String::new();
+        let mut branch = String::new();
         for line in std::io::BufReader::new(file).lines().flatten() {
             let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
             if matches!(v["type"].as_str(), Some("user") | Some("system")) {
-                if let Some(c) = v["cwd"].as_str() {
-                    return Some(c.to_string());
+                if cwd.is_empty() {
+                    if let Some(c) = v["cwd"].as_str() { cwd = c.to_string(); }
                 }
+                if branch.is_empty() {
+                    if let Some(b) = v["gitBranch"].as_str() { branch = b.to_string(); }
+                }
+                if !cwd.is_empty() && !branch.is_empty() { break; }
             }
         }
-        return Some(String::new()); // file exists but no cwd entry
+        return Some((cwd, branch));
     }
     None
 }
@@ -682,7 +699,7 @@ fn do_resume(_agent: &str, session_id: &str, session_branch: &str, session_cwd: 
 /// `fallback_cwd` is used for `entire resume` if the Claude session isn't found.
 pub fn resume_session(session_id: &str, fallback_cwd: &str) {
     use std::os::unix::process::CommandExt;
-    if let Some(session_cwd) = find_claude_session_cwd(session_id) {
+    if let Some((session_cwd, session_branch)) = find_claude_session_cwd(session_id) {
         let launch_dir = if session_cwd.is_empty() || !std::path::Path::new(&session_cwd).exists() {
             fallback_cwd.to_string()
         } else {
@@ -694,8 +711,10 @@ pub fn resume_session(session_id: &str, fallback_cwd: &str) {
             .current_dir(&launch_dir)
             .exec();
         eprintln!("exec failed: {err}");
+        // exec failed — fall back to entire resume, checking out the session branch first
+        resume_via_entire(&launch_dir, &session_branch);
     } else {
-        resume_via_entire(fallback_cwd);
+        resume_via_entire(fallback_cwd, "");
     }
 }
 
