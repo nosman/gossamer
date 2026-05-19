@@ -1,0 +1,9 @@
+Does the jsonl from the entireio session contain branch names?
+
+---
+
+Yes, grab the gitBranch. That way, we know if we need to check out the branch ahead of time before calling entire resume
+
+---
+
+Instead of running plain git checkout, can it create a worktree for that branch? then run entire from that new worktree directory to resume?
