@@ -62,6 +62,17 @@
             "command": "entire hooks claude-code stop"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cargo install --path /Users/stephanostsoucas/p/gossamer 2>&1 || true",
+            "timeout": 120,
+            "statusMessage": "Reinstalling gossamer..."
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

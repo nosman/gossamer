@@ -588,13 +588,6 @@ fn rel_time(iso: &str) -> String {
 
 // ── Resume logic ─────────────────────────────────────────────────────────────
 
-fn agent_cli(agent: &str) -> &'static str {
-    if agent.contains("Claude")      { "claude" }
-    else if agent.contains("Gemini") { "gemini" }
-    else if agent.contains("Aider")  { "aider"  }
-    else                             { "claude" }
-}
-
 fn git_current_branch(cwd: &str) -> Option<String> {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -646,28 +639,63 @@ fn resume_via_entire(dir: &str) {
     eprintln!("exec failed: {err}");
 }
 
-fn do_resume(agent: &str, session_id: &str, session_branch: &str, session_cwd: &str) {
-    use std::os::unix::process::CommandExt;
+/// Find a Claude session by ID. Returns the session's original cwd (from the JSONL) if found,
+/// so `claude --resume` can be run from the correct project directory.
+fn find_claude_session_cwd(session_id: &str) -> Option<String> {
+    use std::io::BufRead;
+    let home = std::env::var("HOME").ok()?;
+    let projects = std::path::PathBuf::from(&home).join(".claude/projects");
+    for dir in std::fs::read_dir(&projects).ok()?.flatten() {
+        let jsonl = dir.path().join(format!("{session_id}.jsonl"));
+        if !jsonl.exists() { continue; }
+        // Extract the cwd from the first entry that has one.
+        let Ok(file) = std::fs::File::open(&jsonl) else { return Some(String::new()); };
+        for line in std::io::BufReader::new(file).lines().flatten() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
+            if matches!(v["type"].as_str(), Some("user") | Some("system")) {
+                if let Some(c) = v["cwd"].as_str() {
+                    return Some(c.to_string());
+                }
+            }
+        }
+        return Some(String::new()); // file exists but no cwd entry
+    }
+    None
+}
 
+fn do_resume(_agent: &str, session_id: &str, session_branch: &str, session_cwd: &str) {
     let current = git_current_branch(session_cwd);
     let same_branch = !session_branch.is_empty()
         && current.as_deref() == Some(session_branch);
 
-    if same_branch {
-        let err = std::process::Command::new(agent_cli(agent))
+    let dir = if same_branch || session_branch.is_empty() {
+        session_cwd.to_string()
+    } else {
+        create_resume_worktree(session_cwd, session_branch)
+            .unwrap_or_else(|| session_cwd.to_string())
+    };
+
+    resume_session(session_id, &dir);
+}
+
+/// Resume a session by ID, falling back to `entire resume` if the Claude JSONL is absent.
+/// `fallback_cwd` is used for `entire resume` if the Claude session isn't found.
+pub fn resume_session(session_id: &str, fallback_cwd: &str) {
+    use std::os::unix::process::CommandExt;
+    if let Some(session_cwd) = find_claude_session_cwd(session_id) {
+        let launch_dir = if session_cwd.is_empty() || !std::path::Path::new(&session_cwd).exists() {
+            fallback_cwd.to_string()
+        } else {
+            session_cwd
+        };
+        let err = std::process::Command::new("claude")
             .arg("--resume")
             .arg(session_id)
-            .current_dir(session_cwd)
+            .current_dir(&launch_dir)
             .exec();
         eprintln!("exec failed: {err}");
     } else {
-        let dir = if !session_branch.is_empty() {
-            create_resume_worktree(session_cwd, session_branch)
-                .unwrap_or_else(|| session_cwd.to_string())
-        } else {
-            session_cwd.to_string()
-        };
-        resume_via_entire(&dir);
+        resume_via_entire(fallback_cwd);
     }
 }
 

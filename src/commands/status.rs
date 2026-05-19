@@ -100,12 +100,8 @@ pub fn run() -> Result<()> {
                 std::fs::write(&file, &path)?;
             }
         }
-        Some(TuiOutcome::ResumeSession(session_id)) => {
-            std::process::Command::new("claude")
-                .arg("--resume")
-                .arg(&session_id)
-                .status()
-                .ok();
+        Some(TuiOutcome::ResumeSession { id, cwd }) => {
+            super::show::resume_session(&id, &cwd);
         }
         Some(TuiOutcome::LaunchAgent { cli, cwd, session_name, prompt }) => {
             use std::os::unix::process::CommandExt;
@@ -124,7 +120,7 @@ pub fn run() -> Result<()> {
 
 enum TuiOutcome {
     CdTo(String),
-    ResumeSession(String),
+    ResumeSession { id: String, cwd: String },
     LaunchAgent { cli: String, cwd: String, session_name: String, prompt: String },
 }
 
@@ -162,7 +158,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         PushSessions(usize),
         Cd(String),
         ShowSession(String),
-        ResumeSession(String),
+        ResumeSession(String, String), // (session_id, repo_dir)
         Search(String),
         NewWorktree(String), // branch name
         NewSession(NewSessionConfig),
@@ -217,7 +213,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                     }
                     KeyCode::Char('r') => {
                         if sessions.is_empty() { Cmd::None }
-                        else { Cmd::ResumeSession(sessions[*sel].session_id.clone()) }
+                        else { Cmd::ResumeSession(sessions[*sel].session_id.clone(), repos[*repo_idx].directory.clone()) }
                     }
                     KeyCode::Char('/') => match collect_search_query(stdout, w, h) {
                         Some(q) if !q.trim().is_empty() => Cmd::Search(q),
@@ -254,7 +250,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                 stack.push(Screen::Sessions { repo_idx: idx, sel: 0, sessions, worktrees });
             }
             Cmd::Cd(path) => return Ok(Some(TuiOutcome::CdTo(path))),
-            Cmd::ResumeSession(id) => return Ok(Some(TuiOutcome::ResumeSession(id))),
+            Cmd::ResumeSession(id, cwd) => return Ok(Some(TuiOutcome::ResumeSession { id, cwd })),
             Cmd::ShowSession(id) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
@@ -1001,12 +997,8 @@ pub fn run_for_dir(repo_dir: &str) -> Result<()> {
     terminal::disable_raw_mode()?;
 
     match outcome? {
-        Some(TuiOutcome::ResumeSession(session_id)) => {
-            std::process::Command::new("claude")
-                .arg("--resume")
-                .arg(&session_id)
-                .status()
-                .ok();
+        Some(TuiOutcome::ResumeSession { id, cwd }) => {
+            super::show::resume_session(&id, &cwd);
         }
         Some(TuiOutcome::LaunchAgent { cli, cwd, session_name, prompt }) => {
             use std::os::unix::process::CommandExt;
