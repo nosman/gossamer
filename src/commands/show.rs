@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 // ── Data model ────────────────────────────────────────────────────────────────
 
@@ -405,6 +406,48 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
+// ── Markdown rendering ────────────────────────────────────────────────────────
+
+static MD_SKIN: OnceLock<termimad::MadSkin> = OnceLock::new();
+
+fn md_skin() -> &'static termimad::MadSkin {
+    MD_SKIN.get_or_init(|| {
+        use crossterm::style::{Attribute, Color};
+        let mut skin = termimad::MadSkin::default();
+        // Bright white bold
+        skin.bold.set_fg(Color::AnsiValue(255));
+        skin.bold.add_attr(Attribute::Bold);
+        // Italic — subtle light color
+        skin.italic.set_fg(Color::AnsiValue(252));
+        skin.italic.add_attr(Attribute::Italic);
+        // Inline code — cyan, no background
+        skin.inline_code.set_fg(Color::AnsiValue(116));
+        skin.inline_code.object_style.background_color = None;
+        // Code blocks — similar cyan, no background
+        skin.code_block.compound_style.set_fg(Color::AnsiValue(116));
+        skin.code_block.compound_style.object_style.background_color = None;
+        // Normal paragraph text — light grey
+        skin.paragraph.compound_style.set_fg(Color::AnsiValue(252));
+        // Headers — bright
+        skin.headers[0].compound_style.set_fg(Color::AnsiValue(229));
+        skin.headers[0].compound_style.add_attr(Attribute::Bold);
+        skin.headers[1].compound_style.set_fg(Color::AnsiValue(222));
+        skin.headers[1].compound_style.add_attr(Attribute::Bold);
+        skin.headers[2].compound_style.set_fg(Color::AnsiValue(216));
+        skin.headers[2].compound_style.add_attr(Attribute::Bold);
+        // Bullet list markers — same as body
+        skin.bullet.set_fg(Color::AnsiValue(252));
+        skin
+    })
+}
+
+fn render_md(text: &str, width: usize) -> Vec<String> {
+    let rendered = format!("{}", md_skin().text(text, Some(width)));
+    // termimad appends a trailing newline; drop it to avoid spurious blank lines
+    let trimmed = rendered.trim_end_matches('\n');
+    trimmed.lines().map(str::to_string).collect()
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 fn agent_color(name: &str) -> u8 {
@@ -458,7 +501,7 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
                 match part {
                     UserPart::Text(text) => {
                         lines.push(String::new());
-                        for l in wrap(text, w) { lines.push(format!("  \x1b[38;5;255m{l}\x1b[0m")); }
+                        for l in render_md(text, w.saturating_sub(2)) { lines.push(format!("  {l}")); }
                     }
                     UserPart::ToolResult { name, content, is_error, .. } => {
                         let col = if *is_error { "38;5;196" } else { "38;5;177" };
@@ -486,7 +529,7 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
             for part in parts {
                 if let AsstPart::Text(text) = part {
                     lines.push(String::new());
-                    for l in wrap(text, w) { lines.push(format!("  \x1b[38;5;252m{l}\x1b[0m")); }
+                    for l in render_md(text, w.saturating_sub(2)) { lines.push(format!("  {l}")); }
                 }
             }
         }
@@ -578,12 +621,88 @@ fn visible_width(s: &str) -> usize {
     w
 }
 
-// Apply a background color code to a pre-colored ANSI string by re-inserting
-// the background after every reset sequence.
+// Apply a selection background to a pre-colored ANSI string.
+// Parses SGR sequences properly so that any explicit background color emitted
+// by termimad (e.g. `\x1b[48;5;238m` for inline code) is replaced with the
+// selection background rather than overriding it.
 fn with_bg(s: &str, bg: &str) -> String {
-    let reinsert = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert);
-    format!("\x1b[{bg}m{body}")
+    let bg_seq  = format!("\x1b[{bg}m");
+    let mut out = bg_seq.clone();
+    let bytes   = s.as_bytes();
+    let mut i   = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\x1b' && bytes.get(i + 1) == Some(&b'[') {
+            // Parse CSI sequence: ESC [ <params> <cmd>
+            let esc_start   = i;
+            i += 2;
+            let params_start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() { i += 1; }
+            let cmd    = *bytes.get(i).unwrap_or(&b'm');
+            let params = &s[params_start..i];
+            i += 1;
+
+            if cmd == b'm' {
+                out.push_str(&rewrite_sgr(params, &bg_seq));
+            } else {
+                out.push_str(&s[esc_start..i]);
+            }
+        } else {
+            let ch_len = s[i..].chars().next().map_or(1, |c| c.len_utf8());
+            out.push_str(&s[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+
+    out
+}
+
+// Rewrite a single SGR parameter string so that any background colour is
+// replaced with the selection background. Foreground / attribute codes are
+// kept; a pure reset gets the background re-appended.
+fn rewrite_sgr(params: &str, bg_seq: &str) -> String {
+    if params.is_empty() || params == "0" {
+        return format!("\x1b[0m{bg_seq}");
+    }
+
+    let mut non_bg: Vec<&str> = Vec::new();
+    let mut found_bg = false;
+    let mut segs = params.split(';').peekable();
+
+    while let Some(seg) = segs.next() {
+        match seg {
+            // Standard background colours 40-47 and bright 100-107
+            "40"|"41"|"42"|"43"|"44"|"45"|"46"|"47"
+            |"100"|"101"|"102"|"103"|"104"|"105"|"106"|"107" => {
+                found_bg = true;
+            }
+            // 256-colour or true-colour background: 48;5;N or 48;2;R;G;B
+            "48" => {
+                found_bg = true;
+                match segs.next().as_deref() {
+                    Some("5") => { segs.next(); }          // skip N
+                    Some("2") => { segs.next(); segs.next(); segs.next(); } // skip R;G;B
+                    _ => {}
+                }
+            }
+            // \x1b[49m — reset background to default (termimad uses this, not \x1b[0m)
+            "49" => { found_bg = true; }
+            // Reset within a combined sequence — keep it
+            "0" => non_bg.push("0"),
+            other => non_bg.push(other),
+        }
+    }
+
+    if !found_bg {
+        return format!("\x1b[{params}m");
+    }
+
+    let mut result = String::new();
+    if !non_bg.is_empty() {
+        result.push_str(&format!("\x1b[{}m", non_bg.join(";")));
+    }
+    result.push_str(bg_seq);
+    result
 }
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
