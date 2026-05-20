@@ -1,0 +1,29 @@
+When someone uses the command "gossamer" with no args, open the repos menu
+
+---
+
+gossamer sessions currently just prints out all sessions. but let's make it an interactive menu as well. it should function the same way as if you go from a repo to a session, except it should show all the sessions, not just scoped to one repo. Each session should also show its working directory
+
+---
+
+in the session details page, on the top, show the repo name as well as the cwd. Hitting space or enter while selecting that should take you to the repo details page. Hitting space or enter while selecting the session should take you to the all sessions page. that way we can reach all screens.
+
+---
+
+cool, now we can drop the redundant information from the card underneat: [Image #1]
+
+---
+
+Put the branch name next to all the other git-related stuff, not under the session name
+
+---
+
+put <session name> <agent name> <time> on a single line as well
+
+---
+
+hitting control c twice should exit the whole app
+
+---
+
+Make the session name text bold. Also the agent name in the top of the page is a different color than the agent name on the turn by turn cards. Make sure they are the same!
