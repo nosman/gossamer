@@ -1,0 +1,13 @@
+Next, an update to the session details page. A lot of the session output is markdown-formatted. I want you to install a crate that renders those markdown strings as markdown in the terminal, instead of showing the raw strings.
+
+---
+
+When the markdown block is selected there are black bars on parts still, but i want them to appear selected as well. [Image #2]
+
+---
+
+[Image #3] it's still happening
+
+---
+
+can you make the markdown look more like this color scheme? [Image #4]
