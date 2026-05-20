@@ -181,6 +181,11 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
             Event::Key(k) => match stack.last_mut().unwrap() {
                 Screen::Repos { sel } => match k.code {
                     KeyCode::Char('q') | KeyCode::Esc => Cmd::Break,
+                    KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                        terminal::disable_raw_mode().ok();
+                        std::process::exit(0);
+                    }
                     KeyCode::Up   | KeyCode::Char('k') => { if *sel > 0 { *sel -= 1; } Cmd::None }
                     KeyCode::Down | KeyCode::Char('j') => { if *sel + 1 < repos.len() { *sel += 1; } Cmd::None }
                     KeyCode::Char('g') => { *sel = 0; Cmd::None }
@@ -202,6 +207,11 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                 },
                 Screen::Sessions { sel, sessions, repo_idx, .. } => match k.code {
                     KeyCode::Char('q') => Cmd::Break,
+                    KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                        terminal::disable_raw_mode().ok();
+                        std::process::exit(0);
+                    }
                     KeyCode::Esc | KeyCode::Char('h') | KeyCode::Left => Cmd::Back,
                     KeyCode::Up   | KeyCode::Char('k') => { if *sel > 0 { *sel -= 1; } Cmd::None }
                     KeyCode::Down | KeyCode::Char('j') => { if *sel + 1 < sessions.len() { *sel += 1; } Cmd::None }
@@ -465,7 +475,7 @@ fn draw_sessions(
             };
 
             let (name_col, meta_col, dot_char) = if s.backed_up {
-                ("38;5;255", "38;5;240", "*")
+                ("1;38;5;255", "38;5;240", "*")
             } else {
                 ("38;5;242", "38;5;238", "·")
             };

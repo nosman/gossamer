@@ -1,8 +1,14 @@
 use anyhow::Result;
 use chrono::{DateTime, Local, Utc};
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use std::collections::HashSet;
 use std::env;
-use std::io::BufRead;
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use crate::{db, entity::session::Session, commands::status::fetch_repos};
@@ -11,8 +17,15 @@ struct DisplaySession {
     session_id: String,
     session_name: String,
     cwd: String,
+    branch: String,
     updated_at: DateTime<Utc>,
     agent_name: String,
+    backed_up: bool,
+}
+
+enum Action {
+    Show(String),
+    Resume(String, String), // (id, cwd)
 }
 
 pub fn run(all: bool) -> Result<()> {
@@ -60,8 +73,10 @@ pub fn run(all: bool) -> Result<()> {
             session_id: s.session_id,
             session_name: s.session_name,
             cwd: s.cwd,
+            branch: String::new(),
             updated_at: s.updated_at,
             agent_name: s.agent_name,
+            backed_up: true,
         })
         .collect();
 
@@ -79,41 +94,159 @@ pub fn run(all: bool) -> Result<()> {
         return Ok(());
     }
 
-    let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(120);
-    let now = Utc::now();
+    let orig_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut out = io::stdout();
+        let _ = execute!(out, LeaveAlternateScreen, cursor::Show);
+        let _ = terminal::disable_raw_mode();
+        orig_hook(info);
+    }));
 
-    for s in &sessions {
-        let age = (now - s.updated_at).num_seconds();
-        let is_local = current_repo_dir.as_deref().map_or(false, |d| s.cwd.starts_with(d));
+    let mut stdout = io::stdout();
+    terminal::enable_raw_mode()?;
+    execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-        let dot = match age {
-            a if a < 900    => "\x1b[38;5;82m*\x1b[0m",
-            a if a < 3_600  => "\x1b[38;5;214m*\x1b[0m",
-            _               => "\x1b[38;5;240m*\x1b[0m",
-        };
+    let action = tui_loop(&mut stdout, &sessions);
 
-        let id_short: String = s.session_id.chars().take(8).collect();
-        let ts = relative_time(s.updated_at);
-        let cwd_short = short_cwd(&s.cwd);
-        let agent_col = agent_color(&s.agent_name);
-        let meta = format!(
-            "\x1b[38;5;240m{id_short}  \x1b[38;5;{agent_col}m{agent}\x1b[38;5;240m  {cwd_short}  {ts}\x1b[0m",
-            agent = s.agent_name,
-        );
+    execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
+    terminal::disable_raw_mode()?;
 
-        let name_col = if is_local { "38;5;255" } else { "38;5;245" };
-        let name = s.session_name.trim();
-
-        if name.is_empty() {
-            println!("{dot}  {meta}");
-        } else {
-            let name_trunc = truncate(name, term_w.saturating_sub(4));
-            println!("{dot} \x1b[{name_col}m{name_trunc}\x1b[0m");
-            println!("   {meta}");
-        }
+    match action {
+        Some(Action::Show(id)) => { super::show::run(&id)?; }
+        Some(Action::Resume(id, cwd)) => { super::show::resume_session(&id, &cwd); }
+        None => {}
     }
 
     Ok(())
+}
+
+fn tui_loop(stdout: &mut impl Write, sessions: &[DisplaySession]) -> Option<Action> {
+    let mut sel = 0usize;
+
+    loop {
+        let (w, h) = terminal::size().unwrap_or((120, 40));
+        let w = w as usize;
+        let h = h as usize;
+
+        draw(stdout, sessions, sel, w, h).ok();
+
+        match event::read().ok()? {
+            Event::Key(k) => match k.code {
+                KeyCode::Char('q') | KeyCode::Esc => break,
+                KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                    terminal::disable_raw_mode().ok();
+                    std::process::exit(0);
+                }
+                KeyCode::Up   | KeyCode::Char('k') => { if sel > 0 { sel -= 1; } }
+                KeyCode::Down | KeyCode::Char('j') => { if sel + 1 < sessions.len() { sel += 1; } }
+                KeyCode::Char('g') => { sel = 0; }
+                KeyCode::Char('G') => { sel = sessions.len().saturating_sub(1); }
+                KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter => {
+                    return Some(Action::Show(sessions[sel].session_id.clone()));
+                }
+                KeyCode::Char('r') => {
+                    let s = &sessions[sel];
+                    return Some(Action::Resume(s.session_id.clone(), s.cwd.clone()));
+                }
+                _ => {}
+            },
+            Event::Resize(_, _) => {
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usize, h: usize) -> io::Result<()> {
+    const SEL_BG: &str = "48;5;236";
+
+    let content_h = h.saturating_sub(1);
+    let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
+
+    // Pre-compute column widths
+    let name_w = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
+    let cwd_w  = sessions.iter().map(|s| short_cwd(&s.cwd).chars().count()).max().unwrap_or(0);
+    let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
+    let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
+
+    execute!(stdout, cursor::MoveTo(0, 0))?;
+
+    for row in 0..content_h {
+        execute!(stdout, cursor::MoveTo(0, row as u16))?;
+        let idx = scroll + row;
+        if idx >= sessions.len() {
+            execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+            continue;
+        }
+
+        let s = &sessions[idx];
+        let is_sel = idx == sel;
+
+        let id_short: String = s.session_id.chars().take(8).collect();
+        let ts = relative_time(s.updated_at);
+        let age = (Utc::now() - s.updated_at).num_seconds().max(0);
+        let dot_col = match age {
+            a if a < 900   => "38;5;82",
+            a if a < 3_600 => "38;5;214",
+            _              => "38;5;240",
+        };
+        let (name_col, meta_col, dot_char) = if s.backed_up {
+            ("1;38;5;255", "38;5;240", "*")
+        } else {
+            ("38;5;242", "38;5;238", "·")
+        };
+        let branch_col = if s.backed_up { "38;5;75" } else { "38;5;239" };
+
+        let name: String = s.session_name.trim().chars().take(name_w).collect();
+        let name_padded = format!("{:<name_w$}", name);
+
+        let cwd_short = short_cwd(&s.cwd);
+        let cwd_padded = format!("{:<cwd_w$}", cwd_short);
+
+        let mut line = format!(
+            "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[38;5;240m{cwd_padded}\x1b[0m"
+        );
+
+        if branch_w > 0 {
+            let b: String = s.branch.chars().take(branch_w).collect();
+            let pad = " ".repeat(branch_w - b.chars().count());
+            line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
+        }
+
+        if agent_w > 0 {
+            let col = if s.backed_up { agent_color(&s.agent_name) } else { 239 };
+            let a: String = s.agent_name.chars().take(agent_w).collect();
+            let pad = " ".repeat(agent_w - a.chars().count());
+            line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+        }
+
+        line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
+
+        if is_sel {
+            let colored = with_bg(&line, SEL_BG);
+            let vis = visible_width(&line);
+            let pad = w.saturating_sub(vis);
+            write!(stdout, "\x1b[{SEL_BG}m{colored}{}\x1b[0m", " ".repeat(pad))?;
+        } else {
+            write!(stdout, "{line}")?;
+            execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        }
+    }
+
+    let bar = format!(
+        "  {} sessions   ↑↓/jk navigate   space/enter: view   r: resume   q: quit  ",
+        sessions.len()
+    );
+    let display: String = bar.chars().take(w).collect();
+    let padded = format!("{:<width$}", display, width = w);
+    execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
+    write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
+
+    stdout.flush()
 }
 
 fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime<Utc>) -> Vec<DisplaySession> {
@@ -152,6 +285,7 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
             let reader = std::io::BufReader::new(file);
             let mut session_name = String::new();
             let mut cwd = String::new();
+            let mut branch = String::new();
             let mut last_prompt = String::new();
 
             for line in reader.lines().flatten() {
@@ -173,15 +307,18 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
                         last_prompt = t;
                     }
                 }
+                if let Some(b) = v["gitBranch"].as_str() {
+                    if !b.is_empty() { branch = b.to_string(); }
+                }
             }
 
             let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
 
             if known_ids.contains(&session_id) {
-                // Refresh the existing DB entry's name and timestamp
                 if let Some(existing) = sessions.iter_mut().find(|s| s.session_id == session_id) {
                     if !display_name.is_empty() { existing.session_name = display_name; }
                     if file_mtime > existing.updated_at { existing.updated_at = file_mtime; }
+                    if !branch.is_empty() { existing.branch = branch; }
                 }
                 continue;
             }
@@ -190,8 +327,10 @@ fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime
                 session_id,
                 session_name: display_name,
                 cwd,
+                branch,
                 updated_at: file_mtime,
                 agent_name: "Claude Code".to_string(),
+                backed_up: false,
             });
         }
     }
@@ -239,19 +378,37 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     }
 }
 
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        format!("{}…", s.chars().take(max.saturating_sub(1)).collect::<String>())
-    }
-}
-
 fn short_cwd(cwd: &str) -> String {
-    let parts: Vec<&str> = cwd.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = if !home.is_empty() && cwd.starts_with(&home) {
+        format!("~{}", &cwd[home.len()..])
+    } else {
+        cwd.to_string()
+    };
+    let parts: Vec<&str> = path.trim_end_matches('/').split('/').filter(|s| !s.is_empty()).collect();
     match parts.len() {
         0 => "/".to_string(),
         1 => format!("/{}", parts[0]),
+        2 => format!("{}/{}", parts[0], parts[1]),
         _ => format!("…/{}/{}", parts[parts.len() - 2], parts[parts.len() - 1]),
     }
+}
+
+fn with_bg(s: &str, bg: &str) -> String {
+    let reinsert = format!("\x1b[0m\x1b[{bg}m");
+    let body = s.replace("\x1b[0m", &reinsert);
+    format!("\x1b[{bg}m{body}")
+}
+
+fn visible_width(s: &str) -> usize {
+    let mut w = 0usize;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for nc in chars.by_ref() { if nc.is_ascii_alphabetic() { break; } }
+        } else {
+            w += 1;
+        }
+    }
+    w
 }

@@ -12,7 +12,7 @@ mod watermark;
 #[command(name = "gossamer", about = "Manage AI sessions with entireio")]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -76,7 +76,7 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    match cli.command.unwrap_or(Commands::Repo) {
         Commands::Init => commands::init::run()?,
         Commands::Repo => commands::status::run()?,
         Commands::Sessions { all } => commands::sessions::run(all)?,

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 // ── Data model ────────────────────────────────────────────────────────────────
 
 enum Card {
+    RepoLink  { name: String, dir: String, branch: String },
     Header    { title: Option<String>, cwd: String, branch: String, ts: String, agent: String },
     UserMsg   { ts: String, parts: Vec<UserPart> },
     AsstMsg   { ts: String, parts: Vec<AsstPart> },
@@ -51,20 +52,17 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
 
-    // Look up agent name from the gossamer DB using the session UUID (file stem).
-    let agent = path.file_stem()
-        .and_then(|s| s.to_str())
-        .and_then(|uuid| {
-            let conn = crate::db::connect().ok()?;
-            conn.query_row(
-                "SELECT agent_name FROM sessions WHERE session_id = ?1",
-                [uuid],
-                |row| row.get::<_, String>(0),
-            ).ok()
-        })
-        .unwrap_or_default();
+    // Look up agent name and repo info from the gossamer DB using the session UUID.
+    let uuid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let agent = if let Ok(conn) = crate::db::connect() {
+        conn.query_row(
+            "SELECT agent_name FROM sessions WHERE session_id = ?1",
+            [uuid],
+            |row| row.get::<_, String>(0),
+        ).unwrap_or_default()
+    } else { String::new() };
 
-    let cards = parse(&raw, &agent);
+    let mut cards = parse(&raw, &agent);
     if cards.is_empty() {
         println!("No messages found.");
         return Ok(());
@@ -78,10 +76,35 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
         if let Card::Header { cwd, .. } = c { Some(cwd.clone()) } else { None }
     }).unwrap_or_default();
 
-    match pager(cards, start_ts)? {
-        PagerOutcome::Resume => do_resume(&agent, session_id, &session_branch, &session_cwd),
-        PagerOutcome::Delete => { super::clean::run(session_id)?; }
-        PagerOutcome::Quit   => {}
+    // Look up the repo that owns this session's cwd and prepend a RepoLink card.
+    if let Ok(conn) = crate::db::connect() {
+        if let Ok((repo_name, repo_dir)) = conn.query_row(
+            "SELECT name, directory FROM repositories
+             WHERE ?1 LIKE (directory || '%')
+             ORDER BY LENGTH(directory) DESC LIMIT 1",
+            [&session_cwd],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            cards.insert(0, Card::RepoLink { name: repo_name, dir: repo_dir, branch: session_branch.clone() });
+        }
+    }
+
+    loop {
+        match pager(&cards, start_ts)? {
+            PagerOutcome::Resume => {
+                do_resume(&agent, session_id, &session_branch, &session_cwd);
+                break;
+            }
+            PagerOutcome::Delete => { super::clean::run(session_id)?; break; }
+            PagerOutcome::Quit   => break,
+            PagerOutcome::GoToSessions => {
+                super::sessions::run(false)?;
+                break;
+            }
+            PagerOutcome::GoToRepo(dir) => {
+                super::status::run_for_dir(&dir)?;
+            }
+        }
     }
 
     Ok(())
@@ -308,6 +331,11 @@ fn parse_asst(content: &Value) -> Vec<AsstPart> {
 fn card_text(card: &Card) -> String {
     let mut out = String::new();
     match card {
+        Card::RepoLink { name, dir, branch } => {
+            out.push_str(name); out.push('\n');
+            out.push_str(dir);  out.push('\n');
+            if !branch.is_empty() { out.push_str(branch); out.push('\n'); }
+        }
         Card::Header { title, cwd, branch, agent, .. } => {
             if let Some(t) = title { out.push_str(t); out.push('\n'); }
             if !cwd.is_empty()    { out.push_str(cwd);               out.push('\n'); }
@@ -396,16 +424,28 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
     let w = width.saturating_sub(2);
 
     match card {
-        Card::Header { title, cwd, branch, ts, agent: hdr_agent } => {
+        Card::RepoLink { name, dir, branch } => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let short = if !home.is_empty() && dir.starts_with(&home) {
+                format!("~{}", &dir[home.len()..])
+            } else { dir.clone() };
+            let branch_part = if !branch.is_empty() {
+                format!("  \x1b[38;5;220m[{branch}]\x1b[0m")
+            } else { String::new() };
+            lines.push(format!("\x1b[38;5;240m▸ repo  \x1b[0m\x1b[1;38;5;75m{name}\x1b[0m  \x1b[38;5;240m{short}\x1b[0m{branch_part}"));
+        }
+        Card::Header { title, cwd: _, branch: _, ts, agent: hdr_agent } => {
             let t = title.as_deref().unwrap_or("(untitled session)");
-            lines.push(format!("\x1b[1;38;5;229m{t}\x1b[0m"));
-            if !cwd.is_empty()       { lines.push(format!("\x1b[38;5;240m{cwd}\x1b[0m")); }
-            if !branch.is_empty()    { lines.push(format!("\x1b[38;5;220m[{branch}]\x1b[0m")); }
-            if !hdr_agent.is_empty() {
-                let col = agent_color(hdr_agent);
-                lines.push(format!("\x1b[38;5;{col}m{hdr_agent}\x1b[0m"));
-            }
-            if !ts.is_empty()        { lines.push(format!("\x1b[38;5;240m{}\x1b[0m", rel_time(ts))); }
+            let (agent_label, agent_col) = if hdr_agent.is_empty() {
+                ("claude".to_string(), 75u8)
+            } else {
+                (hdr_agent.to_lowercase(), agent_color(hdr_agent))
+            };
+            let agent_part = format!("  \x1b[1;38;5;{agent_col}m{agent_label}\x1b[0m");
+            let ts_part = if !ts.is_empty() {
+                format!("  \x1b[38;5;240m{}\x1b[0m", rel_time(ts))
+            } else { String::new() };
+            lines.push(format!("\x1b[1;38;5;229m{t}\x1b[0m{agent_part}{ts_part}"));
         }
         Card::System { ts, subtype, content } => {
             lines.push(format!("\x1b[38;5;240m── {subtype}  {}\x1b[0m", rel_time(ts)));
@@ -767,9 +807,9 @@ fn build_flat(
     (flat, selectables, starts)
 }
 
-enum PagerOutcome { Quit, Resume, Delete }
+enum PagerOutcome { Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
-fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
+fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
     let mut h = (term_h as usize).saturating_sub(1);
@@ -794,6 +834,7 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
     // If a target timestamp was given, jump to the first card whose ts matches.
+    // Otherwise land on the first non-navigation card (skip RepoLink and Header).
     let initial_sel = start_ts.and_then(|ts| {
         cards.iter().enumerate().find_map(|(ci, card)| {
             let card_ts = match card {
@@ -806,7 +847,13 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
                 None
             }
         })
-    }).unwrap_or(if selectables.len() > 1 { 1 } else { 0 });
+    }).unwrap_or_else(|| {
+        selectables.iter().position(|s| {
+            if let Selectable::Card(ci) = s {
+                !matches!(&cards[*ci], Card::RepoLink { .. } | Card::Header { .. })
+            } else { false }
+        }).unwrap_or(0)
+    });
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
@@ -865,18 +912,18 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
                         flash = Some("  ✓ copied to clipboard  ");
                     }
 
-                    // Space/Right: expand collapsed ToolRound, or collapse via its header
-                    (KeyCode::Char(' ') | KeyCode::Right, _) => {
-                        let action = match &selectables[sel] {
+                    // Space/Right/Enter: expand ToolRound, collapse via header, or navigate
+                    (KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter, _) => {
+                        let expand_action = match &selectables[sel] {
                             Selectable::Card(ci) if matches!(&cards[*ci], Card::ToolRound { .. }) => {
-                                Some((true, *ci))   // expand
+                                Some((true, *ci))
                             }
-                            Selectable::ToolHeader(ci) => Some((false, *ci)), // collapse
+                            Selectable::ToolHeader(ci) => Some((false, *ci)),
                             _ => None,
                         };
-                        if let Some((expand, card_idx)) = action {
+                        if let Some((expand, card_idx)) = expand_action {
                             if expand { collapsed.remove(&card_idx); } else { collapsed.insert(card_idx); }
-                            let (nf, ns, nst) = build_flat(&cards, w, &collapsed);
+                            let (nf, ns, nst) = build_flat(cards, w, &collapsed);
                             flat   = nf;
                             starts = nst;
                             sel = if expand {
@@ -885,6 +932,16 @@ fn pager(cards: Vec<Card>, start_ts: Option<&str>) -> Result<PagerOutcome> {
                                 ns.iter().position(|s| *s == Selectable::Card(card_idx))
                             }.unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
+                        } else if let Selectable::Card(ci) = &selectables[sel] {
+                            match &cards[*ci] {
+                                Card::RepoLink { dir, .. } => {
+                                    break Ok(PagerOutcome::GoToRepo(dir.clone()));
+                                }
+                                Card::Header { .. } => {
+                                    break Ok(PagerOutcome::GoToSessions);
+                                }
+                                _ => { flash = prev_flash; }
+                            }
                         } else {
                             flash = prev_flash;
                         }
@@ -946,7 +1003,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  ↑↓/jk  space expand  d/u page  g/G ends  y/c copy  r resume  d delete  q quit  ",
+        "  {}/{} msgs  lines {}-{}  ↑↓/jk  space/enter navigate  d/u page  g/G ends  y/c copy  r resume  d delete  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
