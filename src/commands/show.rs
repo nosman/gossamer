@@ -966,13 +966,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                 None
             }
         })
-    }).unwrap_or_else(|| {
-        selectables.iter().position(|s| {
-            if let Selectable::Card(ci) = s {
-                !matches!(&cards[*ci], Card::RepoLink { .. } | Card::Header { .. })
-            } else { false }
-        }).unwrap_or(0)
-    });
+    }).unwrap_or_else(|| selectables.len().saturating_sub(1));
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
@@ -1014,8 +1008,14 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                     }
                     (KeyCode::Char('g'), _) => { sel = 0; }
                     (KeyCode::Char('G'), _) => { sel = selectables.len().saturating_sub(1); }
-                    (KeyCode::Char('d'), _) => { scroll = (scroll + h / 2).min(flat.len().saturating_sub(1)); }
-                    (KeyCode::Char('u'), _) => { scroll = scroll.saturating_sub(h / 2); }
+                    (KeyCode::Char('u'), _) | (KeyCode::PageUp, _) => {
+                        scroll = scroll.saturating_sub(h / 2);
+                        sel = flat[scroll].0;
+                    }
+                    (KeyCode::PageDown, _) => {
+                        scroll = (scroll + h / 2).min(flat.len().saturating_sub(h));
+                        sel = flat[scroll].0;
+                    }
 
                     (KeyCode::Char('y'), _) | (KeyCode::Char('c'), _) => {
                         let text = match &selectables[sel] {
@@ -1086,35 +1086,39 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
 }
 
 fn draw(
-    stdout:  &mut impl Write,
-    flat:    &[(usize, String)],
-    starts:  &[usize],
-    sel:     usize,
-    scroll:  usize,
-    h:       usize,
-    w:       usize,
-    total:   usize,
-    flash:   Option<&str>,
+    stdout: &mut impl Write,
+    flat:   &[(usize, String)],
+    starts: &[usize],
+    sel:    usize,
+    scroll: usize,
+    h:      usize,
+    w:      usize,
+    total:  usize,
+    flash:  Option<&str>,
 ) -> io::Result<()> {
+    use crossterm::queue;
     const SEL_BG: &str = "48;5;236";
 
     let end = (scroll + h).min(flat.len());
 
+    // Build the entire frame into one buffer; flush once to eliminate flicker.
+    // Use explicit cursor::MoveTo per row so embedded newlines in content can't
+    // shift subsequent rows into the wrong position.
+    let mut buf: Vec<u8> = Vec::with_capacity((w + 40) * (h + 2));
+
     for row in 0..h {
-        // Clear the whole row first so tabs and short lines never leave stale chars.
-        execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+        queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
 
-        if scroll + row < end {
-            let (card_idx, line) = &flat[scroll + row];
-            let is_sel = *card_idx == sel;
-
-            if is_sel {
+        let flat_idx = scroll + row;
+        if flat_idx < end {
+            let (card_idx, line) = &flat[flat_idx];
+            if *card_idx == sel {
                 let line_bg = with_bg(line, SEL_BG);
                 let vis = visible_width(line);
                 let pad = w.saturating_sub(vis);
-                write!(stdout, "\x1b[{SEL_BG}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
+                write!(buf, "\x1b[{SEL_BG}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
             } else {
-                write!(stdout, "{line}")?;
+                buf.extend_from_slice(line.as_bytes());
             }
         }
     }
@@ -1122,7 +1126,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  ↑↓/jk  space/enter navigate  d/u page  g/G ends  y/c copy  r resume  d delete  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  u/PgDn page  g/G ends  y/c copy  r resume  d delete  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
@@ -1133,9 +1137,10 @@ fn draw(
         base
     };
     let bar_display: String = bar.chars().take(w).collect();
-    let padded = format!("{:width$}", bar_display, width = w);
-    execute!(stdout, cursor::MoveTo(0, h as u16))?;
-    write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
+    let padded = format!("{bar_display:width$}", width = w);
+    queue!(buf, cursor::MoveTo(0, h as u16))?;
+    write!(buf, "\x1b[7m{padded}\x1b[0m")?;
 
+    stdout.write_all(&buf)?;
     stdout.flush()
 }
