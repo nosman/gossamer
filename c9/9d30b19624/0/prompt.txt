@@ -1,0 +1,13 @@
+i want the ability to scroll line by line in the session details window. whatever message turn we are on should still show selected, but within that, the individual line should also be selected in a different color
+
+---
+
+there is a bit of flickering when i scroll around. also, the secondary highlight color is too similar to the tool call boxes. maybe instead of the line by line selection, let's automatically scroll all the way down to the most recent elements in this session. and we'll use the scroll to go up and down.
+
+---
+
+[Image #5]
+
+---
+
+There is a problem expanding the tool call windows, it's not completely drawing over what used to be there. see the yellow text
