@@ -13,6 +13,10 @@ mod watermark;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Output as JSON instead of an interactive TUI
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -76,16 +80,17 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let json = cli.json;
     match cli.command.unwrap_or(Commands::Repo) {
-        Commands::Init => commands::init::run()?,
-        Commands::Repo => commands::status::run()?,
-        Commands::Sessions { all } => commands::sessions::run(all)?,
-        Commands::Index => commands::index::run()?,
-        Commands::Refresh => commands::refresh::run()?,
+        Commands::Init => commands::init::run(json)?,
+        Commands::Repo => commands::status::run(json)?,
+        Commands::Sessions { all } => commands::sessions::run(all, json)?,
+        Commands::Index => commands::index::run(json)?,
+        Commands::Refresh => commands::refresh::run(json)?,
         Commands::Show { session } => commands::show::run(&session)?,
-        Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k)?,
-        Commands::Clean { session_id } => commands::clean::run(&session_id)?,
-        Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force)?,
+        Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k, json)?,
+        Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
+        Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
         Commands::Config { assets: None }       => config::show(),
         Commands::SessionStart => commands::session_start::run()?,

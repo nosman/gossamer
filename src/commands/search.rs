@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
@@ -9,6 +10,7 @@ use std::io::{self, IsTerminal, Write};
 
 // ── Hit types ─────────────────────────────────────────────────────────────────
 
+#[derive(Clone)]
 enum HitKind {
     Log,
     Session,
@@ -16,20 +18,6 @@ enum HitKind {
 }
 
 impl HitKind {
-    fn badge(&self) -> &'static str {
-        match self {
-            HitKind::Log     => "[log]",
-            HitKind::Session => "[ses]",
-            HitKind::Repo    => "[rep]",
-        }
-    }
-    fn color(&self) -> &'static str {
-        match self {
-            HitKind::Log     => "38;5;75",
-            HitKind::Session => "38;5;177",
-            HitKind::Repo    => "38;5;220",
-        }
-    }
     fn label(&self) -> &'static str {
         match self {
             HitKind::Log     => "log",
@@ -42,17 +30,42 @@ impl HitKind {
 struct SearchHit {
     kind: HitKind,
     title: String,
-    repo_name: String,  // last path component of the cwd/dir
-    excerpt: String,    // one-line text snippet (log hits only)
-    dir: String,        // short path — shown dim at the end
+    dir: String,
+    excerpt_lines: Vec<String>, // context lines: prev turn, matched turn, next turn
     session_id: Option<String>,
     repo_dir: Option<String>,
+    start_ts: Option<String>,   // for navigation in show::run_at
+    hit_ts: Option<String>,     // timestamp of the matched turn (for display)
+    branch: String,
+    // enriched from gossamer DB after search
+    agent: String,
+    backed_up: bool,
+    updated_at: String,
+}
+
+// Groups hits from the same session together under one header row.
+struct Group {
+    title: String,
+    dir: String,
+    branch: String,
+    agent: String,
+    backed_up: bool,
+    updated_at: String,
+    session_id: Option<String>,
+    repo_dir: Option<String>,
+    kind: HitKind,
+    rows: Vec<GroupRow>,
+}
+
+struct GroupRow {
+    hit_ts: Option<String>,
     start_ts: Option<String>,
+    lines: Vec<String>,
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run(query: &str, top_k: usize) -> Result<()> {
+pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
     let assets = crate::config::resolve_warp_assets()
         .ok_or_else(|| anyhow::anyhow!(
             "Witchcraft assets not configured.\nRun: gossamer config <path-to-witchcraft-assets>"
@@ -62,20 +75,19 @@ pub fn run(query: &str, top_k: usize) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))?
         .join(".gossamer/search.db");
 
-    let db = witchcraft::DB::new_reader(db_path).map_err(|e| anyhow::anyhow!("failed to open search DB: {e}"))?;
+    let db = witchcraft::DB::new_reader(db_path)
+        .map_err(|e| anyhow::anyhow!("failed to open search DB: {e}"))?;
     let device = witchcraft::make_device();
-    let embedder = witchcraft::Embedder::new(&device, &assets).context("failed to load embedder")?;
+    let embedder = witchcraft::Embedder::new(&device, &assets)
+        .context("failed to load embedder")?;
     let mut cache = witchcraft::EmbeddingsCache::new(1);
 
-    // Per-type thresholds. Fetch at the global minimum so witchcraft doesn't
-    // filter anything we'd keep, then post-filter per source type.
     const FLOOR:         f32 = 0.20;
     const LOG_THRESHOLD: f32 = 0.40;
     const SES_THRESHOLD: f32 = 0.25;
     const REP_THRESHOLD: f32 = 0.25;
 
     let t0 = std::time::Instant::now();
-    // Over-fetch so there are enough candidates after per-type filtering.
     let raw = witchcraft::search(&db, &embedder, &mut cache, query, FLOOR, top_k * 4, true, None)?;
     let ms = t0.elapsed().as_millis();
 
@@ -93,30 +105,45 @@ pub fn run(query: &str, top_k: usize) -> Result<()> {
         .take(top_k)
         .collect();
 
-    // Direct name-match search: finds sessions/repos whose names contain all
-    // query words even when hyphens/underscores differ from the query.
     for hit in search_sessions_by_name(query) {
         let already = hits.iter().any(|h| {
             matches!(h.kind, HitKind::Session) && h.session_id == hit.session_id
         });
-        if !already {
-            hits.insert(0, hit);
-        }
+        if !already { hits.insert(0, hit); }
     }
     for hit in search_repos_by_name(query) {
         let already = hits.iter().any(|h| {
             matches!(h.kind, HitKind::Repo) && h.repo_dir == hit.repo_dir
         });
-        if !already {
-            hits.insert(0, hit);
-        }
+        if !already { hits.insert(0, hit); }
     }
     hits.truncate(top_k);
+    enrich_hits(&mut hits);
 
-    if !io::stdout().is_terminal() {
-        for h in &hits {
-            println!("[{}]  {}", h.kind.label(), h.title);
-        }
+    let groups = build_groups(hits);
+
+    if json || !io::stdout().is_terminal() {
+        let arr: Vec<serde_json::Value> = groups.iter().map(|g| {
+            let hits_json: Vec<serde_json::Value> = g.rows.iter().map(|r| serde_json::json!({
+                "timestamp": r.hit_ts,
+                "excerpt": r.lines.join(" "),
+            })).collect();
+            serde_json::json!({
+                "kind": g.kind.label(),
+                "session_id": g.session_id,
+                "session_name": g.title,
+                "dir": g.dir,
+                "branch": g.branch,
+                "agent": g.agent,
+                "updated_at": g.updated_at,
+                "backed_up": g.backed_up,
+                "hits": hits_json,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "query": query,
+            "results": arr,
+        }))?);
         return Ok(());
     }
 
@@ -132,7 +159,7 @@ pub fn run(query: &str, top_k: usize) -> Result<()> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let result = tui_loop(&mut stdout, &hits, query, ms);
+    let result = tui_loop(&mut stdout, &groups, query, ms);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -154,12 +181,12 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
             SearchHit {
                 kind: HitKind::Session,
                 title: name,
-                repo_name: last_component(&cwd),
-                excerpt: String::new(),
                 dir: short_path(&cwd),
+                excerpt_lines: vec![],
                 session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
-                start_ts: None,
+                start_ts: None, hit_ts: None, branch: String::new(),
+                agent: String::new(), backed_up: false, updated_at: String::new(),
             }
         }
         "repo" => {
@@ -168,86 +195,180 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
             SearchHit {
                 kind: HitKind::Repo,
                 title: name,
-                repo_name: String::new(), // same as title, skip
-                excerpt: String::new(),
                 dir: short_path(&dir),
+                excerpt_lines: vec![],
                 session_id: None,
                 repo_dir: Some(dir),
-                start_ts: None,
+                start_ts: None, hit_ts: None, branch: String::new(),
+                agent: String::new(), backed_up: false, updated_at: String::new(),
             }
         }
         _ => {
             // "claude" — session log turn
-            let name    = meta["session_name"].as_str().unwrap_or("").to_string();
+            let name   = meta["session_name"].as_str().unwrap_or("").to_string();
             let project = meta["project"].as_str().unwrap_or("").to_string();
-            let idx = sub_idx.min(bodies.len().saturating_sub(1));
-            let excerpt: String = bodies
-                .get(idx)
-                .and_then(|b| b.lines().find(|l| !l.trim().is_empty()))
-                .map(|l| l.chars().take(80).collect())
-                .unwrap_or_default();
-            // Prefer the stored path (most reliable); fall back to session UUID lookup.
-            let open_id = meta["path"].as_str()
-                .filter(|p| !p.is_empty())
-                .map(str::to_string)
-                .or_else(|| meta["session_id"].as_str().map(str::to_string));
-            // sub_idx 0 = header chunk; 1+ maps to turns[sub_idx - 1].
-            let start_ts = if sub_idx > 0 {
+            let branch  = meta["branch"].as_str().unwrap_or("").to_string();
+
+            // Collect context: previous turn, matched turn, next turn.
+            // bodies[0] is the header; bodies[N] for N>0 is a conversation turn.
+            let mut excerpt_lines: Vec<String> = Vec::new();
+            if sub_idx > 1 {
+                if let Some(prev) = bodies.get(sub_idx - 1) {
+                    let t: String = prev.trim().chars().take(220).collect();
+                    if !t.is_empty() { excerpt_lines.push(t); }
+                }
+            }
+            if let Some(matched) = bodies.get(sub_idx) {
+                let t: String = matched.trim().chars().take(400).collect();
+                if !t.is_empty() { excerpt_lines.push(t); }
+            }
+            if sub_idx + 1 < bodies.len() {
+                if let Some(next) = bodies.get(sub_idx + 1) {
+                    let t: String = next.trim().chars().take(220).collect();
+                    if !t.is_empty() { excerpt_lines.push(t); }
+                }
+            }
+
+            let hit_ts = if sub_idx > 0 {
                 meta["turns"][sub_idx - 1]["timestamp"].as_str()
                     .filter(|s| !s.is_empty())
                     .map(str::to_string)
             } else {
                 None
             };
+
             SearchHit {
                 kind: HitKind::Log,
                 title: name,
-                repo_name: last_component(&project),
-                excerpt,
                 dir: short_path(&project),
-                session_id: open_id,
+                excerpt_lines,
+                session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
-                start_ts,
+                start_ts: hit_ts.clone(),
+                hit_ts,
+                branch,
+                agent: String::new(), backed_up: false, updated_at: String::new(),
             }
         }
     }
 }
 
+// ── Group building ────────────────────────────────────────────────────────────
+
+fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
+    let mut groups: Vec<Group> = Vec::new();
+    let mut log_group_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for hit in hits {
+        match hit.kind {
+            HitKind::Log => {
+                let sid = hit.session_id.clone().unwrap_or_default();
+                if let Some(&gi) = log_group_idx.get(&sid) {
+                    groups[gi].rows.push(GroupRow {
+                        hit_ts: hit.hit_ts,
+                        start_ts: hit.start_ts,
+                        lines: hit.excerpt_lines,
+                    });
+                } else {
+                    let gi = groups.len();
+                    if !sid.is_empty() { log_group_idx.insert(sid, gi); }
+                    groups.push(Group {
+                        title: hit.title,
+                        dir: hit.dir,
+                        branch: hit.branch,
+                        agent: hit.agent,
+                        backed_up: hit.backed_up,
+                        updated_at: hit.updated_at,
+                        session_id: hit.session_id,
+                        repo_dir: None,
+                        kind: HitKind::Log,
+                        rows: vec![GroupRow {
+                            hit_ts: hit.hit_ts,
+                            start_ts: hit.start_ts,
+                            lines: hit.excerpt_lines,
+                        }],
+                    });
+                }
+            }
+            HitKind::Session => {
+                groups.push(Group {
+                    title: hit.title,
+                    dir: hit.dir,
+                    branch: String::new(),
+                    agent: hit.agent,
+                    backed_up: hit.backed_up,
+                    updated_at: hit.updated_at,
+                    session_id: hit.session_id,
+                    repo_dir: None,
+                    kind: HitKind::Session,
+                    rows: vec![],
+                });
+            }
+            HitKind::Repo => {
+                groups.push(Group {
+                    title: hit.title,
+                    dir: hit.dir,
+                    branch: String::new(),
+                    agent: String::new(),
+                    backed_up: false,
+                    updated_at: String::new(),
+                    session_id: None,
+                    repo_dir: hit.repo_dir,
+                    kind: HitKind::Repo,
+                    rows: vec![],
+                });
+            }
+        }
+    }
+
+    groups
+}
+
 // ── TUI ───────────────────────────────────────────────────────────────────────
 
-fn tui_loop(stdout: &mut impl Write, hits: &[SearchHit], query: &str, ms: u128) -> Result<()> {
-    let mut sel = 0usize;
+fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) -> Result<()> {
+    let mut sel    = 0usize;
+    let mut scroll = 0usize;
 
     loop {
         let (w, h) = terminal::size().unwrap_or((120, 40));
-        draw(stdout, hits, query, ms, sel, w as usize, h as usize)?;
+        let w = w as usize;
+        let h = h as usize;
+        let content_h = h.saturating_sub(2);
+
+        let sel_start = group_start_of(groups, sel);
+        let sel_end   = sel_start + groups.get(sel).map_or(1, rows_for_group);
+        if sel_start < scroll                { scroll = sel_start; }
+        else if sel_end > scroll + content_h { scroll = sel_end.saturating_sub(content_h); }
+
+        draw(stdout, groups, query, ms, sel, scroll, w, h)?;
 
         match event::read()? {
             Event::Key(k) => match k.code {
                 KeyCode::Char('q') | KeyCode::Esc => break,
+                KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                    terminal::disable_raw_mode().ok();
+                    std::process::exit(0);
+                }
                 KeyCode::Up   | KeyCode::Char('k') => { if sel > 0 { sel -= 1; } }
-                KeyCode::Down | KeyCode::Char('j') => { if sel + 1 < hits.len() { sel += 1; } }
-                KeyCode::Char('g') => { sel = 0; }
-                KeyCode::Char('G') => { sel = hits.len().saturating_sub(1); }
+                KeyCode::Down | KeyCode::Char('j') => { if sel + 1 < groups.len() { sel += 1; } }
+                KeyCode::Char('g') => { sel = 0; scroll = 0; }
+                KeyCode::Char('G') => { sel = groups.len().saturating_sub(1); }
                 KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter => {
-                    if let Some(hit) = hits.get(sel) {
-                        // Temporarily leave the TUI, open the view, then come back.
+                    if let Some(group) = groups.get(sel) {
                         execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                         terminal::disable_raw_mode().ok();
 
-                        match hit.kind {
-                            HitKind::Log => {
-                                if let Some(id) = &hit.session_id {
-                                    let _ = super::show::run_at(id, hit.start_ts.as_deref());
-                                }
-                            }
-                            HitKind::Session => {
-                                if let Some(id) = &hit.session_id {
-                                    let _ = super::show::run(id);
+                        match group.kind {
+                            HitKind::Log | HitKind::Session => {
+                                if let Some(id) = &group.session_id {
+                                    let ts = group.rows.first().and_then(|r| r.start_ts.as_deref());
+                                    let _ = super::show::run_at(id, ts);
                                 }
                             }
                             HitKind::Repo => {
-                                if let Some(dir) = &hit.repo_dir {
+                                if let Some(dir) = &group.repo_dir {
                                     let _ = super::status::run_for_dir(dir);
                                 }
                             }
@@ -270,145 +391,195 @@ fn tui_loop(stdout: &mut impl Write, hits: &[SearchHit], query: &str, ms: u128) 
     Ok(())
 }
 
+fn rows_for_group(g: &Group) -> usize {
+    1 + g.rows.iter().map(|r| r.lines.len().max(1)).sum::<usize>() + 1 // +1 for blank separator
+}
+
+fn group_start_of(groups: &[Group], idx: usize) -> usize {
+    groups[..idx.min(groups.len())].iter().map(rows_for_group).sum()
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 fn draw(
     stdout: &mut impl Write,
-    hits: &[SearchHit],
-    query: &str,
-    ms: u128,
-    sel: usize,
-    w: usize,
-    h: usize,
+    groups: &[Group],
+    query:  &str,
+    ms:     u128,
+    sel:    usize,
+    scroll: usize,
+    w:      usize,
+    h:      usize,
 ) -> io::Result<()> {
-    const SEL_BG: &str = "48;5;236";
+    use crossterm::queue;
+    const SEL_BG: &str  = "48;5;236";
+    const TS_W:   usize = 12; // fixed width of the timestamp column in excerpt rows
 
-    let query_words: Vec<String> = query
-        .split_whitespace()
-        .map(|s| s.to_lowercase())
-        .collect();
+    let content_h = h.saturating_sub(2);
+    let mut buf: Vec<u8> = Vec::with_capacity((w + 60) * (h + 2));
 
-    execute!(stdout, cursor::MoveTo(0, 0))?;
+    // Title bar
+    queue!(buf, cursor::MoveTo(0, 0), terminal::Clear(ClearType::UntilNewLine))?;
+    let hdr = format!("  search: \"{}\"  {} result(s)  {}ms", query, groups.len(), ms);
+    write!(buf, "\x1b[1m{}\x1b[0m", hdr.chars().take(w).collect::<String>())?;
 
-    // Header
-    let header = format!("search: \"{}\"  {} result(s)  {}ms", query, hits.len(), ms);
-    let header_t: String = header.chars().take(w).collect();
-    write!(stdout, "\x1b[1m{header_t}\x1b[0m")?;
-    execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+    // Pre-compute column widths across all groups for tabular alignment.
+    let name_w   = groups.iter().map(|g| g.title.trim().chars().count()).max().unwrap_or(0).min(45);
+    let agent_w  = groups.iter().map(|g| g.agent.chars().count()).max().unwrap_or(0);
+    let branch_w = groups.iter().map(|g| g.branch.chars().count()).max().unwrap_or(0).min(30);
 
-    let content_h = h.saturating_sub(2); // header + status bar
-    let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
-    let mut row = 1usize;
+    let mut screen_row = 1usize; // next terminal row to write (row 0 is title bar)
+    let mut abs_row    = 0usize; // absolute content row (before scroll is applied)
 
-    for (i, hit) in hits.iter().enumerate().skip(scroll) {
-        if row >= content_h { break; }
+    for (gi, group) in groups.iter().enumerate() {
+        if screen_row > content_h { break; }
+        let selected = gi == sel;
 
-        // ── Layout (left→right): badge  title  repo  excerpt  dir ──────────
-        //
-        // Fixed overhead: 2 (indent) + 5 (badge) + 2 (sep after badge) = 9
-        // Dir: up to 28 chars, always at the end
-        // Repo: up to 18 chars, only when non-empty
-        // Excerpt: up to 45 chars, only when non-empty
-        // Title: whatever's left, min 8
+        // ── Session header ────────────────────────────────────────────────
+        if abs_row >= scroll && screen_row <= content_h {
+            let age     = age_secs_hit(&group.updated_at);
+            let dot_col = match age {
+                a if a < 900   => "38;5;82",
+                a if a < 3_600 => "38;5;214",
+                _              => "38;5;240",
+            };
+            let (name_col, meta_col, dot_char) = if group.backed_up {
+                ("1;38;5;229", "38;5;240", "*")
+            } else {
+                ("38;5;242", "38;5;238", "·")
+            };
 
-        let dir_raw: String   = hit.dir.chars().take(28).collect();
-        let dir_vis           = dir_raw.chars().count();
+            let name: String = group.title.trim().chars().take(name_w).collect();
+            let name_padded  = format!("{name:<name_w$}");
+            let mut line = format!(
+                "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[38;5;240m{}\x1b[0m",
+                group.dir,
+            );
 
-        // Don't repeat the repo name when it's the same as the title (repo hits).
-        let repo_raw: String  = if !hit.repo_name.is_empty() && hit.repo_name != hit.title {
-            hit.repo_name.chars().take(18).collect()
-        } else {
-            String::new()
-        };
-        let repo_vis = repo_raw.chars().count();
+            if branch_w > 0 {
+                let branch_col = if group.backed_up { "38;5;75" } else { "38;5;239" };
+                let b: String = group.branch.chars().take(branch_w).collect();
+                let pad = " ".repeat(branch_w - b.chars().count());
+                line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
+            }
 
-        // Right-side budget consumed by dir + repo
-        let right_fixed = 2 + dir_vis + if repo_vis > 0 { 2 + repo_vis } else { 0 };
+            if agent_w > 0 {
+                let col = if group.backed_up { agent_color(&group.agent) } else { 239 };
+                let a: String = group.agent.chars().take(agent_w).collect();
+                let pad = " ".repeat(agent_w - a.chars().count());
+                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+            }
 
-        // Excerpt gets up to 45 chars of whatever's left after a min title of 10
-        let excerpt_budget = w.saturating_sub(9 + 10 + right_fixed + 2).min(45);
-        let excerpt_raw: String = hit.excerpt.chars().take(excerpt_budget).collect();
-        let excerpt_vis = excerpt_raw.chars().count();
+            if let Some(sid) = &group.session_id {
+                let id_short: String = sid.chars().take(8).collect();
+                let ts = rel_time_hit(&group.updated_at);
+                line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
+            } else if matches!(group.kind, HitKind::Repo) {
+                line.push_str(&format!("  \x1b[{meta_col}mrepo\x1b[0m"));
+            }
 
-        // Title fills the rest
-        let title_budget = w.saturating_sub(
-            9 + right_fixed + if excerpt_vis > 0 { 2 + excerpt_vis } else { 0 }
-        ).max(8);
-        let title_raw: String = hit.title.chars().take(title_budget).collect();
-
-        // Apply query-word highlighting to title and excerpt
-        let title_hl   = highlight(&title_raw, &query_words);
-        let excerpt_hl = highlight(&excerpt_raw, &query_words);
-
-        let badge_col = hit.kind.color();
-        let badge     = hit.kind.badge();
-
-        let mut line = format!(
-            "\x1b[{badge_col}m{badge}\x1b[0m  \x1b[38;5;255m{title_hl}\x1b[0m"
-        );
-        if repo_vis > 0 {
-            line.push_str(&format!("  \x1b[38;5;248m{repo_raw}\x1b[0m"));
+            render_row(&mut buf, &line, selected, SEL_BG, screen_row, w)?;
+            screen_row += 1;
         }
-        if excerpt_vis > 0 {
-            line.push_str(&format!("  \x1b[38;5;242m{excerpt_hl}\x1b[0m"));
-        }
-        line.push_str(&format!("  \x1b[38;5;238m{dir_raw}\x1b[0m"));
+        abs_row += 1;
 
-        print_row(stdout, &line, i == sel, SEL_BG, w, row as u16)?;
-        row += 1;
+        // ── Excerpt rows ──────────────────────────────────────────────────
+        for row in &group.rows {
+            let ts_str = row.hit_ts.as_deref().map(rel_time_hit).unwrap_or_default();
+            let n_lines = row.lines.len().max(1);
+            let excerpt_indent = " ".repeat(2 + TS_W + 2);
+
+            for li in 0..n_lines {
+                if abs_row >= scroll && screen_row <= content_h {
+                    let text = row.lines.get(li).map(String::as_str).unwrap_or("");
+                    let avail = w.saturating_sub(2 + TS_W + 2);
+                    let text_t: String = text.chars().take(avail).collect();
+
+                    let exc_line = if li == 0 {
+                        let ts_padded = format!("{ts_str:>TS_W$}");
+                        format!("  \x1b[38;5;241m{ts_padded}\x1b[0m  \x1b[38;5;245m{text_t}\x1b[0m")
+                    } else {
+                        format!("{excerpt_indent}\x1b[38;5;245m{text_t}\x1b[0m")
+                    };
+
+                    render_row(&mut buf, &exc_line, selected, SEL_BG, screen_row, w)?;
+                    screen_row += 1;
+                }
+                abs_row += 1;
+            }
+        }
+
+        // Blank separator row between groups
+        if abs_row >= scroll && screen_row <= content_h {
+            queue!(buf, cursor::MoveTo(0, screen_row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+            screen_row += 1;
+        }
+        abs_row += 1;
     }
 
-    while row < content_h {
-        execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
-        row += 1;
+    // Clear any leftover rows below the results.
+    while screen_row <= content_h {
+        queue!(buf, cursor::MoveTo(0, screen_row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+        screen_row += 1;
     }
 
     // Status bar
     let bar = "  ↑↓/jk: navigate   space/→: open   q/esc: quit  ";
-    let bar_t: String = bar.chars().take(w).collect();
-    let padded = format!("{:<width$}", bar_t, width = w);
-    execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
-    write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
+    let padded = format!("{:<width$}", bar.chars().take(w).collect::<String>(), width = w);
+    queue!(buf, cursor::MoveTo(0, (h - 1) as u16))?;
+    write!(buf, "\x1b[7m{padded}\x1b[0m")?;
 
+    stdout.write_all(&buf)?;
     stdout.flush()
 }
 
-fn print_row(stdout: &mut impl Write, line: &str, selected: bool, bg: &str, w: usize, row: u16) -> io::Result<()> {
-    let content = format!("  {line}");
-    execute!(stdout, cursor::MoveTo(0, row))?;
+fn render_row(buf: &mut Vec<u8>, line: &str, selected: bool, bg: &str, row: usize, w: usize) -> io::Result<()> {
+    use crossterm::queue;
+    queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
     if selected {
-        let colored = with_bg(&content, bg);
-        let vis = visible_len(&content);
+        let colored = with_bg(line, bg);
+        let vis = visible_len(line);
         let pad = w.saturating_sub(vis);
-        write!(stdout, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
+        write!(buf, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
     } else {
-        write!(stdout, "{content}")?;
-        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        write!(buf, "{line}")?;
     }
     Ok(())
+}
+
+// ── DB enrichment ─────────────────────────────────────────────────────────────
+
+fn enrich_hits(hits: &mut Vec<SearchHit>) {
+    let Ok(conn) = crate::db::connect() else { return };
+    for hit in hits.iter_mut() {
+        let Some(sid) = &hit.session_id else { continue };
+        if let Ok((agent, updated_at)) = conn.query_row(
+            "SELECT agent_name, updated_at FROM sessions WHERE session_id = ?1",
+            [sid.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ) {
+            hit.agent      = agent;
+            hit.updated_at = updated_at;
+            hit.backed_up  = true;
+        }
+    }
 }
 
 // ── Direct name search ────────────────────────────────────────────────────────
 
 fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
-    let words: Vec<String> = query
-        .split_whitespace()
-        .map(|w| w.to_lowercase())
-        .collect();
-    if words.is_empty() {
-        return vec![];
-    }
+    let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+    if words.is_empty() { return vec![]; }
 
     let Ok(conn) = crate::db::connect() else { return vec![]; };
     let Ok(mut stmt) = conn.prepare(
         "SELECT session_id, session_name, cwd FROM sessions WHERE session_name != ''"
     ) else { return vec![]; };
 
-    let Ok(mapped) = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))) else {
-        return vec![];
-    };
-
-    mapped
+    stmt.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?, row.get::<_,String>(2)?)))
+        .ok()
+        .into_iter()
+        .flatten()
         .flatten()
         .filter_map(|(session_id, session_name, cwd): (String, String, String)| {
             let normalized = session_name.to_lowercase().replace(['-', '_'], " ");
@@ -416,12 +587,12 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
                 Some(SearchHit {
                     kind: HitKind::Session,
                     title: session_name,
-                    repo_name: last_component(&cwd),
-                    excerpt: String::new(),
                     dir: short_path(&cwd),
+                    excerpt_lines: vec![],
                     session_id: Some(session_id),
                     repo_dir: None,
-                    start_ts: None,
+                    start_ts: None, hit_ts: None, branch: String::new(),
+                    agent: String::new(), backed_up: false, updated_at: String::new(),
                 })
             } else {
                 None
@@ -431,24 +602,18 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
 }
 
 fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
-    let words: Vec<String> = query
-        .split_whitespace()
-        .map(|w| w.to_lowercase())
-        .collect();
-    if words.is_empty() {
-        return vec![];
-    }
+    let words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+    if words.is_empty() { return vec![]; }
 
     let Ok(conn) = crate::db::connect() else { return vec![]; };
     let Ok(mut stmt) = conn.prepare(
         "SELECT name, directory FROM repositories WHERE name != ''"
     ) else { return vec![]; };
 
-    let Ok(mapped) = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?))) else {
-        return vec![];
-    };
-
-    mapped
+    stmt.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?)))
+        .ok()
+        .into_iter()
+        .flatten()
         .flatten()
         .filter_map(|(name, directory): (String, String)| {
             let normalized = name.to_lowercase().replace(['-', '_'], " ");
@@ -456,12 +621,12 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
                 Some(SearchHit {
                     kind: HitKind::Repo,
                     title: name,
-                    repo_name: String::new(), // same as title
-                    excerpt: String::new(),
                     dir: short_path(&directory),
+                    excerpt_lines: vec![],
                     session_id: None,
                     repo_dir: Some(directory),
-                    start_ts: None,
+                    start_ts: None, hit_ts: None, branch: String::new(),
+                    agent: String::new(), backed_up: false, updated_at: String::new(),
                 })
             } else {
                 None
@@ -472,61 +637,33 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Highlight query words in `text` with bold amber. Works on byte positions in
-/// the (ASCII-safe) lowercased copy, applied back to the original text.
-fn highlight(text: &str, words: &[String]) -> String {
-    if words.is_empty() || text.is_empty() {
-        return text.to_string();
-    }
-
-    let lower = text.to_lowercase();
-    let mut ranges: Vec<(usize, usize)> = vec![];
-
-    for word in words {
-        let mut start = 0;
-        while let Some(pos) = lower[start..].find(word.as_str()) {
-            let abs = start + pos;
-            let end = abs + word.len();
-            if lower.is_char_boundary(abs) && lower.is_char_boundary(end) {
-                ranges.push((abs, end));
-            }
-            start = abs + 1;
+fn rel_time_hit(iso: &str) -> String {
+    if iso.is_empty() { return String::new(); }
+    let Ok(dt) = DateTime::parse_from_rfc3339(iso) else { return String::new(); };
+    let secs = (Utc::now() - dt.with_timezone(&Utc)).num_seconds().max(0);
+    if secs < 604_800 {
+        match secs {
+            s if s < 60     => "just now".into(),
+            s if s < 3_600  => format!("{} min ago", s / 60),
+            s if s < 86_400 => format!("{} hr ago",  s / 3_600),
+            s               => format!("{} day{} ago", s / 86_400, if s / 86_400 == 1 { "" } else { "s" }),
         }
+    } else {
+        dt.with_timezone(&chrono::Local).format("%m/%d/%y").to_string()
     }
-
-    if ranges.is_empty() {
-        return text.to_string();
-    }
-
-    ranges.sort_unstable();
-    let mut merged: Vec<(usize, usize)> = vec![];
-    for (s, e) in ranges {
-        if let Some(last) = merged.last_mut() {
-            if s < last.1 {
-                last.1 = last.1.max(e);
-                continue;
-            }
-        }
-        merged.push((s, e));
-    }
-
-    let mut out = String::new();
-    let mut cursor = 0;
-    for (s, e) in merged {
-        out.push_str(&text[cursor..s]);
-        out.push_str("\x1b[38;5;220;1m");
-        out.push_str(&text[s..e]);
-        out.push_str("\x1b[0m");
-        cursor = e;
-    }
-    out.push_str(&text[cursor..]);
-    out
 }
+
+fn age_secs_hit(iso: &str) -> i64 {
+    if iso.is_empty() { return i64::MAX; }
+    let Ok(dt) = DateTime::parse_from_rfc3339(iso) else { return i64::MAX; };
+    (Utc::now() - dt.with_timezone(&Utc)).num_seconds().max(0)
+}
+
+use super::agent_color;
 
 fn with_bg(s: &str, bg: &str) -> String {
     let reinsert = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert);
-    format!("\x1b[{bg}m{body}")
+    format!("\x1b[{bg}m{}", s.replace("\x1b[0m", &reinsert))
 }
 
 fn visible_len(s: &str) -> usize {
@@ -549,11 +686,4 @@ fn short_path(path: &str) -> String {
     } else {
         path.to_string()
     }
-}
-
-fn last_component(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_default()
 }

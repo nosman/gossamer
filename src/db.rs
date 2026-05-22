@@ -24,6 +24,7 @@ pub fn connect() -> Result<Connection> {
 
     // Idempotent column additions (ignored if column already exists)
     let _ = conn.execute("ALTER TABLE repositories ADD COLUMN last_indexed_commit TEXT", []);
+    let _ = conn.execute("ALTER TABLE repositories ADD COLUMN last_search_commit TEXT", []);
 
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS sessions (

@@ -96,10 +96,10 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
                 do_resume(&agent, session_id, &session_branch, &session_cwd);
                 break;
             }
-            PagerOutcome::Delete => { super::clean::run(session_id)?; break; }
+            PagerOutcome::Delete => { super::clean::run(session_id, false)?; break; }
             PagerOutcome::Quit   => break,
             PagerOutcome::GoToSessions => {
-                super::sessions::run(false)?;
+                super::sessions::run(false, false)?;
                 break;
             }
             PagerOutcome::GoToRepo(dir) => {
@@ -450,17 +450,7 @@ fn render_md(text: &str, width: usize) -> Vec<String> {
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-fn agent_color(name: &str) -> u8 {
-    if      name.contains("Claude")   { 214 }
-    else if name.contains("Copilot")  { 99  }
-    else if name.contains("Cursor")   { 33  }
-    else if name.contains("Gemini")   { 75  }
-    else if name.contains("Aider")    { 42  }
-    else if name.contains("ChatGPT")  { 35  }
-    else if name.contains("Windsurf") { 44  }
-    else if name.contains("Amazon Q") { 208 }
-    else                              { 245 }
-}
+use super::agent_color;
 
 fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();

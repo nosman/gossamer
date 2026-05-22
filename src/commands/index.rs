@@ -8,7 +8,7 @@ use crate::{db, ingest};
 
 pub(crate) const BRANCH: &str = "entire/checkpoints/v1";
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     let conn = db::connect()?;
 
     let mut stmt = conn.prepare("SELECT directory, name FROM repositories")?;
@@ -17,7 +17,11 @@ pub fn run() -> Result<()> {
         .collect::<Result<_, _>>()?;
 
     if repos.is_empty() {
-        println!("No repositories tracked. Run `gossamer init` first.");
+        if json {
+            println!("{}", serde_json::json!({"sessions_indexed": 0, "log_turns": 0}));
+        } else {
+            println!("No repositories tracked. Run `gossamer init` first.");
+        }
         return Ok(());
     }
 
@@ -25,25 +29,33 @@ pub fn run() -> Result<()> {
 
     for (dir, name) in &repos {
         match index_repo(&conn, dir, name) {
-            Ok(0) => println!("'{}': no {} branch found.", name, BRANCH),
+            Ok(0) => { if !json { println!("'{}': no {} branch found.", name, BRANCH); } }
             Ok(n) => {
-                println!("'{}': indexed {} session(s).", name, n);
+                if !json { println!("'{}': indexed {} session(s).", name, n); }
                 grand_total += n;
             }
             Err(e) => eprintln!("'{}': error — {}", name, e),
         }
     }
 
-    println!("\n{} session(s) indexed.", grand_total);
+    if !json { println!("\n{} session(s) indexed.", grand_total); }
 
-    // Ingest into witchcraft semantic search DB.
-    println!("\nIndexing into search DB...");
+    if !json { println!("\nIndexing into search DB..."); }
     let mut wc_db = ingest::open_search_db()?;
     let turns    = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
     let sessions = ingest::ingest_sessions(&mut wc_db).unwrap_or(0);
-    let repos    = ingest::ingest_repos(&mut wc_db).unwrap_or(0);
-    println!("{turns} log turn(s), {sessions} session name(s), {repos} repo(s) indexed.");
+    let repos_n  = ingest::ingest_repos(&mut wc_db).unwrap_or(0);
+    if !json { println!("{turns} log turn(s), {sessions} session name(s), {repos_n} repo(s) indexed."); }
     ingest::embed_and_index(&wc_db)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "sessions_indexed": grand_total,
+            "log_turns": turns,
+            "session_names": sessions,
+            "repos": repos_n,
+        }))?);
+    }
 
     Ok(())
 }

@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::db;
 use super::index::{BRANCH, checkpoint_remote_url, git_show, is_meta_path, parse_session, upsert_session};
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     let conn = db::connect()?;
 
     let mut stmt = conn.prepare("SELECT directory, name FROM repositories")?;
@@ -13,7 +13,11 @@ pub fn run() -> Result<()> {
         .collect::<Result<_, _>>()?;
 
     if repos.is_empty() {
-        println!("No repositories tracked. Run `gossamer init` first.");
+        if json {
+            println!("{}", serde_json::json!({"sessions_indexed": 0}));
+        } else {
+            println!("No repositories tracked. Run `gossamer init` first.");
+        }
         return Ok(());
     }
 
@@ -21,20 +25,24 @@ pub fn run() -> Result<()> {
 
     for (dir, name) in &repos {
         match refresh_repo(&conn, dir) {
-            Ok(0) => println!("'{}': up to date.", name),
+            Ok(0) => { if !json { println!("'{}': up to date.", name); } }
             Ok(n) => {
-                println!("'{}': {} new session(s) indexed.", name, n);
+                if !json { println!("'{}': {} new session(s) indexed.", name, n); }
                 grand_total += n;
             }
             Err(e) => eprintln!("'{}': error — {}", name, e),
         }
     }
 
-    println!();
-    if grand_total > 0 {
-        println!("{} new session(s) indexed.", grand_total);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"sessions_indexed": grand_total}))?);
     } else {
-        println!("All repositories up to date.");
+        println!();
+        if grand_total > 0 {
+            println!("{} new session(s) indexed.", grand_total);
+        } else {
+            println!("All repositories up to date.");
+        }
     }
 
     Ok(())

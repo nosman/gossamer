@@ -48,9 +48,37 @@ const AGENTS: &[(&str, &str, u8)] = &[
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run() -> Result<()> {
+pub fn run(json: bool) -> Result<()> {
     let conn = db::connect()?;
     let repos = fetch_repos(&conn)?;
+
+    if json {
+        let arr: Vec<serde_json::Value> = repos.iter().map(|r| {
+            let worktrees: Vec<serde_json::Value> = fetch_worktrees(&r.directory).into_iter().map(|wt| serde_json::json!({
+                "path": wt.path,
+                "branch": wt.branch,
+                "head": wt.head,
+                "is_main": wt.is_main,
+            })).collect();
+            let sessions: Vec<serde_json::Value> = load_sessions(&r.directory).into_iter().map(|s| serde_json::json!({
+                "session_id": s.session_id,
+                "session_name": s.session_name,
+                "branch": s.branch,
+                "agent": s.agent,
+                "updated_at": s.updated_at.to_rfc3339(),
+                "backed_up": s.backed_up,
+            })).collect();
+            serde_json::json!({
+                "name": r.name,
+                "directory": r.directory,
+                "remote": r.remote,
+                "worktrees": worktrees,
+                "sessions": sessions,
+            })
+        }).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "repos": arr }))?);
+        return Ok(());
+    }
 
     if repos.is_empty() {
         println!("No repositories tracked. Run `gossamer init` in a git repo to get started.");
@@ -272,7 +300,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
             Cmd::Search(query) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let _ = super::search::run(&query, 10);
+                let _ = super::search::run(&query, 10, false);
                 terminal::enable_raw_mode().ok();
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
@@ -916,17 +944,7 @@ fn create_worktree(repo_dir: &str, branch: &str) -> String {
     }
 }
 
-fn agent_color(name: &str) -> u8 {
-    if      name.contains("Claude")   { 214 }
-    else if name.contains("Copilot")  { 99  }
-    else if name.contains("Cursor")   { 33  }
-    else if name.contains("Gemini")   { 75  }
-    else if name.contains("Aider")    { 42  }
-    else if name.contains("ChatGPT")  { 35  }
-    else if name.contains("Windsurf") { 44  }
-    else if name.contains("Amazon Q") { 208 }
-    else                              { 245 }
-}
+use super::agent_color;
 
 fn short_path_s(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();

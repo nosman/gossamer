@@ -28,7 +28,7 @@ enum Action {
     Resume(String, String), // (id, cwd)
 }
 
-pub fn run(all: bool) -> Result<()> {
+pub fn run(all: bool, json: bool) -> Result<()> {
     let conn = db::connect()?;
 
     let repos = fetch_repos(&conn)?;
@@ -88,6 +88,20 @@ pub fn run(all: bool) -> Result<()> {
         let b_local = current_repo_dir.as_deref().map_or(false, |d| b.cwd.starts_with(d));
         b_local.cmp(&a_local).then(b.updated_at.cmp(&a.updated_at))
     });
+
+    if json {
+        let arr: Vec<serde_json::Value> = sessions.iter().map(|s| serde_json::json!({
+            "session_id": s.session_id,
+            "session_name": s.session_name,
+            "cwd": s.cwd,
+            "branch": s.branch,
+            "agent": s.agent_name,
+            "updated_at": s.updated_at.to_rfc3339(),
+            "backed_up": s.backed_up,
+        })).collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "sessions": arr }))?);
+        return Ok(());
+    }
 
     if sessions.is_empty() {
         println!("No sessions found.");
@@ -352,17 +366,7 @@ fn user_text(content: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn agent_color(name: &str) -> u8 {
-    if      name.contains("Claude")   { 214 }
-    else if name.contains("Copilot")  { 99  }
-    else if name.contains("Cursor")   { 33  }
-    else if name.contains("Gemini")   { 75  }
-    else if name.contains("Aider")    { 42  }
-    else if name.contains("ChatGPT")  { 35  }
-    else if name.contains("Windsurf") { 44  }
-    else if name.contains("Amazon Q") { 208 }
-    else                              { 245 }
-}
+use super::agent_color;
 
 fn relative_time(dt: DateTime<Utc>) -> String {
     let secs = (Utc::now() - dt).num_seconds().max(0);

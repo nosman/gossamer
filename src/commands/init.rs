@@ -43,7 +43,7 @@ struct AgentOption {
     selected: bool,
 }
 
-pub fn run() -> Result<()> {
+pub fn run(_json: bool) -> Result<()> {
     let cwd = env::current_dir().context("failed to get current directory")?;
     let cwd_str = cwd.to_string_lossy().to_string();
 

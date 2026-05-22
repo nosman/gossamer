@@ -53,7 +53,7 @@ fn find_jsonl_by_title(title: &str) -> Option<String> {
     None
 }
 
-pub fn run(session_id_or_name: &str) -> Result<()> {
+pub fn run(session_id_or_name: &str, json: bool) -> Result<()> {
     let conn = db::connect()?;
     let session_id = resolve_session_id(&conn, session_id_or_name);
 
@@ -73,13 +73,16 @@ pub fn run(session_id_or_name: &str) -> Result<()> {
         rusqlite::params![session_id],
     )?;
 
-    if rows > 0 {
-        println!("Removed '{}' from gossamer DB.", session_id);
-    } else {
-        println!("'{}' was not in gossamer DB.", session_id);
+    if !json {
+        if rows > 0 {
+            println!("Removed '{}' from gossamer DB.", session_id);
+        } else {
+            println!("'{}' was not in gossamer DB.", session_id);
+        }
     }
 
     let Ok(mut wc_db) = ingest::open_search_db() else {
+        if json { println!("{}", serde_json::json!({"ok": true, "session_id": session_id, "db_rows_deleted": rows})); }
         return Ok(());
     };
 
@@ -95,8 +98,16 @@ pub fn run(session_id_or_name: &str) -> Result<()> {
     };
 
     match wc_db.delete_with_filter(&filter) {
-        Ok(_) => println!("Removed search index entries for '{}'.", session_id),
+        Ok(_)  => { if !json { println!("Removed search index entries for '{}'.", session_id); } }
         Err(e) => eprintln!("Warning: could not clean search DB: {e}"),
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "ok": true,
+            "session_id": session_id,
+            "db_rows_deleted": rows,
+        }))?);
     }
 
     Ok(())

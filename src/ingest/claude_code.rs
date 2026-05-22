@@ -1,13 +1,13 @@
 use anyhow::Result;
 use regex::Regex;
 use serde::Deserialize;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::process::Command;
 use uuid::Uuid;
 
 use witchcraft::DB;
 
-use crate::watermark;
+use crate::commands::index::{BRANCH, git_show, is_meta_path};
 
 const MIN_CHUNK_CODEPOINTS: usize = 5;
 const MAX_CHUNK_CODEPOINTS: usize = 4000;
@@ -153,33 +153,14 @@ fn compact(text: &str) -> String {
     re.replace_all(text, " ").trim().to_string()
 }
 
-fn decode_project_name(dir_name: &str) -> String {
-    dir_name.replace('-', "/").trim_start_matches('/').to_string()
-}
-
-fn file_mtime_ms(path: &Path) -> Option<i64> {
-    fs::metadata(path)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_millis() as i64)
-}
-
-fn parse_session_file(path: &Path) -> (SessionInfo, Vec<Chunk>) {
-    let raw = match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(_) => return (SessionInfo { custom_title: None, cwd: None }, vec![]),
-    };
-
+fn parse_session_content(content: &str) -> (SessionInfo, Vec<Chunk>) {
     let mut chunks = Vec::new();
     let mut info = SessionInfo { custom_title: None, cwd: None };
     let mut offset: u64 = 0;
 
-    for line in raw.lines() {
+    for line in content.lines() {
         let line_offset = offset;
-        offset += line.len() as u64 + 1; // +1 for newline
+        offset += line.len() as u64 + 1;
 
         if line.trim().is_empty() {
             continue;
@@ -217,12 +198,12 @@ fn parse_session_file(path: &Path) -> (SessionInfo, Vec<Chunk>) {
             _ => continue,
         };
 
-        let content = match &msg.content {
+        let content_field = match &msg.content {
             Some(c) => c,
             None => continue,
         };
 
-        let raw_text = match extract_text(content) {
+        let raw_text = match extract_text(content_field) {
             Some(t) => t,
             None => continue,
         };
@@ -264,8 +245,13 @@ fn parse_session_file(path: &Path) -> (SessionInfo, Vec<Chunk>) {
     (info, chunks)
 }
 
-fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -> Result<(usize, Option<String>)> {
-    let (info, chunks) = parse_session_file(path);
+fn ingest_session(
+    db: &mut DB,
+    session_id: &str,
+    content: &str,
+    project_name: &str,
+) -> Result<(usize, Option<String>)> {
+    let (info, chunks) = parse_session_content(content);
     if chunks.is_empty() {
         return Ok((0, info.custom_title));
     }
@@ -276,7 +262,6 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
         .map(|cwd| cwd.trim_start_matches('/').to_string())
         .unwrap_or_else(|| project_name.to_string());
 
-    let session_id = path.file_stem().unwrap().to_string_lossy();
     let custom_title = info.custom_title.clone();
 
     let session_title: String = info.custom_title.unwrap_or_else(|| {
@@ -287,7 +272,6 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
             .unwrap_or_default()
     });
 
-    // Split into interactions: each starts at a user message
     let mut interactions: Vec<&[Chunk]> = Vec::new();
     let mut start = 0;
     for (i, chunk) in chunks.iter().enumerate() {
@@ -335,12 +319,9 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
         let metadata = serde_json::json!({
             "source": "claude",
             "project": project_name,
-            "session_id": session_id.to_string(),
+            "session_id": session_id,
             "session_name": session_title,
             "turn": turn_idx,
-            "path": path.to_string_lossy(),
-            "cwd": info.cwd,
-            "mtime_ms": mtime_ms,
             "turns": turns_meta,
             "branch": branch,
         })
@@ -354,67 +335,146 @@ fn ingest_session(db: &mut DB, path: &Path, project_name: &str, mtime_ms: i64) -
     Ok((count, custom_title))
 }
 
-/// Ingest new or modified Claude Code sessions from ~/.claude/projects/ into
-/// the witchcraft DB. Uses a watermark file to skip unchanged sessions on
-/// subsequent runs. Returns the number of session turns ingested.
+/// Ingest sessions from the entire/checkpoints/v1 git branch into the
+/// witchcraft search DB. Only processes sessions in tracked repos. Uses a
+/// per-repo git commit watermark to skip unchanged content on subsequent runs.
 pub fn ingest_claude_code(db: &mut DB) -> Result<usize> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let projects_dir = PathBuf::from(&home).join(".claude/projects");
+    let gossamer_conn = match crate::db::connect() {
+        Ok(c) => c,
+        Err(_) => return Ok(0),
+    };
 
-    if !projects_dir.is_dir() {
+    let repos: Vec<String> = gossamer_conn
+        .prepare("SELECT directory FROM repositories")?
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if repos.is_empty() {
         return Ok(0);
     }
 
-    let wm_path = watermark::claude_path();
-    let wm_ts = watermark::mtime_ms(&wm_path);
+    let mut total = 0usize;
 
-    let gossamer_conn = crate::db::connect().ok();
-
-    let mut turn_count = 0usize;
-
-    let mut entries: Vec<_> = fs::read_dir(&projects_dir)?
-        .filter_map(|e| e.ok())
-        .collect();
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let dir_path = entry.path();
-        if !dir_path.is_dir() {
-            continue;
-        }
-
-        let dir_name = entry.file_name().to_string_lossy().to_string();
-        let project_name = decode_project_name(&dir_name);
-
-        let mut jsonl_files: Vec<PathBuf> = fs::read_dir(&dir_path)?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "jsonl"))
-            .collect();
-        jsonl_files.sort();
-
-        for jsonl_path in &jsonl_files {
-            if !watermark::file_newer_than(jsonl_path, wm_ts) {
-                continue;
-            }
-            let mtime_ms = file_mtime_ms(jsonl_path).unwrap_or(0);
-            eprintln!("{}", jsonl_path.display());
-            match ingest_session(db, jsonl_path, &project_name, mtime_ms) {
-                Ok((n, custom_title)) => {
-                    turn_count += n;
-                    if let (Some(conn), Some(title)) = (&gossamer_conn, custom_title) {
-                        let sid = jsonl_path.file_stem().unwrap().to_string_lossy();
-                        let _ = conn.execute(
-                            "UPDATE sessions SET session_name = ?1 WHERE session_id = ?2",
-                            rusqlite::params![title, sid.as_ref()],
-                        );
-                    }
-                }
-                Err(e) => eprintln!("  warning: failed to ingest {}: {e}", jsonl_path.display()),
-            }
+    for repo_dir in &repos {
+        match ingest_repo(db, &gossamer_conn, repo_dir) {
+            Ok(n) => total += n,
+            Err(e) => eprintln!("  warning: failed to ingest repo {repo_dir}: {e}"),
         }
     }
 
-    watermark::touch(&wm_path);
-    Ok(turn_count)
+    Ok(total)
+}
+
+fn ingest_repo(
+    db: &mut DB,
+    conn: &rusqlite::Connection,
+    repo_dir: &str,
+) -> Result<usize> {
+    let head_out = Command::new("git")
+        .args(["rev-parse", BRANCH])
+        .current_dir(repo_dir)
+        .output()?;
+
+    if !head_out.status.success() {
+        return Ok(0);
+    }
+    let current_head = String::from_utf8_lossy(&head_out.stdout).trim().to_string();
+
+    let stored_head: Option<String> = conn.query_row(
+        "SELECT last_search_commit FROM repositories WHERE directory = ?1",
+        [repo_dir],
+        |row| row.get(0),
+    ).ok().flatten();
+
+    if stored_head.as_deref() == Some(current_head.as_str()) {
+        return Ok(0);
+    }
+
+    // Find meta paths changed since last search index run
+    let meta_paths: Vec<String> = if let Some(ref last) = stored_head {
+        let out = Command::new("git")
+            .args(["diff", "--name-only", "--diff-filter=AM", last, BRANCH])
+            .current_dir(repo_dir)
+            .output()?;
+        String::from_utf8(out.stdout)?
+            .lines()
+            .filter(|l| is_meta_path(l))
+            .map(str::to_string)
+            .collect()
+    } else {
+        let out = Command::new("git")
+            .args(["ls-tree", "-r", "--name-only", BRANCH])
+            .current_dir(repo_dir)
+            .output()?;
+        String::from_utf8(out.stdout)?
+            .lines()
+            .filter(|l| is_meta_path(l))
+            .map(str::to_string)
+            .collect()
+    };
+
+    // Deduplicate: keep only the latest checkpoint per session (highest num in path)
+    // Path: <prefix2>/<id10>/<num>/metadata.json
+    let mut latest: std::collections::HashMap<String, (u32, String)> = std::collections::HashMap::new();
+    for meta_path in &meta_paths {
+        let parts: Vec<&str> = meta_path.splitn(4, '/').collect();
+        if parts.len() != 4 { continue }
+        let checkpoint_key = format!("{}/{}", parts[0], parts[1]);
+        let num: u32 = parts[2].parse().unwrap_or(0);
+        let entry = latest.entry(checkpoint_key).or_insert((0, meta_path.clone()));
+        if num >= entry.0 {
+            *entry = (num, meta_path.clone());
+        }
+    }
+
+    let mut count = 0usize;
+
+    for (_key, (_num, meta_path)) in &latest {
+        let jsonl_path = format!(
+            "{}full.jsonl",
+            &meta_path[..meta_path.len() - "metadata.json".len()]
+        );
+
+        let meta_bytes = match git_show(repo_dir, meta_path) {
+            Ok(b) => b,
+            Err(e) => { eprintln!("  skipping {meta_path}: {e}"); continue }
+        };
+        let jsonl_bytes = match git_show(repo_dir, &jsonl_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        let meta: serde_json::Value = match serde_json::from_slice(&meta_bytes) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let session_id = match meta["session_id"].as_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+
+        let content = String::from_utf8_lossy(&jsonl_bytes);
+        eprintln!("{jsonl_path}");
+
+        match ingest_session(db, &session_id, &content, "") {
+            Ok((n, custom_title)) => {
+                count += n;
+                if let Some(title) = custom_title {
+                    let _ = conn.execute(
+                        "UPDATE sessions SET session_name = ?1 WHERE session_id = ?2",
+                        rusqlite::params![title, session_id.as_str()],
+                    );
+                }
+            }
+            Err(e) => eprintln!("  warning: failed to ingest {session_id}: {e}"),
+        }
+    }
+
+    conn.execute(
+        "UPDATE repositories SET last_search_commit = ?1 WHERE directory = ?2",
+        rusqlite::params![current_head, repo_dir],
+    )?;
+
+    Ok(count)
 }
