@@ -1,0 +1,49 @@
+let's get rid of the highlighting of the search terms in the search results. let's also format it better, with all the metadata above the actual text snippet in a "header" and then the text snippet underneath
+
+---
+
+make the header match the other screens in gossamer, example: [Image #6]
+
+---
+
+Can you also match the coloring in the search results? it's all grey now
+
+---
+
+Why does witchcraft store session_id as the file path? is that a design choice we made?
+
+---
+
+Do we index the entire/checkpoints/v1 branch in a different way?
+
+---
+
+I don't want that at all. i want only the checkpointed sessions to be indexed.
+
+---
+
+so are you still indexing the claude projects.jsonl files? or are you indexing the actual contents of the entire/checkpoints/v1 branch?
+
+---
+
+The problem is that entire listens to other agents as well, so it might have session transcripts that arent' found under claude projects folder
+
+---
+
+Show a few more lines both before and after the search hit. also, group the search hits by the session they come from. Show a timestamp for each hit. Also show the branch that that session is on, and color it like the other sessions
+
+---
+
+put a blank line between each session's results
+
+---
+
+put the repo name in the same color as the other repo details screens, it's pale yellow
+
+---
+
+actually let's highlight the session name instead
+
+---
+
+Make every command accept a --json flag that instead of rendering a screen, will just print out the corresponding json to the terminal. For example, gossamer repo would print out something like { "repos" : [ { "name" : "gossamer", "worktrees" : [ .... ] }
