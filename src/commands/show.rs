@@ -785,10 +785,11 @@ fn resume_via_entire(dir: &str, branch: &str) {
         dir.to_string()
     };
 
-    let Ok(out) = std::process::Command::new("entire")
-        .arg("resume")
-        .current_dir(&launch_dir)
-        .output() else { eprintln!("entire resume failed"); return; };
+    let mut entire = std::process::Command::new("entire");
+    entire.arg("resume").current_dir(&launch_dir);
+    if !branch.is_empty() { entire.arg(branch); }
+
+    let Ok(out) = entire.output() else { eprintln!("entire resume failed"); return; };
 
     let cmd_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if cmd_str.is_empty() { eprintln!("entire resume returned no command"); return; }

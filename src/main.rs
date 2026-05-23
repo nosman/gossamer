@@ -49,6 +49,25 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         top_k: usize,
     },
+    /// Start a new AI coding session, optionally in a fresh git worktree
+    NewSession {
+        /// Agent to use: claude, gemini, aider [default: claude]
+        #[arg(long, short = 'a')]
+        agent: Option<String>,
+        /// Create a new git worktree on this branch before launching
+        #[arg(long, short = 'b')]
+        branch: Option<String>,
+        /// Session name (passed as -n to the agent)
+        #[arg(long, short = 'n')]
+        name: Option<String>,
+        /// Initial prompt, also copied to clipboard
+        prompt: Option<String>,
+    },
+    /// Resume a session, checking out a new worktree if needed
+    Resume {
+        /// Session ID (full UUID or unambiguous prefix)
+        session_id: String,
+    },
     /// Remove a session: runs `entire clean`, deletes from DB, removes search index entries
     Clean {
         /// Session ID to clean up
@@ -89,6 +108,10 @@ fn main() -> Result<()> {
         Commands::Refresh => commands::refresh::run(json)?,
         Commands::Show { session } => commands::show::run(&session)?,
         Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k, json)?,
+        Commands::NewSession { agent, branch, name, prompt } => {
+            commands::new_session::run(agent, branch, name, prompt)?
+        }
+        Commands::Resume { session_id } => commands::resume::run(&session_id)?,
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
