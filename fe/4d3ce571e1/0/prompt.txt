@@ -1,0 +1,13 @@
+Let's write some integration tests. The tests should create a dummy repo, call gossamer init, add some files, make a new claude session asking it to make some edit. Then, make commits and in the meantime test all the gossamer commands you see in main.rs
+
+---
+
+Write an AGENTS.md file that describes this project for agents to be able to understand it. Describe what gossamer does, what each command does, the project's dependencies, the entireio commands, and the rust tech stack.
+
+---
+
+How do i run the tests? does agents.md cover that?
+
+---
+
+why is the integration test output all garbled? it's also taking a very long time to run, or the program isn't stoppping
