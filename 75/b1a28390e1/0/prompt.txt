@@ -1,0 +1,45 @@
+Let's write a skill for gossamer that we can package for agents to use. this skill should say that this is a way to see the repos that we care about on this machine, as well as the ongoing sessions. if we see a new repo we like, we can also track it via gossamer init. Finally, explain about the searching capabilities
+
+---
+
+Can you also add the skill file to the gossamer repo? I want to package it and make it available via npx
+
+---
+
+we need commands for some of the app-internal functions. specifically, when we resume a session by checking out a new worktree. or creating a new session with the wizard. Evaluate that functionaliy and make corresponding commmands.
+
+---
+
+/update-config
+
+---
+
+do we need to reload to pick up the the new gossamer skills?
+
+---
+
+Why doesn't the gossamer --help command show me that i can create a new session? is that not a top-level command?
+
+---
+
+I told you to make a top-level command to do this alreaddy
+
+---
+
+how come you missed this the first time?
+
+---
+
+https://docs.entire.io/cli/commands#resume the entire resume command takes in a branch name. do we do that too?
+
+---
+
+Yes pass the branch through. Entire checks out the branch but i don't think it creates worktrees on its own. there is a difference
+
+---
+
+What happens if i pass a sessionId to entire?
+
+---
+
+To entire resume, i mean
