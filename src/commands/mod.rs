@@ -1,5 +1,6 @@
 pub mod attach;
 pub mod clean;
+pub mod handoff;
 pub mod index;
 pub mod init;
 pub mod new_session;
