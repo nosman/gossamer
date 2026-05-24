@@ -190,6 +190,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         Search(String),
         NewWorktree(String), // branch name
         NewSession(NewSessionConfig),
+        Tidy,
         Redraw,
     }
 
@@ -268,6 +269,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                             None => Cmd::Redraw,
                         }
                     }
+                    KeyCode::Char('t') => Cmd::Tidy,
                     _ => Cmd::None,
                 },
             },
@@ -358,6 +360,31 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                     session_name,
                     prompt,
                 }));
+            }
+            Cmd::Tidy => {
+                let repo_idx_opt = if let Some(Screen::Sessions { repo_idx, .. }) = stack.last() {
+                    Some(*repo_idx)
+                } else {
+                    None
+                };
+                if let Some(repo_idx) = repo_idx_opt {
+                    let repo = &repos[repo_idx];
+                    let (tw, th) = terminal::size().unwrap_or((120, 40));
+                    let changed = super::tidy::tui_tidy(
+                        stdout,
+                        std::slice::from_ref(repo),
+                        7,
+                        false,
+                        tw as usize,
+                        th as usize,
+                    );
+                    if changed {
+                        if let Some(Screen::Sessions { worktrees, .. }) = stack.last_mut() {
+                            *worktrees = fetch_worktrees(&repos[repo_idx].directory);
+                        }
+                    }
+                    execute!(stdout, terminal::Clear(ClearType::All)).ok();
+                }
             }
             Cmd::Redraw => { execute!(stdout, terminal::Clear(ClearType::All)).ok(); }
         }
@@ -538,7 +565,7 @@ fn draw_sessions(
     }
 
     let bar = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   /: search   ←/h: back   q: quit  ",
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   t: tidy   /: search   ←/h: back   q: quit  ",
         sessions.len()
     );
     draw_status(stdout, &bar, w, h)?;

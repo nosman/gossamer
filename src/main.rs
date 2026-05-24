@@ -73,6 +73,21 @@ enum Commands {
         /// Session ID to clean up
         session_id: String,
     },
+    /// Remove git worktrees that have had no recent session activity
+    Tidy {
+        /// Only list stale worktrees without removing them
+        #[arg(long)]
+        dry_run: bool,
+        /// Days of inactivity before a worktree is considered stale
+        #[arg(long, default_value = "7")]
+        days: i64,
+        /// Pass --force to git worktree remove (removes worktrees with uncommitted changes)
+        #[arg(long)]
+        force: bool,
+        /// Also remove sessions whose cwd was inside each removed worktree
+        #[arg(long)]
+        sessions: bool,
+    },
     /// Attach an existing session with entireio and index it into witchcraft
     Attach {
         /// Session ID to attach
@@ -121,6 +136,7 @@ fn main() -> Result<()> {
         }
         Commands::Resume { session_id } => commands::resume::run(&session_id)?,
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
+        Commands::Tidy { dry_run, days, force, sessions } => commands::tidy::run(days, dry_run, force, sessions, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
         Commands::Handoff { session_id, force } => commands::handoff::run(&session_id, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
