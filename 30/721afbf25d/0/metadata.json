@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "30721afbf25d",
+  "session_id": "73e81e02-3a57-4c37-9973-abd8dd70186f",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-24T03:56:11.453828Z",
+  "branch": "gossamer-handoff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/commands/handoff.rs",
+    "src/commands/mod.rs",
+    "src/main.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "b0c9b58ebd93",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 83545,
+    "cache_read_tokens": 782265,
+    "output_tokens": 26663,
+    "api_call_count": 18
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-24T03:56:11.350939Z",
+    "agent_lines": 223,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 223,
+    "total_lines_changed": 223,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

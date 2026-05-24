@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "30721afbf25d",
+  "strategy": "manual-commit",
+  "branch": "gossamer-handoff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "src/commands/handoff.rs",
+    "src/commands/mod.rs",
+    "src/main.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/30/721afbf25d/0/metadata.json",
+      "transcript": "/30/721afbf25d/0/full.jsonl",
+      "content_hash": "/30/721afbf25d/0/content_hash.txt",
+      "prompt": "/30/721afbf25d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 83545,
+    "cache_read_tokens": 782265,
+    "output_tokens": 26663,
+    "api_call_count": 18
+  }
+}
