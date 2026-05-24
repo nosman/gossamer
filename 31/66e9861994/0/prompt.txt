@@ -1,0 +1,5 @@
+let's make another command to clean up old worktrees. let's call it gossamer tidy. This should find worktrees that haven't been touched in a while, ie there are no recently-updated sessions that have any checkpoints in that worktree directory. It should then just call git worktree remove on these old worktrees. Make both a command line version of this command, and an interactive one that can be called from the TUI menu. The TUI one should list the worktrees it will clean and ask the user for confirmation
+
+---
+
+Add another flag that will also remove the associated session along with the worktree
