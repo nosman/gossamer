@@ -17,10 +17,17 @@ use std::sync::OnceLock;
 enum Card {
     RepoLink  { name: String, dir: String, branch: String },
     Header    { title: Option<String>, cwd: String, branch: String, ts: String, agent: String },
-    UserMsg   { ts: String, parts: Vec<UserPart> },
+    UserMsg   { ts: String, parts: Vec<UserPart>, author: Option<String> },
     AsstMsg   { ts: String, parts: Vec<AsstPart> },
     ToolRound { parts: Vec<AsstPart> },
     System    { ts: String, subtype: String, content: String },
+}
+
+/// One entry per checkpoint commit, ordered oldest first. A turn with
+/// timestamp T is attributed to the first entry whose `last_turn_ts >= T`.
+struct CheckpointAuthor {
+    last_turn_ts: DateTime<Utc>,
+    label: String, // display name; email as fallback
 }
 
 enum UserPart {
@@ -69,6 +76,18 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
+    // Attribute each user message to the author of the checkpoint commit that
+    // first captured it. Falls back to a plain "user" label when the session
+    // has no checkpoint rows (shadow-branch-only sessions).
+    let authors = fetch_authors(uuid);
+    if !authors.is_empty() {
+        for card in cards.iter_mut() {
+            if let Card::UserMsg { ts, author, .. } = card {
+                *author = attribute(&authors, ts);
+            }
+        }
+    }
+
     // Extract branch and cwd from the Header before cards are consumed by pager.
     let session_branch = cards.iter().find_map(|c| {
         if let Card::Header { branch, .. } = c { Some(branch.clone()) } else { None }
@@ -111,17 +130,96 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn fetch_authors(session_id: &str) -> Vec<CheckpointAuthor> {
+    let Ok(conn) = crate::db::connect() else { return Vec::new(); };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT last_turn_ts, author_name, author_email, COALESCE(os_user, '')
+           FROM checkpoints
+          WHERE session_id = ?1
+       ORDER BY checkpoint_number ASC"
+    ) else { return Vec::new(); };
+
+    let rows = stmt.query_map([session_id], |row| {
+        let ts: String = row.get(0)?;
+        let name: String = row.get(1)?;
+        let email: String = row.get(2)?;
+        let os_user: String = row.get(3)?;
+        Ok((ts, name, email, os_user))
+    });
+    let Ok(rows) = rows else { return Vec::new(); };
+
+    let mut out = Vec::new();
+    for r in rows.flatten() {
+        let (ts_s, name, email, os_user) = r;
+        let Ok(dt) = DateTime::parse_from_rfc3339(&ts_s) else { continue };
+        let label = if !name.trim().is_empty() {
+            name
+        } else if !email.trim().is_empty() {
+            email
+        } else {
+            os_user
+        };
+        if label.is_empty() { continue; }
+        out.push(CheckpointAuthor {
+            last_turn_ts: dt.with_timezone(&Utc),
+            label,
+        });
+    }
+    out
+}
+
+fn attribute(authors: &[CheckpointAuthor], ts: &str) -> Option<String> {
+    let dt = DateTime::parse_from_rfc3339(ts).ok()?.with_timezone(&Utc);
+    // Earliest checkpoint whose last_turn_ts >= the card's timestamp.
+    for a in authors {
+        if a.last_turn_ts >= dt {
+            return Some(a.label.clone());
+        }
+    }
+    // Card's timestamp is past every checkpoint we've seen — attribute to
+    // the most recent author (latest checkpoint).
+    authors.last().map(|a| a.label.clone())
+}
+
 fn find_session(id: &str) -> Option<PathBuf> {
     let p = PathBuf::from(id);
     if p.exists() { return Some(p); }
-    let home = std::env::var("HOME").ok()?;
-    let projects = PathBuf::from(&home).join(".claude/projects");
-    for entry in std::fs::read_dir(&projects).ok()? {
-        let dir = entry.ok()?.path();
-        let candidate = dir.join(format!("{id}.jsonl"));
-        if candidate.exists() { return Some(candidate); }
+    if let Ok(home) = std::env::var("HOME") {
+        let projects = PathBuf::from(&home).join(".claude/projects");
+        if let Ok(entries) = std::fs::read_dir(&projects) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join(format!("{id}.jsonl"));
+                if candidate.exists() { return Some(candidate); }
+            }
+        }
     }
-    None
+    // Fall back to extracting the latest checkpoint's full.jsonl from the
+    // entire/checkpoints/v1 branch. Used when this session was authored on
+    // another machine and never produced a local Claude Code log.
+    extract_from_checkpoint(id)
+}
+
+fn extract_from_checkpoint(session_id: &str) -> Option<PathBuf> {
+    let conn = crate::db::connect().ok()?;
+    let (jsonl_path, repo_dir): (String, String) = conn.query_row(
+        "SELECT jsonl_path, repo_dir FROM checkpoints
+         WHERE session_id = ?1
+           AND jsonl_path IS NOT NULL
+           AND repo_dir   IS NOT NULL
+         ORDER BY checkpoint_number DESC
+         LIMIT 1",
+        [session_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).ok()?;
+
+    let bytes = crate::commands::index::git_show(&repo_dir, &jsonl_path).ok()?;
+
+    let home = std::env::var("HOME").ok()?;
+    let cache_dir = PathBuf::from(&home).join(".gossamer").join("sessions");
+    std::fs::create_dir_all(&cache_dir).ok()?;
+    let cache_path = cache_dir.join(format!("{session_id}.jsonl"));
+    std::fs::write(&cache_path, &bytes).ok()?;
+    Some(cache_path)
 }
 
 // ── Parsing ───────────────────────────────────────────────────────────────────
@@ -170,7 +268,7 @@ fn parse(raw: &str, agent: &str) -> Vec<Card> {
                 if let Some(c) = v["cwd"].as_str()       { if first_cwd.is_empty()    { first_cwd    = c.to_string(); } }
                 if let Some(b) = v["gitBranch"].as_str() { if first_branch.is_empty() { first_branch = b.to_string(); } }
                 let parts = parse_user(&v["message"]["content"], &tool_names);
-                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts }); }
+                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts, author: None }); }
             }
             Some("assistant") => {
                 let parts = parse_asst(&v["message"]["content"]);
@@ -483,9 +581,10 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
             lines.push(String::new());
             for l in wrap(content, w) { lines.push(format!("  \x1b[{dm}m{l}\x1b[0m", dm = th.text_dim)); }
         }
-        Card::UserMsg { ts, parts } => {
+        Card::UserMsg { ts, parts, author } => {
+            let label = author.as_deref().unwrap_or("user");
             lines.push(format!(
-                "\x1b[1;{fr}m── user  \x1b[0m\x1b[{dm}m{}\x1b[0m",
+                "\x1b[1;{fr}m── {label}  \x1b[0m\x1b[{dm}m{}\x1b[0m",
                 rel_time(ts), fr = th.fresh, dm = th.text_dim,
             ));
             for part in parts {

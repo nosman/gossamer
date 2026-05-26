@@ -6,22 +6,11 @@ use crossterm::{
     execute,
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::collections::HashSet;
 use std::env;
-use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::io::{self, Write};
 
-use crate::{db, entity::session::Session, commands::status::fetch_repos};
-
-struct DisplaySession {
-    session_id: String,
-    session_name: String,
-    cwd: String,
-    branch: String,
-    updated_at: DateTime<Utc>,
-    agent_name: String,
-    backed_up: bool,
-}
+use crate::{db, commands::status::fetch_repos};
+use crate::commands::session_list::{self, DisplaySession, Scope};
 
 enum Action {
     Show(String),
@@ -33,61 +22,35 @@ pub fn run(all: bool, json: bool) -> Result<()> {
 
     let repos = fetch_repos(&conn)?;
     let cwd_env = env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
-    let current_repo_dir: Option<String> = cwd_env.as_deref().and_then(|cwd| {
-        repos.iter()
-            .find(|r| cwd.starts_with(r.directory.as_str()))
-            .map(|r| r.directory.clone())
-    });
+    let current_repo_id: Option<i64> = cwd_env.as_deref()
+        .and_then(|cwd| repos.iter().find(|r| cwd.starts_with(r.directory.as_str())))
+        .map(|r| r.id as i64);
 
-    let mut stmt = conn.prepare(
-        "SELECT session_id, agent_name, user, created_at, updated_at, cwd, session_name, tokens_used
-         FROM sessions ORDER BY updated_at DESC"
-    )?;
+    let mut sessions = session_list::fetch(Scope::All, all);
 
-    let db_sessions: Vec<Session> = stmt.query_map([], |row| {
-        let created_str: String = row.get(3)?;
-        let updated_str: String = row.get(4)?;
-        Ok(Session {
-            session_id: row.get(0)?,
-            agent_name: row.get(1)?,
-            user: row.get(2)?,
-            created_at: DateTime::parse_from_rfc3339(&created_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            updated_at: DateTime::parse_from_rfc3339(&updated_str)
-                .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| Utc::now()),
-            cwd: row.get(5)?,
-            session_name: row.get(6)?,
-            tokens_used: row.get(7)?,
-        })
-    })?
-    .collect::<Result<Vec<_>, _>>()?;
-
-    let known_ids: HashSet<String> = db_sessions.iter().map(|s| s.session_id.clone()).collect();
-    let cutoff = Utc::now() - chrono::Duration::days(3);
-
-    let mut sessions: Vec<DisplaySession> = db_sessions.into_iter()
-        .filter(|s| all || s.updated_at >= cutoff)
-        .map(|s| DisplaySession {
-            session_id: s.session_id,
-            session_name: s.session_name,
-            cwd: s.cwd,
-            branch: String::new(),
-            updated_at: s.updated_at,
-            agent_name: s.agent_name,
-            backed_up: true,
-        })
-        .collect();
-
-    sessions.extend(scan_claude_projects(&known_ids, all, cutoff));
-
-    // Local-repo sessions first, then by recency
-    sessions.sort_by(|a, b| {
-        let a_local = current_repo_dir.as_deref().map_or(false, |d| a.cwd.starts_with(d));
-        let b_local = current_repo_dir.as_deref().map_or(false, |d| b.cwd.starts_with(d));
-        b_local.cmp(&a_local).then(b.updated_at.cmp(&a.updated_at))
-    });
+    // Pin sessions belonging to the current repo to the top while preserving
+    // recency-DESC within each group. session_id → repo_id lookup happens here
+    // (one query) so we don't run it per row.
+    if let Some(current) = current_repo_id {
+        let repo_id_for: std::collections::HashMap<String, i64> = {
+            let mut map = std::collections::HashMap::new();
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT session_id, repo_id FROM sessions WHERE repo_id IS NOT NULL"
+            ) {
+                if let Ok(rows) = stmt.query_map([], |row| {
+                    Ok::<(String, i64), rusqlite::Error>((row.get(0)?, row.get(1)?))
+                }) {
+                    for r in rows.flatten() { map.insert(r.0, r.1); }
+                }
+            }
+            map
+        };
+        sessions.sort_by(|a, b| {
+            let a_local = repo_id_for.get(&a.session_id) == Some(&current);
+            let b_local = repo_id_for.get(&b.session_id) == Some(&current);
+            b_local.cmp(&a_local).then(b.updated_at.cmp(&a.updated_at))
+        });
+    }
 
     if json {
         let arr: Vec<serde_json::Value> = sessions.iter().map(|s| serde_json::json!({
@@ -95,6 +58,7 @@ pub fn run(all: bool, json: bool) -> Result<()> {
             "session_name": s.session_name,
             "cwd": s.cwd,
             "branch": s.branch,
+            "author": s.author,
             "agent": s.agent_name,
             "updated_at": s.updated_at.to_rfc3339(),
             "backed_up": s.backed_up,
@@ -186,6 +150,7 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
     let name_w = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
     let cwd_w  = sessions.iter().map(|s| short_cwd(&s.cwd).chars().count()).max().unwrap_or(0);
     let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
+    let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
     let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
 
     execute!(stdout, cursor::MoveTo(0, 0))?;
@@ -216,7 +181,8 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         };
         let branch_col = if s.backed_up { t.link } else { t.stale };
 
-        let name: String = s.session_name.trim().chars().take(name_w).collect();
+        let clean = session_list::sanitize_one_line(&s.session_name);
+        let name: String = clean.chars().take(name_w).collect();
         let name_padded = format!("{:<name_w$}", name);
 
         let cwd_short = short_cwd(&s.cwd);
@@ -231,6 +197,12 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
             let b: String = s.branch.chars().take(branch_w).collect();
             let pad = " ".repeat(branch_w - b.chars().count());
             line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
+        }
+
+        if author_w > 0 {
+            let a: String = s.author.chars().take(author_w).collect();
+            let pad = " ".repeat(author_w - a.chars().count());
+            line.push_str(&format!("  \x1b[{dm}m{a}{pad}\x1b[0m", dm = t.text_dim));
         }
 
         if agent_w > 0 {
@@ -263,109 +235,6 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
     write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
 
     stdout.flush()
-}
-
-fn scan_claude_projects(known_ids: &HashSet<String>, all: bool, cutoff: DateTime<Utc>) -> Vec<DisplaySession> {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return vec![],
-    };
-    let projects_dir = PathBuf::from(&home).join(".claude/projects");
-    let Ok(projects) = std::fs::read_dir(&projects_dir) else { return vec![] };
-
-    let mut sessions: Vec<DisplaySession> = Vec::new();
-
-    for project_entry in projects.flatten() {
-        let project_dir = project_entry.path();
-        if !project_dir.is_dir() { continue }
-
-        let Ok(files) = std::fs::read_dir(&project_dir) else { continue };
-
-        for file_entry in files.flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue }
-
-            let session_id = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-
-            let file_mtime = file_entry.metadata().ok()
-                .and_then(|m| m.modified().ok())
-                .map(DateTime::<Utc>::from)
-                .unwrap_or_else(Utc::now);
-
-            if !all && file_mtime < cutoff { continue }
-
-            let Ok(file) = std::fs::File::open(&path) else { continue };
-            let reader = std::io::BufReader::new(file);
-            let mut session_name = String::new();
-            let mut cwd = String::new();
-            let mut branch = String::new();
-            let mut last_prompt = String::new();
-
-            for line in reader.lines().flatten() {
-                if line.trim().is_empty() { continue }
-                let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-                match v["type"].as_str() {
-                    Some("custom-title") => {
-                        if let Some(t) = v["customTitle"].as_str() { session_name = t.to_string(); }
-                    }
-                    Some("user") | Some("system") => {
-                        if cwd.is_empty() {
-                            if let Some(c) = v["cwd"].as_str() { cwd = c.to_string(); }
-                        }
-                    }
-                    _ => {}
-                }
-                if v["type"].as_str() == Some("user") {
-                    if let Some(t) = user_text(&v["message"]["content"]) {
-                        last_prompt = t;
-                    }
-                }
-                if let Some(b) = v["gitBranch"].as_str() {
-                    if !b.is_empty() { branch = b.to_string(); }
-                }
-            }
-
-            let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
-
-            if known_ids.contains(&session_id) {
-                if let Some(existing) = sessions.iter_mut().find(|s| s.session_id == session_id) {
-                    if !display_name.is_empty() { existing.session_name = display_name; }
-                    if file_mtime > existing.updated_at { existing.updated_at = file_mtime; }
-                    if !branch.is_empty() { existing.branch = branch; }
-                }
-                continue;
-            }
-
-            sessions.push(DisplaySession {
-                session_id,
-                session_name: display_name,
-                cwd,
-                branch,
-                updated_at: file_mtime,
-                agent_name: "Claude Code".to_string(),
-                backed_up: false,
-            });
-        }
-    }
-
-    sessions
-}
-
-fn user_text(content: &serde_json::Value) -> Option<String> {
-    match content {
-        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        serde_json::Value::Array(blocks) => {
-            blocks.iter().find_map(|b| {
-                if b["type"].as_str() == Some("text") {
-                    b["text"].as_str().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
-                } else { None }
-            })
-        }
-        _ => None,
-    }
 }
 
 use super::agent_color;

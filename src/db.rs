@@ -25,6 +25,11 @@ pub fn connect() -> Result<Connection> {
     // Idempotent column additions (ignored if column already exists)
     let _ = conn.execute("ALTER TABLE repositories ADD COLUMN last_indexed_commit TEXT", []);
     let _ = conn.execute("ALTER TABLE repositories ADD COLUMN last_search_commit TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN jsonl_path TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN repo_dir TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN os_user TEXT", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN branch TEXT", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN repo_id INTEGER", []);
 
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS sessions (
@@ -44,6 +49,19 @@ pub fn connect() -> Result<Connection> {
             type       TEXT NOT NULL,
             data       TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            session_id        TEXT NOT NULL,
+            checkpoint_number INTEGER NOT NULL,
+            commit_sha        TEXT NOT NULL,
+            author_name       TEXT NOT NULL,
+            author_email      TEXT NOT NULL,
+            last_turn_ts      TEXT NOT NULL,
+            jsonl_path        TEXT,
+            repo_dir          TEXT,
+            PRIMARY KEY (session_id, checkpoint_number)
+        );
+        CREATE INDEX IF NOT EXISTS checkpoints_session_idx
+            ON checkpoints (session_id, last_turn_ts);
     ")
     .context("failed to run schema migrations")?;
 

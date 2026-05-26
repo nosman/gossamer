@@ -7,21 +7,13 @@ use crossterm::{
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use std::env;
-use std::io::{self, BufRead, IsTerminal, Write};
-use std::path::PathBuf;
+use std::io::{self, IsTerminal, Write};
 
 use crate::{db, entity::repository::Repository};
 
 // ── Shared structs ────────────────────────────────────────────────────────────
 
-struct RepoSession {
-    session_id: String,
-    session_name: String,
-    updated_at: DateTime<Utc>,
-    branch: String,
-    agent: String,
-    backed_up: bool, // registered in the gossamer DB (tracked by entire)
-}
+use super::session_list::{self, DisplaySession as RepoSession, Scope};
 
 struct RepoWorktree {
     path: String,
@@ -60,11 +52,13 @@ pub fn run(json: bool) -> Result<()> {
                 "head": wt.head,
                 "is_main": wt.is_main,
             })).collect();
-            let sessions: Vec<serde_json::Value> = load_sessions(&r.directory).into_iter().map(|s| serde_json::json!({
+            let sessions: Vec<serde_json::Value> = session_list::fetch(Scope::Repo(r), true)
+                .into_iter().map(|s| serde_json::json!({
                 "session_id": s.session_id,
                 "session_name": s.session_name,
                 "branch": s.branch,
-                "agent": s.agent,
+                "author": s.author,
+                "agent": s.agent_name,
                 "updated_at": s.updated_at.to_rfc3339(),
                 "backed_up": s.backed_up,
             })).collect();
@@ -168,7 +162,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         .unwrap_or(0);
 
     let initial = if let Some(idx) = start_repo.filter(|&i| i < repos.len()) {
-        let sessions = load_sessions(&repos[idx].directory);
+        let sessions = session_list::fetch(Scope::Repo(&repos[idx]), true);
         let worktrees = fetch_worktrees(&repos[idx].directory);
         Screen::Sessions { repo_idx: idx, sel: 0, sessions, worktrees }
     } else {
@@ -285,7 +279,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                 if stack.is_empty() { break; }
             }
             Cmd::PushSessions(idx) => {
-                let sessions = load_sessions(&repos[idx].directory);
+                let sessions = session_list::fetch(Scope::Repo(&repos[idx]), true);
                 let worktrees = fetch_worktrees(&repos[idx].directory);
                 stack.push(Screen::Sessions { repo_idx: idx, sel: 0, sessions, worktrees });
             }
@@ -517,14 +511,16 @@ fn draw_sessions(
         // Pre-compute column widths for table alignment
         let name_w   = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
-        let agent_w  = sessions.iter().map(|s| s.agent.chars().count()).max().unwrap_or(0);
+        let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
+        let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
 
         for (i, s) in sessions.iter().enumerate().skip(scroll) {
             if row >= content_h { break; }
 
             let id_short: String = s.session_id.chars().take(8).collect();
             let ts = relative_time(s.updated_at);
-            let name: String = s.session_name.trim().chars().take(name_w).collect();
+            let clean = session_list::sanitize_one_line(&s.session_name);
+            let name: String = clean.chars().take(name_w).collect();
             let age = (Utc::now() - s.updated_at).num_seconds().max(0);
             let dot_col = match age {
                 a if a < 900   => t.fresh,
@@ -548,9 +544,15 @@ fn draw_sessions(
                 line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
             }
 
+            if author_w > 0 {
+                let a: String = s.author.chars().take(author_w).collect();
+                let pad = " ".repeat(author_w - a.chars().count());
+                line.push_str(&format!("  \x1b[{dm}m{a}{pad}\x1b[0m", dm = t.text_dim));
+            }
+
             if agent_w > 0 {
-                let col = if s.backed_up { agent_color(&s.agent) } else { t.stale_agent };
-                let a: String = s.agent.chars().take(agent_w).collect();
+                let col = if s.backed_up { agent_color(&s.agent_name) } else { t.stale_agent };
+                let a: String = s.agent_name.chars().take(agent_w).collect();
                 let pad = " ".repeat(agent_w - a.chars().count());
                 line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
             }
@@ -643,116 +645,6 @@ fn fetch_worktrees(repo_dir: &str) -> Vec<RepoWorktree> {
 }
 
 // ── Session loading ───────────────────────────────────────────────────────────
-
-fn load_sessions(cwd_prefix: &str) -> Vec<RepoSession> {
-    let mut sessions: Vec<RepoSession> = Vec::new();
-
-    // From DB
-    if let Ok(conn) = db::connect() {
-        if let Ok(mut stmt) = conn.prepare(
-            "SELECT session_id, session_name, updated_at, agent_name FROM sessions WHERE cwd LIKE ?1 ORDER BY updated_at DESC"
-        ) {
-            let prefix_pattern = format!("{cwd_prefix}%");
-            let _ = stmt.query_map([&prefix_pattern], |row| {
-                let ts_str: String = row.get(2)?;
-                let updated_at = DateTime::parse_from_rfc3339(&ts_str)
-                    .map(|dt| dt.with_timezone(&Utc))
-                    .unwrap_or_else(|_| Utc::now());
-                Ok(RepoSession {
-                    session_id: row.get(0)?,
-                    session_name: row.get(1)?,
-                    updated_at,
-                    branch: String::new(),
-                    agent: row.get(3)?,
-                    backed_up: true,
-                })
-            }).map(|rows| {
-                for r in rows.flatten() { sessions.push(r); }
-            });
-        }
-    }
-
-    // From ~/.claude/projects/ — refresh existing DB sessions and add new ones
-    if let Ok(home) = std::env::var("HOME") {
-        let projects = PathBuf::from(&home).join(".claude/projects");
-        if let Ok(dirs) = std::fs::read_dir(&projects) {
-            for dir_entry in dirs.flatten() {
-                let dir = dir_entry.path();
-                if !dir.is_dir() { continue }
-                if let Ok(files) = std::fs::read_dir(&dir) {
-                    for f in files.flatten() {
-                        let path = f.path();
-                        if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue }
-                        let session_id = match path.file_stem().and_then(|s| s.to_str()) {
-                            Some(s) => s.to_string(),
-                            None => continue,
-                        };
-
-                        let file_mtime = f.metadata().ok()
-                            .and_then(|m| m.modified().ok())
-                            .map(DateTime::<Utc>::from)
-                            .unwrap_or_else(Utc::now);
-
-                        let Ok(file) = std::fs::File::open(&path) else { continue };
-                        let reader = std::io::BufReader::new(file);
-                        let mut session_name = String::new();
-                        let mut cwd_found = String::new();
-                        let mut last_prompt = String::new();
-                        let mut git_branch = String::new();
-
-                        for line in reader.lines().flatten() {
-                            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
-                            match v["type"].as_str() {
-                                Some("custom-title") => {
-                                    if let Some(t) = v["customTitle"].as_str() { session_name = t.to_string(); }
-                                }
-                                Some("user") | Some("system") => {
-                                    if cwd_found.is_empty() {
-                                        if let Some(c) = v["cwd"].as_str() { cwd_found = c.to_string(); }
-                                    }
-                                }
-                                _ => {}
-                            }
-                            if v["type"].as_str() == Some("user") {
-                                if let Some(t) = user_text(&v["message"]["content"]) {
-                                    last_prompt = t;
-                                }
-                            }
-                            // Track the most recent branch seen in this session
-                            if let Some(b) = v["gitBranch"].as_str() {
-                                if !b.is_empty() { git_branch = b.to_string(); }
-                            }
-                        }
-
-                        let display_name = if !session_name.is_empty() { session_name } else { last_prompt };
-
-                        if let Some(existing) = sessions.iter_mut().find(|s| s.session_id == session_id) {
-                            // Refresh the name, timestamp, and branch from live JSONL
-                            if !display_name.is_empty() { existing.session_name = display_name; }
-                            if file_mtime > existing.updated_at { existing.updated_at = file_mtime; }
-                            if !git_branch.is_empty() { existing.branch = git_branch; }
-                            continue;
-                        }
-
-                        if !cwd_found.starts_with(cwd_prefix) { continue }
-
-                        sessions.push(RepoSession {
-                            session_id,
-                            session_name: display_name,
-                            updated_at: file_mtime,
-                            branch: git_branch,
-                            agent: String::new(),
-                            backed_up: false,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    sessions
-}
 
 // ── Text input prompt ─────────────────────────────────────────────────────────
 
@@ -983,20 +875,6 @@ fn short_path_s(path: &str) -> String {
         format!("~{}", &path[home.len()..])
     } else {
         path.to_string()
-    }
-}
-
-fn user_text(content: &serde_json::Value) -> Option<String> {
-    match content {
-        serde_json::Value::String(s) if !s.trim().is_empty() => Some(s.trim().to_string()),
-        serde_json::Value::Array(blocks) => {
-            blocks.iter().find_map(|b| {
-                if b["type"].as_str() == Some("text") {
-                    b["text"].as_str().filter(|t| !t.trim().is_empty()).map(|t| t.trim().to_string())
-                } else { None }
-            })
-        }
-        _ => None,
     }
 }
 

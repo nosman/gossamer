@@ -1306,6 +1306,7 @@ dependencies = [
  "crossterm",
  "dirs",
  "iso8601-timestamp",
+ "libc",
  "regex",
  "rusqlite",
  "serde",

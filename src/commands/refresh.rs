@@ -2,14 +2,17 @@ use anyhow::Result;
 use std::process::Command;
 
 use crate::db;
-use super::index::{BRANCH, checkpoint_remote_url, git_show, is_meta_path, parse_session, upsert_session};
+use super::index::{
+    BRANCH, fetch_checkpoint_branch, git_show, index_shadow_branches, is_meta_path, parse_session,
+    upsert_session,
+};
 
 pub fn run(json: bool) -> Result<()> {
     let conn = db::connect()?;
 
-    let mut stmt = conn.prepare("SELECT directory, name FROM repositories")?;
-    let repos: Vec<(String, String)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+    let mut stmt = conn.prepare("SELECT id, directory, name FROM repositories")?;
+    let repos: Vec<(i64, String, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<Result<_, _>>()?;
 
     if repos.is_empty() {
@@ -23,8 +26,8 @@ pub fn run(json: bool) -> Result<()> {
 
     let mut grand_total = 0usize;
 
-    for (dir, name) in &repos {
-        match refresh_repo(&conn, dir) {
+    for (repo_id, dir, name) in &repos {
+        match refresh_repo(&conn, *repo_id, dir) {
             Ok(0) => { if !json { println!("'{}': up to date.", name); } }
             Ok(n) => {
                 if !json { println!("'{}': {} new session(s) indexed.", name, n); }
@@ -56,23 +59,22 @@ pub fn run(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn refresh_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<usize> {
-    // Fetch the branch from remote if possible.
-    if let Some(remote_url) = checkpoint_remote_url(repo_dir) {
-        let _ = Command::new("git")
-            .args(["fetch", &remote_url, &format!("{}:{}", BRANCH, BRANCH)])
-            .current_dir(repo_dir)
-            .output();
-    }
+fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str) -> Result<usize> {
+    fetch_checkpoint_branch(repo_dir);
 
-    // Check branch exists.
+    // Shadow branches advance on every prompt, so we always sweep them — even
+    // when the checkpoint head is unchanged, an active session can have new
+    // turns visible only on its shadow ref.
+    let shadow_count = index_shadow_branches(conn, repo_id, repo_dir).unwrap_or(0);
+
+    // Check checkpoint branch exists.
     let check = Command::new("git")
         .args(["rev-parse", "--verify", BRANCH])
         .current_dir(repo_dir)
         .output()?;
 
     if !check.status.success() {
-        return Ok(0);
+        return Ok(shadow_count);
     }
 
     let current_head = String::from_utf8(check.stdout)?.trim().to_string();
@@ -85,7 +87,7 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<usize> {
     ).ok().flatten();
 
     if stored_head.as_deref() == Some(current_head.as_str()) {
-        return Ok(0); // nothing new
+        return Ok(shadow_count); // checkpoint unchanged; shadow may still have new turns
     }
 
     // Collect metadata paths: added or modified since watermark (or all if first run).
@@ -132,9 +134,10 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<usize> {
             Err(_) => continue,
         };
         match parse_session(&meta_bytes, &jsonl_bytes, &user) {
-            Ok((session_id, agent_name, created_at, updated_at, cwd, session_name)) => {
+            Ok((session_id, agent_name, created_at, updated_at, cwd, session_name, branch)) => {
                 upsert_session(conn, &session_id, &agent_name, &user,
-                               &created_at, &updated_at, &cwd, &session_name)?;
+                               &created_at, &updated_at, &cwd, &session_name,
+                               &branch, Some(repo_id))?;
                 count += 1;
             }
             Err(e) => eprintln!("  skipping {}: {}", meta_path, e),
@@ -147,5 +150,5 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_dir: &str) -> Result<usize> {
         rusqlite::params![current_head, repo_dir],
     )?;
 
-    Ok(count)
+    Ok(count + shadow_count)
 }

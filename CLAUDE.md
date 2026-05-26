@@ -199,6 +199,8 @@ Where `metadata.json` contains `{ session_id, agent, created_at, summary: { inte
 
 Gossamer identifies metadata files by the rule: path has exactly 3 `/` characters and the third path segment is all digits (see `is_meta_path` in `commands/index.rs`).
 
+In addition to the checkpoint branch, entireio also keeps **shadow branches** of the form `entire/<short-hash>-<short-id>` (one per active worktree/session). These commit on every prompt, well ahead of the periodic checkpoint commits. Each shadow branch carries the full working tree plus `.entire/metadata/<session-uuid>/full.jsonl` and `prompt.txt`. There is no `metadata.json` on shadow branches — gossamer derives `created_at`, `cwd`, `session_name`, etc. directly from the JSONL (see `parse_shadow_session` / `index_shadow_branches` in `commands/index.rs`). Shadow branches are swept on every `gossamer index` and `gossamer refresh`, even when the checkpoint head is unchanged, so in-progress sessions appear with up-to-date `updated_at`.
+
 ## Rust Tech Stack
 
 | Crate | Purpose |

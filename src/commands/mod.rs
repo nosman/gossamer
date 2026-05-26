@@ -8,6 +8,7 @@ pub mod new_session;
 pub mod refresh;
 pub mod resume;
 pub mod search;
+pub mod session_list;
 pub mod session_start;
 pub mod session_stop;
 pub mod show;
