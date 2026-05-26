@@ -1,0 +1,13 @@
+we made some changes to the color scheme for gossamer. can we detect what the terminal's color scheme is set to and adapt our highlighting from there? the recent changes to handle light mode aren't that legible right now
+
+---
+
+reinstall it
+
+---
+
+entireio tracks sessions on shadow branches before committing to entire/checkpoints/v1. can you also add logic to index these shadow branches? that way we will see more pending changes without having to wait for a commit.
+
+---
+
+can you reindex the cosmos-graphql repo? i want to see if the latest messages will show up
