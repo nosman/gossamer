@@ -42,6 +42,7 @@ struct SearchHit {
     backed_up: bool,
     updated_at: String,
     remote: String,
+    author: String, // session author (first-checkpoint commit author), name > email > os_user
 }
 
 // Groups hits from the same session together under one header row.
@@ -57,6 +58,7 @@ struct Group {
     repo_dir: Option<String>,
     kind: HitKind,
     rows: Vec<GroupRow>,
+    author: String,
 }
 
 struct GroupRow {
@@ -136,6 +138,7 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
                 "session_name": g.title,
                 "dir": g.dir,
                 "branch": g.branch,
+                "author": g.author,
                 "agent": g.agent,
                 "updated_at": g.updated_at,
                 "backed_up": g.backed_up,
@@ -170,6 +173,16 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
     result
 }
 
+/// The ingest pipeline prefixes user turns with `[User] ` so the embedded
+/// body string distinguishes roles. The author column now carries that
+/// information at the row level, so strip the inline tag from excerpts.
+fn strip_user_label(s: &str) -> String {
+    s.strip_prefix("[User] ")
+        .or_else(|| s.strip_prefix("[User]"))
+        .unwrap_or(s)
+        .to_string()
+}
+
 // ── Hit parsing ───────────────────────────────────────────────────────────────
 
 fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit {
@@ -189,7 +202,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
                 start_ts: None, hit_ts: None, branch: String::new(),
-                agent: String::new(), backed_up: false, updated_at: String::new(),
+                agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
                 remote: String::new(),
             }
         }
@@ -204,7 +217,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 session_id: None,
                 repo_dir: Some(dir),
                 start_ts: None, hit_ts: None, branch: String::new(),
-                agent: String::new(), backed_up: false, updated_at: String::new(),
+                agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
                 remote: String::new(),
             }
         }
@@ -216,20 +229,24 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
 
             // Collect context: previous turn, matched turn, next turn.
             // bodies[0] is the header; bodies[N] for N>0 is a conversation turn.
+            // Strip the "[User] " prefix the ingest pipeline bakes into every
+            // user turn — the author column already shows who the user was,
+            // so the inline label is redundant. "[Claude]" is kept because it
+            // distinguishes assistant turns and has no column-level analog.
             let mut excerpt_lines: Vec<String> = Vec::new();
             if sub_idx > 1 {
                 if let Some(prev) = bodies.get(sub_idx - 1) {
-                    let t: String = prev.trim().chars().take(220).collect();
+                    let t: String = strip_user_label(prev.trim()).chars().take(220).collect();
                     if !t.is_empty() { excerpt_lines.push(t); }
                 }
             }
             if let Some(matched) = bodies.get(sub_idx) {
-                let t: String = matched.trim().chars().take(400).collect();
+                let t: String = strip_user_label(matched.trim()).chars().take(400).collect();
                 if !t.is_empty() { excerpt_lines.push(t); }
             }
             if sub_idx + 1 < bodies.len() {
                 if let Some(next) = bodies.get(sub_idx + 1) {
-                    let t: String = next.trim().chars().take(220).collect();
+                    let t: String = strip_user_label(next.trim()).chars().take(220).collect();
                     if !t.is_empty() { excerpt_lines.push(t); }
                 }
             }
@@ -252,7 +269,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 start_ts: hit_ts.clone(),
                 hit_ts,
                 branch,
-                agent: String::new(), backed_up: false, updated_at: String::new(),
+                agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
                 remote: String::new(),
             }
         }
@@ -289,6 +306,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                         session_id: hit.session_id,
                         repo_dir: None,
                         kind: HitKind::Log,
+                        author: hit.author,
                         rows: vec![GroupRow {
                             hit_ts: hit.hit_ts,
                             start_ts: hit.start_ts,
@@ -309,6 +327,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     session_id: hit.session_id,
                     repo_dir: None,
                     kind: HitKind::Session,
+                    author: hit.author,
                     rows: vec![],
                 });
             }
@@ -324,6 +343,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     session_id: None,
                     repo_dir: hit.repo_dir,
                     kind: HitKind::Repo,
+                    author: String::new(),
                     rows: vec![],
                 });
             }
@@ -436,6 +456,7 @@ fn draw(
     // Pre-compute column widths across all groups for tabular alignment.
     let name_w   = groups.iter().map(|g| g.title.trim().chars().count()).max().unwrap_or(0).min(45);
     let agent_w  = groups.iter().map(|g| g.agent.chars().count()).max().unwrap_or(0);
+    let author_w = groups.iter().map(|g| g.author.chars().count()).max().unwrap_or(0);
     let branch_w = groups.iter().map(|g| g.branch.chars().count()).max().unwrap_or(0).min(30);
 
     let mut screen_row = 1usize; // next terminal row to write (row 0 is title bar)
@@ -471,6 +492,13 @@ fn draw(
                 let b: String = group.branch.chars().take(branch_w).collect();
                 let pad = " ".repeat(branch_w - b.chars().count());
                 line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
+            }
+
+            if author_w > 0 {
+                let a: String = group.author.chars().take(author_w).collect();
+                let pad = " ".repeat(author_w - a.chars().count());
+                let col = super::author_color(&group.author);
+                line.push_str(&format!("  \x1b[38;5;{col}m{a}\x1b[0m{pad}"));
             }
 
             if agent_w > 0 {
@@ -566,19 +594,41 @@ fn enrich_hits(hits: &mut Vec<SearchHit>) {
     let Ok(conn) = crate::db::connect() else { return };
     for hit in hits.iter_mut() {
         if let Some(sid) = &hit.session_id {
-            if let Ok((agent, updated_at, remote)) = conn.query_row(
-                "SELECT s.agent_name, s.updated_at, COALESCE(r.remote, '') \
-                 FROM sessions s \
-                 LEFT JOIN repositories r \
-                   ON (s.cwd = r.directory OR s.cwd LIKE r.directory || '/%') \
-                 WHERE s.session_id = ?1",
-                [sid.as_str()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
-            ) {
+            // Pull agent + remote, plus the first checkpoint's author (matching
+            // the resolution session_list::query_db uses: name > email > os_user).
+            if let Ok((agent, updated_at, remote, author_name, author_email, author_os_user)) =
+                conn.query_row(
+                    "SELECT s.agent_name, s.updated_at, COALESCE(r.remote, ''),
+                            COALESCE(c.author_name, ''), COALESCE(c.author_email, ''),
+                            COALESCE(c.os_user, '')
+                     FROM sessions s
+                     LEFT JOIN repositories r
+                       ON (s.cwd = r.directory OR s.cwd LIKE r.directory || '/%')
+                     LEFT JOIN checkpoints c
+                       ON c.session_id = s.session_id
+                      AND c.checkpoint_number = (
+                            SELECT MIN(checkpoint_number) FROM checkpoints
+                            WHERE session_id = s.session_id
+                          )
+                     WHERE s.session_id = ?1",
+                    [sid.as_str()],
+                    |row| Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    )),
+                )
+            {
                 hit.agent      = agent;
                 hit.updated_at = updated_at;
                 hit.backed_up  = true;
                 hit.remote     = remote;
+                hit.author     = if !author_name.trim().is_empty() { author_name }
+                                 else if !author_email.trim().is_empty() { author_email }
+                                 else { author_os_user };
             }
         } else if let Some(dir) = &hit.repo_dir.clone() {
             if let Ok(remote) = conn.query_row(
@@ -619,7 +669,7 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
                     session_id: Some(session_id),
                     repo_dir: None,
                     start_ts: None, hit_ts: None, branch: String::new(),
-                    agent: String::new(), backed_up: false, updated_at: String::new(),
+                    agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
                     remote: String::new(),
                 })
             } else {
@@ -654,7 +704,7 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
                     session_id: None,
                     repo_dir: Some(directory),
                     start_ts: None, hit_ts: None, branch: String::new(),
-                    agent: String::new(), backed_up: false, updated_at: String::new(),
+                    agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
                     remote,
                 })
             } else {

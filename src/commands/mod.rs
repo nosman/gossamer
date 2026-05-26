@@ -26,3 +26,19 @@ pub fn agent_color(name: &str) -> u8 {
     else if name.contains("Amazon Q") { 208 }
     else                              { 245 }
 }
+
+/// Deterministic per-author color so the same human always renders the same
+/// hue across runs. Palette is chosen to be visually distinct from the agent
+/// colors above and from the link/branch blue, while still readable on a
+/// dark terminal background.
+pub fn author_color(name: &str) -> u8 {
+    if name.is_empty() { return 245; }
+    const PALETTE: &[u8] = &[141, 113, 209, 110, 173, 219, 156, 180, 213, 117, 215, 78];
+    // djb2 distributes better than sum-of-bytes — sum() happens to land
+    // "Scott Holodak" and "Stephanos Tsoucas" in the same bucket.
+    let mut hash: u32 = 5381;
+    for b in name.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(b as u32);
+    }
+    PALETTE[(hash as usize) % PALETTE.len()]
+}
