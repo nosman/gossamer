@@ -288,10 +288,11 @@ pub fn tui_tidy(
     let panel_h = list_h + 2; // title + list rows
     let panel_top = h.saturating_sub(panel_h + 1);
 
+    let t = crate::theme::get();
     loop {
         // Title
         execute!(stdout, cursor::MoveTo(0, panel_top as u16)).ok();
-        write!(stdout, "\x1b[1;38;5;203m  Tidy — stale worktrees\x1b[0m").ok();
+        write!(stdout, "\x1b[{tw}m  Tidy — stale worktrees\x1b[0m", tw = t.tidy_warn).ok();
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
 
         // List
@@ -299,9 +300,8 @@ pub fn tui_tidy(
             execute!(stdout, cursor::MoveTo(0, (panel_top + 1 + i) as u16)).ok();
             write!(
                 stdout,
-                "  \x1b[38;5;240m[{}]\x1b[0m \x1b[38;5;255m{}\x1b[0m",
-                wt.branch,
-                short_path(&wt.path),
+                "  \x1b[{dm}m[{}]\x1b[0m \x1b[{pm}m{}\x1b[0m",
+                wt.branch, short_path(&wt.path), dm = t.text_dim, pm = t.text_primary,
             ).ok();
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
         }
@@ -309,7 +309,7 @@ pub fn tui_tidy(
             let overflow_row = panel_top + 1 + list_h;
             if overflow_row < h.saturating_sub(1) {
                 execute!(stdout, cursor::MoveTo(0, overflow_row as u16)).ok();
-                write!(stdout, "  \x1b[38;5;240m... and {} more\x1b[0m", stale.len() - list_h).ok();
+                write!(stdout, "  \x1b[{dm}m... and {} more\x1b[0m", stale.len() - list_h, dm = t.text_dim).ok();
                 execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
             }
         }

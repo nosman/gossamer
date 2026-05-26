@@ -421,8 +421,9 @@ fn draw(
     h:      usize,
 ) -> io::Result<()> {
     use crossterm::queue;
-    const SEL_BG: &str  = "48;5;236";
-    const TS_W:   usize = 12; // fixed width of the timestamp column in excerpt rows
+    let t = crate::theme::get();
+    let sel_bg = t.sel_bg;
+    const TS_W: usize = 12; // fixed width of the timestamp column in excerpt rows
 
     let content_h = h.saturating_sub(2);
     let mut buf: Vec<u8> = Vec::with_capacity((w + 60) * (h + 2));
@@ -448,32 +449,32 @@ fn draw(
         if abs_row >= scroll && screen_row <= content_h {
             let age     = age_secs_hit(&group.updated_at);
             let dot_col = match age {
-                a if a < 900   => "38;5;82",
-                a if a < 3_600 => "38;5;214",
-                _              => "38;5;240",
+                a if a < 900   => t.fresh,
+                a if a < 3_600 => t.moderate,
+                _              => t.text_dim,
             };
             let (name_col, meta_col, dot_char) = if group.backed_up {
-                ("1;38;5;229", "38;5;240", "*")
+                (t.backed_name, t.backed_meta, "*")
             } else {
-                ("38;5;242", "38;5;238", "·")
+                (t.unbacked_name, t.unbacked_meta, "·")
             };
 
             let name: String = group.title.trim().chars().take(name_w).collect();
             let name_padded  = format!("{name:<name_w$}");
             let mut line = format!(
-                "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[38;5;240m{}\x1b[0m",
-                group.dir,
+                "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[{dm}m{}\x1b[0m",
+                group.dir, dm = t.text_dim,
             );
 
             if branch_w > 0 {
-                let branch_col = if group.backed_up { "38;5;75" } else { "38;5;239" };
+                let branch_col = if group.backed_up { t.link } else { t.stale };
                 let b: String = group.branch.chars().take(branch_w).collect();
                 let pad = " ".repeat(branch_w - b.chars().count());
                 line.push_str(&format!("  \x1b[{branch_col}m{b}{pad}\x1b[0m"));
             }
 
             if agent_w > 0 {
-                let col = if group.backed_up { agent_color(&group.agent) } else { 239 };
+                let col = if group.backed_up { agent_color(&group.agent) } else { t.stale_agent };
                 let a: String = group.agent.chars().take(agent_w).collect();
                 let pad = " ".repeat(agent_w - a.chars().count());
                 line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
@@ -487,7 +488,7 @@ fn draw(
                 line.push_str(&format!("  \x1b[{meta_col}mrepo\x1b[0m"));
             }
 
-            render_row(&mut buf, &line, selected, SEL_BG, screen_row, w)?;
+            render_row(&mut buf, &line, selected, sel_bg, screen_row, w)?;
             screen_row += 1;
         }
         abs_row += 1;
@@ -506,12 +507,15 @@ fn draw(
 
                     let exc_line = if li == 0 {
                         let ts_padded = format!("{ts_str:>TS_W$}");
-                        format!("  \x1b[38;5;241m{ts_padded}\x1b[0m  \x1b[38;5;245m{text_t}\x1b[0m")
+                        format!(
+                            "  \x1b[{dm}m{ts_padded}\x1b[0m  \x1b[{sc}m{text_t}\x1b[0m",
+                            dm = t.text_dim, sc = t.text_secondary,
+                        )
                     } else {
-                        format!("{excerpt_indent}\x1b[38;5;245m{text_t}\x1b[0m")
+                        format!("{excerpt_indent}\x1b[{sc}m{text_t}\x1b[0m", sc = t.text_secondary)
                     };
 
-                    render_row(&mut buf, &exc_line, selected, SEL_BG, screen_row, w)?;
+                    render_row(&mut buf, &exc_line, selected, sel_bg, screen_row, w)?;
                     screen_row += 1;
                 }
                 abs_row += 1;
