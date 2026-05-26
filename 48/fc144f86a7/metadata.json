@@ -3,14 +3,18 @@
   "checkpoint_id": "48fc144f86a7",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 4,
+  "checkpoints_count": 18,
   "files_touched": [
     "CLAUDE.md",
     "Cargo.lock",
     "Cargo.toml",
     "src/commands/index.rs",
+    "src/commands/mod.rs",
     "src/commands/refresh.rs",
+    "src/commands/session_list.rs",
+    "src/commands/sessions.rs",
     "src/commands/show.rs",
+    "src/commands/status.rs",
     "src/db.rs",
     "src/theme.rs"
   ],
@@ -20,13 +24,19 @@
       "transcript": "/48/fc144f86a7/0/full.jsonl",
       "content_hash": "/48/fc144f86a7/0/content_hash.txt",
       "prompt": "/48/fc144f86a7/0/prompt.txt"
+    },
+    {
+      "metadata": "/48/fc144f86a7/1/metadata.json",
+      "transcript": "/48/fc144f86a7/1/full.jsonl",
+      "content_hash": "/48/fc144f86a7/1/content_hash.txt",
+      "prompt": "/48/fc144f86a7/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 98,
-    "cache_creation_tokens": 237915,
-    "cache_read_tokens": 8443947,
-    "output_tokens": 59337,
-    "api_call_count": 68
+    "input_tokens": 469,
+    "cache_creation_tokens": 773430,
+    "cache_read_tokens": 55985921,
+    "output_tokens": 262051,
+    "api_call_count": 287
   }
 }
