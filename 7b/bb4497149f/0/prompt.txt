@@ -1,0 +1,13 @@
+Search results don't show the usernames the same way that the sessions table does. can you add it there as well?
+
+---
+
+did you reinstall the app?
+
+---
+
+ah i see. the [user] tag still shows up in the search hit itself tho [Image #4]
+
+---
+
+Great. now add some extra color to the usernames in the search hits headers
