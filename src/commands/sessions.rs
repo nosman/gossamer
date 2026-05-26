@@ -176,7 +176,8 @@ fn tui_loop(stdout: &mut impl Write, sessions: &[DisplaySession]) -> Option<Acti
 }
 
 fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usize, h: usize) -> io::Result<()> {
-    const SEL_BG: &str = "48;5;236";
+    let t = crate::theme::get();
+    let sel_bg = t.sel_bg;
 
     let content_h = h.saturating_sub(1);
     let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
@@ -204,16 +205,16 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         let ts = relative_time(s.updated_at);
         let age = (Utc::now() - s.updated_at).num_seconds().max(0);
         let dot_col = match age {
-            a if a < 900   => "38;5;82",
-            a if a < 3_600 => "38;5;214",
-            _              => "38;5;240",
+            a if a < 900   => t.fresh,
+            a if a < 3_600 => t.moderate,
+            _              => t.text_dim,
         };
         let (name_col, meta_col, dot_char) = if s.backed_up {
-            ("1;38;5;255", "38;5;240", "*")
+            (t.backed_name, t.backed_meta, "*")
         } else {
-            ("38;5;242", "38;5;238", "·")
+            (t.unbacked_name, t.unbacked_meta, "·")
         };
-        let branch_col = if s.backed_up { "38;5;75" } else { "38;5;239" };
+        let branch_col = if s.backed_up { t.link } else { t.stale };
 
         let name: String = s.session_name.trim().chars().take(name_w).collect();
         let name_padded = format!("{:<name_w$}", name);
@@ -222,7 +223,8 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         let cwd_padded = format!("{:<cwd_w$}", cwd_short);
 
         let mut line = format!(
-            "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[38;5;240m{cwd_padded}\x1b[0m"
+            "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[{dm}m{cwd_padded}\x1b[0m",
+            dm = t.text_dim,
         );
 
         if branch_w > 0 {
@@ -232,7 +234,7 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         }
 
         if agent_w > 0 {
-            let col = if s.backed_up { agent_color(&s.agent_name) } else { 239 };
+            let col = if s.backed_up { agent_color(&s.agent_name) } else { t.stale_agent };
             let a: String = s.agent_name.chars().take(agent_w).collect();
             let pad = " ".repeat(agent_w - a.chars().count());
             line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
@@ -241,10 +243,10 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
         if is_sel {
-            let colored = with_bg(&line, SEL_BG);
+            let colored = with_bg(&line, sel_bg);
             let vis = visible_width(&line);
             let pad = w.saturating_sub(vis);
-            write!(stdout, "\x1b[{SEL_BG}m{colored}{}\x1b[0m", " ".repeat(pad))?;
+            write!(stdout, "\x1b[{sel_bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
         } else {
             write!(stdout, "{line}")?;
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;

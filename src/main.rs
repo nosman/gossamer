@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod entity;
 mod ingest;
+mod theme;
 mod watermark;
 
 #[derive(Parser)]

@@ -413,30 +413,24 @@ static MD_SKIN: OnceLock<termimad::MadSkin> = OnceLock::new();
 fn md_skin() -> &'static termimad::MadSkin {
     MD_SKIN.get_or_init(|| {
         use crossterm::style::{Attribute, Color};
+        let t = crate::theme::get();
         let mut skin = termimad::MadSkin::default();
-        // Bright white bold
-        skin.bold.set_fg(Color::AnsiValue(255));
+        skin.bold.set_fg(Color::AnsiValue(t.md_bold));
         skin.bold.add_attr(Attribute::Bold);
-        // Italic — subtle light color
-        skin.italic.set_fg(Color::AnsiValue(252));
+        skin.italic.set_fg(Color::AnsiValue(t.md_italic));
         skin.italic.add_attr(Attribute::Italic);
-        // Inline code — cyan, no background
-        skin.inline_code.set_fg(Color::AnsiValue(116));
+        skin.inline_code.set_fg(Color::AnsiValue(t.md_code));
         skin.inline_code.object_style.background_color = None;
-        // Code blocks — similar cyan, no background
-        skin.code_block.compound_style.set_fg(Color::AnsiValue(116));
+        skin.code_block.compound_style.set_fg(Color::AnsiValue(t.md_code));
         skin.code_block.compound_style.object_style.background_color = None;
-        // Normal paragraph text — light grey
-        skin.paragraph.compound_style.set_fg(Color::AnsiValue(252));
-        // Headers — bright
-        skin.headers[0].compound_style.set_fg(Color::AnsiValue(229));
+        skin.paragraph.compound_style.set_fg(Color::AnsiValue(t.md_text));
+        skin.headers[0].compound_style.set_fg(Color::AnsiValue(t.md_h1));
         skin.headers[0].compound_style.add_attr(Attribute::Bold);
-        skin.headers[1].compound_style.set_fg(Color::AnsiValue(222));
+        skin.headers[1].compound_style.set_fg(Color::AnsiValue(t.md_h2));
         skin.headers[1].compound_style.add_attr(Attribute::Bold);
-        skin.headers[2].compound_style.set_fg(Color::AnsiValue(216));
+        skin.headers[2].compound_style.set_fg(Color::AnsiValue(t.md_h3));
         skin.headers[2].compound_style.add_attr(Attribute::Bold);
-        // Bullet list markers — same as body
-        skin.bullet.set_fg(Color::AnsiValue(252));
+        skin.bullet.set_fg(Color::AnsiValue(t.md_text));
         skin
     })
 }
@@ -453,6 +447,7 @@ fn render_md(text: &str, width: usize) -> Vec<String> {
 use super::agent_color;
 
 fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
+    let th = crate::theme::get();
     let mut lines: Vec<String> = Vec::new();
     let w = width.saturating_sub(2);
 
@@ -463,12 +458,15 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
                 format!("~{}", &dir[home.len()..])
             } else { dir.clone() };
             let branch_part = if !branch.is_empty() {
-                format!("  \x1b[38;5;220m[{branch}]\x1b[0m")
+                format!("  \x1b[{lb}m[{branch}]\x1b[0m", lb = th.label)
             } else { String::new() };
-            lines.push(format!("\x1b[38;5;240m▸ repo  \x1b[0m\x1b[1;38;5;75m{name}\x1b[0m  \x1b[38;5;240m{short}\x1b[0m{branch_part}"));
+            lines.push(format!(
+                "\x1b[{dm}m▸ repo  \x1b[0m\x1b[1;{lk}m{name}\x1b[0m  \x1b[{dm}m{short}\x1b[0m{branch_part}",
+                dm = th.text_dim, lk = th.link,
+            ));
         }
         Card::Header { title, cwd: _, branch: _, ts, agent: hdr_agent } => {
-            let t = title.as_deref().unwrap_or("(untitled session)");
+            let title_str = title.as_deref().unwrap_or("(untitled session)");
             let (agent_label, agent_col) = if hdr_agent.is_empty() {
                 ("claude".to_string(), 75u8)
             } else {
@@ -476,17 +474,20 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
             };
             let agent_part = format!("  \x1b[1;38;5;{agent_col}m{agent_label}\x1b[0m");
             let ts_part = if !ts.is_empty() {
-                format!("  \x1b[38;5;240m{}\x1b[0m", rel_time(ts))
+                format!("  \x1b[{dm}m{}\x1b[0m", rel_time(ts), dm = th.text_dim)
             } else { String::new() };
-            lines.push(format!("\x1b[1;38;5;229m{t}\x1b[0m{agent_part}{ts_part}"));
+            lines.push(format!("\x1b[{hd}m{title_str}\x1b[0m{agent_part}{ts_part}", hd = th.header));
         }
         Card::System { ts, subtype, content } => {
-            lines.push(format!("\x1b[38;5;240m── {subtype}  {}\x1b[0m", rel_time(ts)));
+            lines.push(format!("\x1b[{dm}m── {subtype}  {}\x1b[0m", rel_time(ts), dm = th.text_dim));
             lines.push(String::new());
-            for l in wrap(content, w) { lines.push(format!("  \x1b[38;5;240m{l}\x1b[0m")); }
+            for l in wrap(content, w) { lines.push(format!("  \x1b[{dm}m{l}\x1b[0m", dm = th.text_dim)); }
         }
         Card::UserMsg { ts, parts } => {
-            lines.push(format!("\x1b[1;38;5;82m── user  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
+            lines.push(format!(
+                "\x1b[1;{fr}m── user  \x1b[0m\x1b[{dm}m{}\x1b[0m",
+                rel_time(ts), fr = th.fresh, dm = th.text_dim,
+            ));
             for part in parts {
                 match part {
                     UserPart::Text(text) => {
@@ -494,16 +495,16 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
                         for l in render_md(text, w.saturating_sub(2)) { lines.push(format!("  {l}")); }
                     }
                     UserPart::ToolResult { name, content, is_error, .. } => {
-                        let col = if *is_error { "38;5;196" } else { "38;5;177" };
+                        let col = if *is_error { th.error } else { th.tool_ok };
                         lines.push(format!("\x1b[{col}m  ◀ {name}\x1b[0m"));
                         let visible: Vec<&str> = content.lines()
                             .filter(|l| !l.trim().is_empty()).take(8).collect();
                         for l in wrap(&visible.join("\n"), w.saturating_sub(4)) {
-                            lines.push(format!("\x1b[38;5;240m    {l}\x1b[0m"));
+                            lines.push(format!("\x1b[{dm}m    {l}\x1b[0m", dm = th.text_dim));
                         }
                         let total = content.lines().filter(|l| !l.trim().is_empty()).count();
                         if total > 8 {
-                            lines.push(format!("\x1b[38;5;238m    … {} more lines\x1b[0m", total - 8));
+                            lines.push(format!("\x1b[{ft}m    … {} more lines\x1b[0m", total - 8, ft = th.text_faint));
                         }
                     }
                 }
@@ -515,7 +516,10 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
             } else {
                 (agent.to_lowercase(), agent_color(agent))
             };
-            lines.push(format!("\x1b[1;38;5;{agent_col}m── {agent_label}  \x1b[0m\x1b[38;5;240m{}\x1b[0m", rel_time(ts)));
+            lines.push(format!(
+                "\x1b[1;38;5;{agent_col}m── {agent_label}  \x1b[0m\x1b[{dm}m{}\x1b[0m",
+                rel_time(ts), dm = th.text_dim,
+            ));
             for part in parts {
                 if let AsstPart::Text(text) = part {
                     lines.push(String::new());
@@ -531,6 +535,7 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
 }
 
 fn render_tool_summary(parts: &[AsstPart]) -> Vec<String> {
+    let t = crate::theme::get();
     let count = parts.len();
     let mut seen = std::collections::HashSet::new();
     let unique: Vec<&str> = parts.iter().filter_map(|p| {
@@ -539,13 +544,14 @@ fn render_tool_summary(parts: &[AsstPart]) -> Vec<String> {
         } else { None }
     }).collect();
     vec![
-        format!("\x1b[38;5;240m  ▶ ({count} tool call{}: {})\x1b[0m",
-            if count == 1 { "" } else { "s" }, unique.join(", ")),
+        format!("\x1b[{dm}m  ▶ ({count} tool call{}: {})\x1b[0m",
+            if count == 1 { "" } else { "s" }, unique.join(", "), dm = t.text_dim),
         String::new(),
     ]
 }
 
 fn render_tool_header(parts: &[AsstPart]) -> Vec<String> {
+    let t = crate::theme::get();
     let count = parts.len();
     let mut seen = std::collections::HashSet::new();
     let unique: Vec<&str> = parts.iter().filter_map(|p| {
@@ -553,14 +559,15 @@ fn render_tool_header(parts: &[AsstPart]) -> Vec<String> {
             if seen.insert(name.as_str()) { Some(name.as_str()) } else { None }
         } else { None }
     }).collect();
-    vec![format!("\x1b[38;5;240m  ▾ ({count} tool call{}: {})\x1b[0m",
-        if count == 1 { "" } else { "s" }, unique.join(", "))]
+    vec![format!("\x1b[{dm}m  ▾ ({count} tool call{}: {})\x1b[0m",
+        if count == 1 { "" } else { "s" }, unique.join(", "), dm = t.text_dim)]
 }
 
 fn render_one_tool_call(part: &AsstPart, w: usize) -> Vec<String> {
+    let t = crate::theme::get();
     let mut lines = Vec::new();
     if let AsstPart::ToolCall { name, input, result, .. } = part {
-        lines.push(format!("\x1b[38;5;220m  ▶ {name}\x1b[0m"));
+        lines.push(format!("\x1b[{lb}m  ▶ {name}\x1b[0m", lb = t.label));
         if let Some(obj) = input.as_object() {
             let mut is_first = true;
             for (_, v) in obj.iter().take(4) {
@@ -568,17 +575,17 @@ fn render_one_tool_call(part: &AsstPart, w: usize) -> Vec<String> {
                 let first_line = raw_val.lines().next().unwrap_or("");
                 let preview: String = first_line.chars().take(120).collect();
                 let suffix = if raw_val.lines().count() > 1 || first_line.chars().count() > 120 { " …" } else { "" };
-                let col = if is_first { "38;5;255" } else { "38;5;245" };
+                let col = if is_first { t.text_primary } else { t.text_secondary };
                 lines.push(format!("\x1b[{col}m    {preview}{suffix}\x1b[0m"));
                 is_first = false;
             }
             if obj.len() > 4 {
-                lines.push(format!("\x1b[38;5;238m    … {} more fields\x1b[0m", obj.len() - 4));
+                lines.push(format!("\x1b[{ft}m    … {} more fields\x1b[0m", obj.len() - 4, ft = t.text_faint));
             }
         }
         if let Some((content, is_error)) = result {
-            lines.push(format!("\x1b[38;5;238m  ────────────────────────────────────────\x1b[0m"));
-            let col = if *is_error { "38;5;196" } else { "38;5;240" };
+            lines.push(format!("\x1b[{ft}m  ────────────────────────────────────────\x1b[0m", ft = t.text_faint));
+            let col = if *is_error { t.error } else { t.text_dim };
             let visible: Vec<&str> = content.lines()
                 .filter(|l| !l.trim().is_empty()).take(8).collect();
             for l in wrap(&visible.join("\n"), w.saturating_sub(4)) {
@@ -586,7 +593,7 @@ fn render_one_tool_call(part: &AsstPart, w: usize) -> Vec<String> {
             }
             let total = content.lines().filter(|l| !l.trim().is_empty()).count();
             if total > 8 {
-                lines.push(format!("\x1b[38;5;238m    … {} more lines\x1b[0m", total - 8));
+                lines.push(format!("\x1b[{ft}m    … {} more lines\x1b[0m", total - 8, ft = t.text_faint));
             }
         }
         lines.push(String::new());
@@ -1088,7 +1095,7 @@ fn draw(
     flash:  Option<&str>,
 ) -> io::Result<()> {
     use crossterm::queue;
-    const SEL_BG: &str = "48;5;236";
+    let sel_bg = crate::theme::get().sel_bg;
 
     let end = (scroll + h).min(flat.len());
 
@@ -1104,10 +1111,10 @@ fn draw(
         if flat_idx < end {
             let (card_idx, line) = &flat[flat_idx];
             if *card_idx == sel {
-                let line_bg = with_bg(line, SEL_BG);
+                let line_bg = with_bg(line, sel_bg);
                 let vis = visible_width(line);
                 let pad = w.saturating_sub(vis);
-                write!(buf, "\x1b[{SEL_BG}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
+                write!(buf, "\x1b[{sel_bg}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
             } else {
                 buf.extend_from_slice(line.as_bytes());
             }

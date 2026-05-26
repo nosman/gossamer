@@ -9,6 +9,7 @@ use crate::db;
 struct HookInput {
     session_id: String,
     cwd: Option<String>,
+    transcript_path: Option<String>,
 }
 
 pub fn run() -> Result<()> {

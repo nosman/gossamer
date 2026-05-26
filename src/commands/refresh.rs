@@ -34,14 +34,22 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
+    let names_filled = crate::ingest::backfill_session_names().unwrap_or(0);
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"sessions_indexed": grand_total}))?);
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+            "sessions_indexed": grand_total,
+            "names_backfilled": names_filled,
+        }))?);
     } else {
         println!();
         if grand_total > 0 {
             println!("{} new session(s) indexed.", grand_total);
         } else {
             println!("All repositories up to date.");
+        }
+        if names_filled > 0 {
+            println!("{} session name(s) backfilled.", names_filled);
         }
     }
 

@@ -73,6 +73,66 @@ pub fn ingest_sessions(wc_db: &mut witchcraft::DB) -> Result<usize> {
     Ok(count)
 }
 
+/// Scan live JSONL files in ~/.claude/projects/ and backfill session_name for
+/// any sessions in the DB whose name is currently blank.
+pub fn backfill_session_names() -> Result<usize> {
+    let home = std::env::var("HOME").context("HOME not set")?;
+    let projects_dir = std::path::PathBuf::from(&home).join(".claude/projects");
+
+    let conn = crate::db::connect()?;
+
+    // Collect session IDs that need a name.
+    let mut stmt = conn.prepare(
+        "SELECT session_id FROM sessions WHERE session_name = '' OR session_name IS NULL",
+    )?;
+    let nameless: std::collections::HashSet<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .flatten()
+        .collect();
+
+    if nameless.is_empty() {
+        return Ok(0);
+    }
+
+    let mut updated = 0usize;
+
+    let Ok(project_dirs) = std::fs::read_dir(&projects_dir) else { return Ok(0) };
+    for project in project_dirs.flatten() {
+        let Ok(files) = std::fs::read_dir(project.path()) else { continue };
+        for file in files.flatten() {
+            let path = file.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue }
+            let session_id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            if !nameless.contains(&session_id) { continue }
+
+            let Ok(f) = std::fs::File::open(&path) else { continue };
+            let reader = std::io::BufReader::new(f);
+            let mut custom_title: Option<String> = None;
+            for line in std::io::BufRead::lines(reader).flatten() {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+                    if v["type"].as_str() == Some("custom-title") {
+                        if let Some(t) = v["customTitle"].as_str() {
+                            custom_title = Some(t.to_string());
+                            break;
+                        }
+                    }
+                }
+            }
+            let Some(title) = custom_title else { continue };
+            conn.execute(
+                "UPDATE sessions SET session_name = ?1 WHERE session_id = ?2",
+                rusqlite::params![title, session_id],
+            )?;
+            updated += 1;
+        }
+    }
+
+    Ok(updated)
+}
+
 pub fn ingest_repos(wc_db: &mut witchcraft::DB) -> Result<usize> {
     let conn = crate::db::connect()?;
     let mut stmt = conn.prepare("SELECT directory, remote, name FROM repositories")?;

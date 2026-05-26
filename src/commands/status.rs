@@ -404,7 +404,8 @@ fn draw_repos(
     h: usize,
     has_cd: bool,
 ) -> io::Result<()> {
-    const SEL_BG: &str = "48;5;236";
+    let t = crate::theme::get();
+    let sel_bg = t.sel_bg;
 
     execute!(stdout, cursor::MoveTo(0, 0))?;
 
@@ -419,16 +420,16 @@ fn draw_repos(
 
         let is_sel = i == sel;
         let is_cur = current_repo_dir == Some(repo.directory.as_str());
-        let dot_col = if is_cur { "38;5;82" } else { "38;5;240" };
+        let dot_col = if is_cur { t.fresh } else { t.text_dim };
 
         let name_padded = format!("{:<name_w$}", repo.name);
         let dir_padded  = format!("{:<dir_w$}",  repo.directory);
         let line = format!(
-            "\x1b[{dot_col}m*\x1b[0m \x1b[38;5;255m{name_padded}\x1b[0m  \x1b[38;5;240m{dir_padded}  {}\x1b[0m",
-            repo.remote
+            "\x1b[{dot_col}m*\x1b[0m \x1b[{pm}m{name_padded}\x1b[0m  \x1b[{dm}m{dir_padded}  {}\x1b[0m",
+            repo.remote, pm = t.text_primary, dm = t.text_dim,
         );
 
-        print_row(stdout, &line, is_sel, SEL_BG, w, row as u16)?;
+        print_row(stdout, &line, is_sel, sel_bg, w, row as u16)?;
         row += 1;
     }
 
@@ -459,10 +460,11 @@ fn draw_sessions(
     w: usize,
     h: usize,
 ) -> io::Result<()> {
-    const SEL_BG: &str = "48;5;236";
+    let t = crate::theme::get();
+    let sel_bg = t.sel_bg;
 
     execute!(stdout, cursor::MoveTo(0, 0))?;
-    write!(stdout, "\x1b[1;38;5;229m{}\x1b[0m", repos[repo_idx].name)?;
+    write!(stdout, "\x1b[{hd}m{}\x1b[0m", repos[repo_idx].name, hd = t.header)?;
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
 
     let content_h = h.saturating_sub(2); // header + status bar
@@ -474,16 +476,17 @@ fn draw_sessions(
             if row >= content_h { break; }
 
             let (branch_col, branch_label) = if wt.branch == "(detached)" {
-                ("38;5;196", format!("detached:{}", &wt.head))
+                (t.error, format!("detached:{}", &wt.head))
             } else if wt.is_main {
-                ("38;5;229", wt.branch.clone())   // gold — main worktree
+                (t.accent, wt.branch.clone())
             } else {
-                ("38;5;75",  wt.branch.clone())   // blue — linked worktree
+                (t.link, wt.branch.clone())
             };
 
             let path_short = short_path_s(&wt.path);
             let line = format!(
-                "\x1b[38;5;240m  @ \x1b[{branch_col}m{branch_label}\x1b[0m  \x1b[38;5;240m{path_short}\x1b[0m"
+                "\x1b[{dm}m  @ \x1b[{branch_col}m{branch_label}\x1b[0m  \x1b[{dm}m{path_short}\x1b[0m",
+                dm = t.text_dim,
             );
             execute!(stdout, cursor::MoveTo(0, row as u16))?;
             write!(stdout, "{line}")?;
@@ -506,7 +509,7 @@ fn draw_sessions(
     if sessions.is_empty() {
         if row < content_h {
             execute!(stdout, cursor::MoveTo(0, row as u16))?;
-            write!(stdout, "\x1b[38;5;240m  no sessions found\x1b[0m")?;
+            write!(stdout, "\x1b[{dm}m  no sessions found\x1b[0m", dm = t.text_dim)?;
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
             row += 1;
         }
@@ -524,17 +527,17 @@ fn draw_sessions(
             let name: String = s.session_name.trim().chars().take(name_w).collect();
             let age = (Utc::now() - s.updated_at).num_seconds().max(0);
             let dot_col = match age {
-                a if a < 900   => "38;5;82",
-                a if a < 3_600 => "38;5;214",
-                _              => "38;5;240",
+                a if a < 900   => t.fresh,
+                a if a < 3_600 => t.moderate,
+                _              => t.text_dim,
             };
 
             let (name_col, meta_col, dot_char) = if s.backed_up {
-                ("1;38;5;255", "38;5;240", "*")
+                (t.backed_name, t.backed_meta, "*")
             } else {
-                ("38;5;242", "38;5;238", "·")
+                (t.unbacked_name, t.unbacked_meta, "·")
             };
-            let branch_col = if s.backed_up { "38;5;75" } else { "38;5;239" };
+            let branch_col = if s.backed_up { t.link } else { t.stale };
 
             let name_padded = format!("{:<name_w$}", name);
             let mut line = format!("\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m");
@@ -546,7 +549,7 @@ fn draw_sessions(
             }
 
             if agent_w > 0 {
-                let col = if s.backed_up { agent_color(&s.agent) } else { 239 };
+                let col = if s.backed_up { agent_color(&s.agent) } else { t.stale_agent };
                 let a: String = s.agent.chars().take(agent_w).collect();
                 let pad = " ".repeat(agent_w - a.chars().count());
                 line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
@@ -554,7 +557,7 @@ fn draw_sessions(
 
             line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
-            print_row(stdout, &line, i == sel, SEL_BG, w, row as u16)?;
+            print_row(stdout, &line, i == sel, sel_bg, w, row as u16)?;
             row += 1;
         }
     }
@@ -810,6 +813,7 @@ fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usiz
     // Panel rows: title, blank, agent, branch, name, prompt, blank  (7 rows + 1 status bar)
     const PANEL_H: usize = 7;
 
+    let t = crate::theme::get();
     let panel_top = h.saturating_sub(PANEL_H + 1);
 
     let mut step = 0usize;           // 0=agent 1=branch 2=name 3=prompt
@@ -823,7 +827,7 @@ fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usiz
         // ── Draw panel ────────────────────────────────────────────────────────
         // Title row
         execute!(stdout, cursor::MoveTo(0, panel_top as u16)).ok();
-        write!(stdout, "\x1b[1;38;5;229m  New Session\x1b[0m").ok();
+        write!(stdout, "\x1b[{hd}m  New Session\x1b[0m", hd = t.header).ok();
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
 
         // Blank separator
@@ -844,30 +848,30 @@ fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usiz
                     format!("\x1b[38;5;{col}m{name}\x1b[0m")
                 } else {
                     let v = inputs[i - 1].trim();
-                    if v.is_empty() { "\x1b[38;5;238m(skip)\x1b[0m".to_string() }
-                    else            { format!("\x1b[38;5;255m{v}\x1b[0m") }
+                    if v.is_empty() { format!("\x1b[{ft}m(skip)\x1b[0m", ft = t.text_faint) }
+                    else            { format!("\x1b[{pm}m{v}\x1b[0m", pm = t.text_primary) }
                 };
-                write!(stdout, "\x1b[38;5;240m{lpart}\x1b[0m{val}").ok();
+                write!(stdout, "\x1b[{dm}m{lpart}\x1b[0m{val}", dm = t.text_dim).ok();
             } else if i == step {
                 // Active step
-                write!(stdout, "\x1b[38;5;255m{lpart}\x1b[0m").ok();
+                write!(stdout, "\x1b[{pm}m{lpart}\x1b[0m", pm = t.text_primary).ok();
                 if i == 0 {
                     // Inline agent picker
                     for (ai, (name, _, col)) in AGENTS.iter().enumerate() {
-                        if ai > 0 { write!(stdout, "\x1b[38;5;238m │ \x1b[0m").ok(); }
+                        if ai > 0 { write!(stdout, "\x1b[{ft}m │ \x1b[0m", ft = t.text_faint).ok(); }
                         if ai == agent_sel {
-                            write!(stdout, "\x1b[48;5;236;38;5;{col}m {name} \x1b[0m").ok();
+                            write!(stdout, "\x1b[{sb};38;5;{col}m {name} \x1b[0m", sb = t.sel_bg).ok();
                         } else {
-                            write!(stdout, "\x1b[38;5;240m {name}\x1b[0m").ok();
+                            write!(stdout, "\x1b[{dm}m {name}\x1b[0m", dm = t.text_dim).ok();
                         }
                     }
                 } else {
                     // Text input — print typed chars, terminal cursor sits here
-                    write!(stdout, "\x1b[38;5;255m{}\x1b[0m", inputs[i - 1]).ok();
+                    write!(stdout, "\x1b[{pm}m{}\x1b[0m", inputs[i - 1], pm = t.text_primary).ok();
                 }
             } else {
                 // Future step — very dim label only
-                write!(stdout, "\x1b[38;5;238m{lpart}\x1b[0m").ok();
+                write!(stdout, "\x1b[{ft}m{lpart}\x1b[0m", ft = t.text_faint).ok();
             }
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
         }
