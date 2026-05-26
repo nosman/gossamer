@@ -1,0 +1,37 @@
+Are gossamer skills installed now?
+
+---
+
+create a new session with gossamer
+
+---
+
+Did you call a gossamer command at all?
+
+---
+
+Rewrite the skills file so that you understand it better next time
+
+---
+
+Great. Also add instructions for the gossamer search command. use gossamer search to find events in session logs, and know which repo they come from
+
+---
+
+add the remotes to the search hits, that way there is no ambiguity about the repo name
+
+---
+
+How come when i run `gossamer search "claude.md"` i don't get any results from any recent sessions? are we indexing sessions from worktrees?
+
+---
+
+Does the claude start hook pick up and save the -n arg to the database? the sessions i'm seeing don't have names in the db
+
+---
+
+Does the hook payload not already have the name?
+
+---
+
+Can we backfill existing session names?
