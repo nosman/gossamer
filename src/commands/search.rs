@@ -41,6 +41,7 @@ struct SearchHit {
     agent: String,
     backed_up: bool,
     updated_at: String,
+    remote: String,
 }
 
 // Groups hits from the same session together under one header row.
@@ -51,6 +52,7 @@ struct Group {
     agent: String,
     backed_up: bool,
     updated_at: String,
+    remote: String,
     session_id: Option<String>,
     repo_dir: Option<String>,
     kind: HitKind,
@@ -137,6 +139,7 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
                 "agent": g.agent,
                 "updated_at": g.updated_at,
                 "backed_up": g.backed_up,
+                "remote": g.remote,
                 "hits": hits_json,
             })
         }).collect();
@@ -187,6 +190,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 repo_dir: None,
                 start_ts: None, hit_ts: None, branch: String::new(),
                 agent: String::new(), backed_up: false, updated_at: String::new(),
+                remote: String::new(),
             }
         }
         "repo" => {
@@ -201,6 +205,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 repo_dir: Some(dir),
                 start_ts: None, hit_ts: None, branch: String::new(),
                 agent: String::new(), backed_up: false, updated_at: String::new(),
+                remote: String::new(),
             }
         }
         _ => {
@@ -248,6 +253,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 hit_ts,
                 branch,
                 agent: String::new(), backed_up: false, updated_at: String::new(),
+                remote: String::new(),
             }
         }
     }
@@ -279,6 +285,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                         agent: hit.agent,
                         backed_up: hit.backed_up,
                         updated_at: hit.updated_at,
+                        remote: hit.remote,
                         session_id: hit.session_id,
                         repo_dir: None,
                         kind: HitKind::Log,
@@ -298,6 +305,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     agent: hit.agent,
                     backed_up: hit.backed_up,
                     updated_at: hit.updated_at,
+                    remote: hit.remote,
                     session_id: hit.session_id,
                     repo_dir: None,
                     kind: HitKind::Session,
@@ -312,6 +320,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     agent: String::new(),
                     backed_up: false,
                     updated_at: String::new(),
+                    remote: hit.remote,
                     session_id: None,
                     repo_dir: hit.repo_dir,
                     kind: HitKind::Repo,
@@ -552,15 +561,29 @@ fn render_row(buf: &mut Vec<u8>, line: &str, selected: bool, bg: &str, row: usiz
 fn enrich_hits(hits: &mut Vec<SearchHit>) {
     let Ok(conn) = crate::db::connect() else { return };
     for hit in hits.iter_mut() {
-        let Some(sid) = &hit.session_id else { continue };
-        if let Ok((agent, updated_at)) = conn.query_row(
-            "SELECT agent_name, updated_at FROM sessions WHERE session_id = ?1",
-            [sid.as_str()],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        ) {
-            hit.agent      = agent;
-            hit.updated_at = updated_at;
-            hit.backed_up  = true;
+        if let Some(sid) = &hit.session_id {
+            if let Ok((agent, updated_at, remote)) = conn.query_row(
+                "SELECT s.agent_name, s.updated_at, COALESCE(r.remote, '') \
+                 FROM sessions s \
+                 LEFT JOIN repositories r \
+                   ON (s.cwd = r.directory OR s.cwd LIKE r.directory || '/%') \
+                 WHERE s.session_id = ?1",
+                [sid.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            ) {
+                hit.agent      = agent;
+                hit.updated_at = updated_at;
+                hit.backed_up  = true;
+                hit.remote     = remote;
+            }
+        } else if let Some(dir) = &hit.repo_dir.clone() {
+            if let Ok(remote) = conn.query_row(
+                "SELECT COALESCE(remote, '') FROM repositories WHERE directory = ?1",
+                [dir.as_str()],
+                |row| row.get::<_, String>(0),
+            ) {
+                hit.remote = remote;
+            }
         }
     }
 }
@@ -593,6 +616,7 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
                     repo_dir: None,
                     start_ts: None, hit_ts: None, branch: String::new(),
                     agent: String::new(), backed_up: false, updated_at: String::new(),
+                    remote: String::new(),
                 })
             } else {
                 None
@@ -607,15 +631,15 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
 
     let Ok(conn) = crate::db::connect() else { return vec![]; };
     let Ok(mut stmt) = conn.prepare(
-        "SELECT name, directory FROM repositories WHERE name != ''"
+        "SELECT name, directory, COALESCE(remote, '') FROM repositories WHERE name != ''"
     ) else { return vec![]; };
 
-    stmt.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?)))
+    stmt.query_map([], |row| Ok((row.get::<_,String>(0)?, row.get::<_,String>(1)?, row.get::<_,String>(2)?)))
         .ok()
         .into_iter()
         .flatten()
         .flatten()
-        .filter_map(|(name, directory): (String, String)| {
+        .filter_map(|(name, directory, remote): (String, String, String)| {
             let normalized = name.to_lowercase().replace(['-', '_'], " ");
             if words.iter().all(|w| normalized.contains(w.as_str())) {
                 Some(SearchHit {
@@ -627,6 +651,7 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
                     repo_dir: Some(directory),
                     start_ts: None, hit_ts: None, branch: String::new(),
                     agent: String::new(), backed_up: false, updated_at: String::new(),
+                    remote,
                 })
             } else {
                 None
