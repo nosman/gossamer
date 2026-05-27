@@ -49,31 +49,65 @@ enum Selectable {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run(session_id: &str) -> Result<()> {
+/// Returns `Ok(true)` if the user pressed `q` (or Ctrl+C) — callers in a
+/// parent TUI loop should treat that as a full-app exit. `Ok(false)` means
+/// the user backed out normally (Esc/Left) and the parent should keep going.
+pub fn run(session_id: &str) -> Result<bool> {
     run_at(session_id, None)
 }
 
-pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
+pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<bool> {
     let path = find_session(session_id)
         .with_context(|| format!("no session file found for '{session_id}'"))?;
 
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
 
-    // Look up agent name and repo info from the gossamer DB using the session UUID.
+    // Look up agent name and DB-stored session_name from the gossamer DB.
     let uuid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let agent = if let Ok(conn) = crate::db::connect() {
+    let (agent, db_session_name) = if let Ok(conn) = crate::db::connect() {
         conn.query_row(
-            "SELECT agent_name FROM sessions WHERE session_id = ?1",
+            "SELECT agent_name, COALESCE(session_name, '') FROM sessions WHERE session_id = ?1",
             [uuid],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).unwrap_or_default()
-    } else { String::new() };
+    } else { (String::new(), String::new()) };
 
     let mut cards = parse(&raw, &agent);
     if cards.is_empty() {
         println!("No messages found.");
-        return Ok(());
+        return Ok(false);
+    }
+
+    // Title fallback chain: JSONL custom-title (already set by parse) →
+    // DB session_name (the indexer's first-meaningful-prompt) → first user
+    // prompt in the JSONL. Covers sessions that were never /rename'd.
+    let mut need_prompt_fallback = false;
+    if let Some(Card::Header { title, .. }) = cards.iter_mut().find(|c| matches!(c, Card::Header { .. })) {
+        if title.as_deref().map_or(true, str::is_empty) {
+            if !db_session_name.trim().is_empty() {
+                *title = Some(db_session_name);
+            } else {
+                need_prompt_fallback = true;
+            }
+        }
+    }
+    if need_prompt_fallback {
+        let first_user_text: Option<String> = cards.iter().find_map(|c| {
+            if let Card::UserMsg { parts, .. } = c {
+                parts.iter().find_map(|p| {
+                    if let UserPart::Text(t) = p {
+                        let trimmed = t.trim();
+                        if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+                    } else { None }
+                })
+            } else { None }
+        });
+        if let Some(text) = first_user_text {
+            if let Some(Card::Header { title, .. }) = cards.iter_mut().find(|c| matches!(c, Card::Header { .. })) {
+                *title = Some(text);
+            }
+        }
     }
 
     // Attribute each user message to the author of the checkpoint commit that
@@ -109,6 +143,7 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
         }
     }
 
+    let mut quit_app = false;
     loop {
         match pager(&cards, start_ts)? {
             PagerOutcome::Resume => {
@@ -116,18 +151,19 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<()> {
                 break;
             }
             PagerOutcome::Delete => { super::clean::run(session_id, false)?; break; }
-            PagerOutcome::Quit   => break,
+            PagerOutcome::Quit   => { quit_app = true; break; }
+            PagerOutcome::Back   => break,
             PagerOutcome::GoToSessions => {
-                super::sessions::run(false, false)?;
+                if super::sessions::run(false, false)? { quit_app = true; }
                 break;
             }
             PagerOutcome::GoToRepo(dir) => {
-                super::status::run_for_dir(&dir)?;
+                if super::status::run_for_dir(&dir)? { quit_app = true; break; }
             }
         }
     }
 
-    Ok(())
+    Ok(quit_app)
 }
 
 fn fetch_authors(session_id: &str) -> Vec<CheckpointAuthor> {
@@ -1023,7 +1059,9 @@ fn build_flat(
     (flat, selectables, starts)
 }
 
-enum PagerOutcome { Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
+// `Back` returns to whatever called show (the sessions list, the repo TUI, or
+// the CLI). `Quit` propagates a full-app exit so q from anywhere quits.
+enum PagerOutcome { Back, Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
 fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
@@ -1085,8 +1123,9 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
             Ok(Event::Key(k)) => {
                 let prev_flash = flash.take();
                 match (k.code, k.modifiers) {
-                    (KeyCode::Char('q') | KeyCode::Esc | KeyCode::Left, _) => break Ok(PagerOutcome::Quit),
+                    (KeyCode::Char('q'), _) => break Ok(PagerOutcome::Quit),
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => break Ok(PagerOutcome::Quit),
+                    (KeyCode::Esc | KeyCode::Left, _) => break Ok(PagerOutcome::Back),
                     (KeyCode::Char('r'), _) => break Ok(PagerOutcome::Resume),
                     (KeyCode::Char('d'), _) => {
                         awaiting_delete = true;

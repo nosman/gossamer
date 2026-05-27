@@ -22,13 +22,14 @@ struct RepoWorktree {
     is_main: bool,
 }
 
-struct NewSessionConfig {
-    agent_name: String,
-    agent_cli: String,
-    branch: Option<String>, // None = no new worktree
-    session_name: String,
-    prompt: String,
-    repo_dir: String,
+pub(super) struct NewSessionConfig {
+    #[allow(dead_code)] // displayed by the wizard panel; consumers don't use it after the fact
+    pub agent_name: String,
+    pub agent_cli: String,
+    pub branch: Option<String>, // None = no new worktree
+    pub session_name: String,
+    pub prompt: String,
+    pub repo_dir: String,
 }
 
 // (display_name, cli_command, terminal_256_color)
@@ -40,7 +41,10 @@ const AGENTS: &[(&str, &str, u8)] = &[
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run(json: bool) -> Result<()> {
+/// Returns `Ok(true)` if the user pressed `q` (full app quit) somewhere in
+/// this TUI or a nested viewer. `Ok(false)` for a normal back-out, JSON mode,
+/// or the `gr` `cd` outcome.
+pub fn run(json: bool) -> Result<bool> {
     let conn = db::connect()?;
     let repos = fetch_repos(&conn)?;
 
@@ -71,12 +75,12 @@ pub fn run(json: bool) -> Result<()> {
             })
         }).collect();
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "repos": arr }))?);
-        return Ok(());
+        return Ok(false);
     }
 
     if repos.is_empty() {
         println!("No repositories tracked. Run `gossamer init` in a git repo to get started.");
-        return Ok(());
+        return Ok(false);
     }
 
     // The shell wrapper sets GOSSAMER_CDPATH to a temp file path.
@@ -95,7 +99,7 @@ pub fn run(json: bool) -> Result<()> {
             let dot = if is_cur { "*" } else { " " };
             println!("{dot} {}  {}  {}", repo.name, repo.directory, repo.remote);
         }
-        return Ok(());
+        return Ok(false);
     }
 
     // Register panic hook to restore terminal
@@ -116,7 +120,10 @@ pub fn run(json: bool) -> Result<()> {
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
 
-    match outcome? {
+    let outcome = outcome?;
+    let quit_app = matches!(outcome, Some(TuiOutcome::Quit));
+    match outcome {
+        Some(TuiOutcome::Quit) => {}
         Some(TuiOutcome::CdTo(path)) => {
             if let Some(file) = cd_file {
                 std::fs::write(&file, &path)?;
@@ -125,25 +132,20 @@ pub fn run(json: bool) -> Result<()> {
         Some(TuiOutcome::ResumeSession { id, cwd }) => {
             super::show::resume_session(&id, &cwd);
         }
-        Some(TuiOutcome::LaunchAgent { cli, cwd, session_name, prompt }) => {
-            use std::os::unix::process::CommandExt;
-            let mut cmd = std::process::Command::new(&cli);
-            if !cwd.is_empty() { cmd.current_dir(&cwd); }
-            if !session_name.is_empty() { cmd.args(["-n", &session_name]); }
-            if !prompt.is_empty() { cmd.arg(&prompt); }
-            let err = cmd.exec();
-            eprintln!("Failed to launch {cli}: {err}");
-        }
+        Some(TuiOutcome::LaunchNewSession(cfg)) => { launch_new_session(cfg); }
         None => {}
     }
 
-    Ok(())
+    Ok(quit_app)
 }
 
 enum TuiOutcome {
+    /// User pressed q somewhere in the TUI (or a nested viewer). Parent
+    /// callers should propagate as a full-app exit.
+    Quit,
     CdTo(String),
     ResumeSession { id: String, cwd: String },
-    LaunchAgent { cli: String, cwd: String, session_name: String, prompt: String },
+    LaunchNewSession(NewSessionConfig),
 }
 
 enum Screen {
@@ -203,7 +205,8 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         let cmd = match event::read()? {
             Event::Key(k) => match stack.last_mut().unwrap() {
                 Screen::Repos { sel } => match k.code {
-                    KeyCode::Char('q') | KeyCode::Esc => Cmd::Break,
+                    KeyCode::Char('q') => Cmd::Break,
+                    KeyCode::Esc => Cmd::Back,
                     KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                         execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                         terminal::disable_raw_mode().ok();
@@ -273,7 +276,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
 
         match cmd {
             Cmd::None => {}
-            Cmd::Break => break,
+            Cmd::Break => return Ok(Some(TuiOutcome::Quit)),
             Cmd::Back => {
                 stack.pop();
                 if stack.is_empty() { break; }
@@ -288,16 +291,18 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
             Cmd::ShowSession(id) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let _ = super::show::run(&id);
+                let quit_app = super::show::run(&id).unwrap_or(false);
                 terminal::enable_raw_mode().ok();
+                if quit_app { return Ok(Some(TuiOutcome::Quit)); }
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
             Cmd::Search(query) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let _ = super::search::run(&query, 10, false);
+                let quit_app = super::search::run(&query, 10, false).unwrap_or(false);
                 terminal::enable_raw_mode().ok();
+                if quit_app { return Ok(Some(TuiOutcome::Quit)); }
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
@@ -317,43 +322,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                 }
             }
             Cmd::NewSession(cfg) => {
-                // Create worktree if requested, then launch the agent.
-                let launch_dir = if let Some(ref branch) = cfg.branch {
-                    let _ = create_worktree(&cfg.repo_dir, branch);
-                    if let Some(Screen::Sessions { repo_idx, worktrees, .. }) = stack.last_mut() {
-                        *worktrees = fetch_worktrees(&repos[*repo_idx].directory);
-                    }
-                    let repo_path = std::path::Path::new(&cfg.repo_dir);
-                    let parent = repo_path.parent().unwrap_or(repo_path);
-                    let repo_name = repo_path.file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "repo".to_string());
-                    parent.join(format!("{repo_name}-{}", branch)).to_string_lossy().to_string()
-                } else {
-                    cfg.repo_dir.clone()
-                };
-
-                // Copy prompt to clipboard as a convenience.
-                let prompt = cfg.prompt.trim().to_string();
-                if !prompt.is_empty() {
-                    if let Ok(mut child) = std::process::Command::new("pbcopy")
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                    {
-                        if let Some(stdin) = child.stdin.as_mut() {
-                            let _ = stdin.write_all(prompt.as_bytes());
-                        }
-                        let _ = child.wait();
-                    }
-                }
-
-                let session_name = cfg.session_name.trim().to_string();
-                return Ok(Some(TuiOutcome::LaunchAgent {
-                    cli: cfg.agent_cli,
-                    cwd: launch_dir,
-                    session_name,
-                    prompt,
-                }));
+                return Ok(Some(TuiOutcome::LaunchNewSession(cfg)));
             }
             Cmd::Tidy => {
                 let repo_idx_opt = if let Some(Screen::Sessions { repo_idx, .. }) = stack.last() {
@@ -533,6 +502,9 @@ fn draw_sessions(
             } else {
                 (t.unbacked_name, t.unbacked_meta, "·")
             };
+            // Derived names (first-prompt fallback) render in the secondary
+            // color so they're visually distinct from /rename'd titles.
+            let name_col = if s.backed_up && !s.name_is_explicit { t.text_secondary } else { name_col };
             let branch_col = if s.backed_up { t.link } else { t.stale };
 
             let name_padded = format!("{:<name_w$}", name);
@@ -649,7 +621,7 @@ fn fetch_worktrees(repo_dir: &str) -> Vec<RepoWorktree> {
 // ── Text input prompt ─────────────────────────────────────────────────────────
 
 /// Generic single-line input shown in the status bar. Returns None on Esc.
-fn collect_text_input(stdout: &mut impl Write, prefix: &str, w: usize, h: usize) -> Option<String> {
+pub(super) fn collect_text_input(stdout: &mut impl Write, prefix: &str, w: usize, h: usize) -> Option<String> {
     let mut value = String::new();
     execute!(stdout, cursor::Show).ok();
     draw_input_bar(stdout, prefix, &value, w, h).ok();
@@ -692,7 +664,7 @@ fn draw_input_bar(stdout: &mut impl Write, prefix: &str, value: &str, w: usize, 
     stdout.flush()
 }
 
-fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) -> Option<String> {
+pub(super) fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) -> Option<String> {
     collect_text_input(stdout, "  / ", w, h)
 }
 
@@ -700,7 +672,7 @@ fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) -> Option<S
 
 /// A 4-step panel drawn over the bottom of the screen. Each completed step
 /// stays visible with its confirmed value while the user fills the next one.
-fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usize) -> Option<NewSessionConfig> {
+pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usize) -> Option<NewSessionConfig> {
     const LABEL_W: usize = 24;
     // Panel rows: title, blank, agent, branch, name, prompt, blank  (7 rows + 1 status bar)
     const PANEL_H: usize = 7;
@@ -836,7 +808,46 @@ fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usiz
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn create_worktree(repo_dir: &str, branch: &str) -> String {
+/// Create the worktree (if `cfg.branch` is set), copy the prompt to the
+/// clipboard, then `exec` the agent. Only returns if `exec` failed.
+pub(super) fn launch_new_session(cfg: NewSessionConfig) {
+    use std::os::unix::process::CommandExt;
+
+    let launch_dir = if let Some(ref branch) = cfg.branch {
+        let _ = create_worktree(&cfg.repo_dir, branch);
+        let repo_path = std::path::Path::new(&cfg.repo_dir);
+        let parent = repo_path.parent().unwrap_or(repo_path);
+        let repo_name = repo_path.file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "repo".to_string());
+        parent.join(format!("{repo_name}-{}", branch)).to_string_lossy().to_string()
+    } else {
+        cfg.repo_dir.clone()
+    };
+
+    let prompt = cfg.prompt.trim().to_string();
+    if !prompt.is_empty() {
+        if let Ok(mut child) = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(stdin) = child.stdin.as_mut() {
+                let _ = stdin.write_all(prompt.as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+
+    let session_name = cfg.session_name.trim().to_string();
+    let mut cmd = std::process::Command::new(&cfg.agent_cli);
+    if !launch_dir.is_empty() { cmd.current_dir(&launch_dir); }
+    if !session_name.is_empty() { cmd.args(["-n", &session_name]); }
+    if !prompt.is_empty() { cmd.arg(&prompt); }
+    let err = cmd.exec();
+    eprintln!("Failed to launch {}: {err}", cfg.agent_cli);
+}
+
+pub(super) fn create_worktree(repo_dir: &str, branch: &str) -> String {
     let repo_path = std::path::Path::new(repo_dir);
     let parent = match repo_path.parent() {
         Some(p) => p,
@@ -911,7 +922,7 @@ fn relative_time(dt: DateTime<Utc>) -> String {
     }
 }
 
-pub fn run_for_dir(repo_dir: &str) -> Result<()> {
+pub fn run_for_dir(repo_dir: &str) -> Result<bool> {
     let conn = db::connect()?;
     let repos = fetch_repos(&conn)?;
     let start = repos.iter().position(|r| r.directory == repo_dir);
@@ -933,23 +944,17 @@ pub fn run_for_dir(repo_dir: &str) -> Result<()> {
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
 
-    match outcome? {
+    let outcome = outcome?;
+    let quit_app = matches!(outcome, Some(TuiOutcome::Quit));
+    match outcome {
         Some(TuiOutcome::ResumeSession { id, cwd }) => {
             super::show::resume_session(&id, &cwd);
         }
-        Some(TuiOutcome::LaunchAgent { cli, cwd, session_name, prompt }) => {
-            use std::os::unix::process::CommandExt;
-            let mut cmd = std::process::Command::new(&cli);
-            if !cwd.is_empty() { cmd.current_dir(&cwd); }
-            if !session_name.is_empty() { cmd.args(["-n", &session_name]); }
-            if !prompt.is_empty() { cmd.arg(&prompt); }
-            let err = cmd.exec();
-            eprintln!("Failed to launch {cli}: {err}");
-        }
+        Some(TuiOutcome::LaunchNewSession(cfg)) => { launch_new_session(cfg); }
         _ => {}
     }
 
-    Ok(())
+    Ok(quit_app)
 }
 
 pub fn fetch_repos(conn: &rusqlite::Connection) -> Result<Vec<Repository>> {

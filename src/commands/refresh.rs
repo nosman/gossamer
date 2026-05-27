@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::db;
 use super::index::{
-    BRANCH, fetch_checkpoint_branch, git_show, index_shadow_branches, is_meta_path, parse_session,
+    BRANCH, fetch_checkpoint_branch, git_show, index_shadow_branches, is_meta_path,
     upsert_session,
 };
 
@@ -133,11 +133,11 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str) -> Re
             Ok(b) => b,
             Err(_) => continue,
         };
-        match parse_session(&meta_bytes, &jsonl_bytes, &user) {
-            Ok((session_id, agent_name, created_at, updated_at, cwd, session_name, branch)) => {
-                upsert_session(conn, &session_id, &agent_name, &user,
-                               &created_at, &updated_at, &cwd, &session_name,
-                               &branch, Some(repo_id))?;
+        match crate::parsers::dispatch_session(&meta_bytes, &jsonl_bytes) {
+            Ok(p) => {
+                upsert_session(conn, &p.session_id, &p.agent_name, &user,
+                               &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
+                               &p.branch, Some(repo_id), p.name_is_explicit)?;
                 count += 1;
             }
             Err(e) => eprintln!("  skipping {}: {}", meta_path, e),

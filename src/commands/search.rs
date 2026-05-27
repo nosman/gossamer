@@ -69,7 +69,10 @@ struct GroupRow {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
+/// Returns `Ok(true)` if the user pressed `q` (or Ctrl+C) anywhere within the
+/// search TUI or any nested viewer — parent TUI loops should propagate this
+/// as a full-app exit. `Ok(false)` means a normal back-out (Esc).
+pub fn run(query: &str, top_k: usize, json: bool) -> Result<bool> {
     let assets = crate::config::resolve_warp_assets()
         .ok_or_else(|| anyhow::anyhow!(
             "Witchcraft assets not configured.\nRun: gossamer config <path-to-witchcraft-assets>"
@@ -150,7 +153,7 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<()> {
             "query": query,
             "results": arr,
         }))?);
-        return Ok(());
+        return Ok(false);
     }
 
     let orig_hook = std::panic::take_hook();
@@ -355,9 +358,10 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
 
 // ── TUI ───────────────────────────────────────────────────────────────────────
 
-fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) -> Result<()> {
+fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) -> Result<bool> {
     let mut sel    = 0usize;
     let mut scroll = 0usize;
+    let mut quit_app = false;
 
     loop {
         let (w, h) = terminal::size().unwrap_or((120, 40));
@@ -374,7 +378,8 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
 
         match event::read()? {
             Event::Key(k) => match k.code {
-                KeyCode::Char('q') | KeyCode::Esc => break,
+                KeyCode::Char('q') => { quit_app = true; break; }
+                KeyCode::Esc => break,
                 KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                     terminal::disable_raw_mode().ok();
@@ -389,19 +394,22 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
                         execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                         terminal::disable_raw_mode().ok();
 
-                        match group.kind {
+                        let nested_quit = match group.kind {
                             HitKind::Log | HitKind::Session => {
                                 if let Some(id) = &group.session_id {
                                     let ts = group.rows.first().and_then(|r| r.start_ts.as_deref());
-                                    let _ = super::show::run_at(id, ts);
-                                }
+                                    super::show::run_at(id, ts).unwrap_or(false)
+                                } else { false }
                             }
                             HitKind::Repo => {
                                 if let Some(dir) = &group.repo_dir {
                                     let _ = super::status::run_for_dir(dir);
                                 }
+                                false
                             }
-                        }
+                        };
+
+                        if nested_quit { quit_app = true; break; }
 
                         terminal::enable_raw_mode().ok();
                         execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
@@ -417,7 +425,7 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
         }
     }
 
-    Ok(())
+    Ok(quit_app)
 }
 
 fn rows_for_group(g: &Group) -> usize {

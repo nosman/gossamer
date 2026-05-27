@@ -23,6 +23,10 @@ pub struct DisplaySession {
     /// that have never been checkpointed (live JSONL only) or whose author
     /// couldn't be resolved.
     pub author: String,
+    /// True when session_name came from an explicit `/rename` (custom-title
+    /// entry in the JSONL); false when it's the derived first-prompt fallback.
+    /// Drives the italic/plain distinction in the list renderers.
+    pub name_is_explicit: bool,
 }
 
 /// Collapse interior whitespace (newlines, tabs, runs of spaces) into a single
@@ -61,10 +65,14 @@ pub enum Scope<'a> {
 pub fn fetch(scope: Scope, include_old: bool) -> Vec<DisplaySession> {
     let cutoff = Utc::now() - chrono::Duration::days(3);
     let mut sessions = query_db(&scope);
+    // Augment first, then cutoff-filter on the final updated_at. Otherwise a
+    // DB row with a stale updated_at but an actively-touched local JSONL gets
+    // dropped here, then re-added as unbacked when augment can't find it —
+    // diverging from the repo view where include_old=true skips this filter.
+    augment_with_jsonls(&mut sessions, &scope, include_old, cutoff);
     if !include_old {
         sessions.retain(|s| s.updated_at >= cutoff);
     }
-    augment_with_jsonls(&mut sessions, &scope, include_old, cutoff);
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions
 }
@@ -78,6 +86,7 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
         let author_email: String = row.get(7)?;
         let os_user: String = row.get(8)?;
         let raw_name: String = row.get(1)?;
+        let name_is_explicit: i64 = row.get(9)?;
         Ok(DisplaySession {
             session_id: row.get(0)?,
             session_name: sanitize_one_line(&raw_name),
@@ -89,6 +98,7 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
             agent_name: row.get(5)?,
             backed_up: true,
             author: resolve_author_label(&author_name, &author_email, &os_user),
+            name_is_explicit: name_is_explicit != 0,
         })
     };
     // Pull the author of the FIRST checkpoint (lowest checkpoint_number) for
@@ -98,7 +108,8 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
     let cols = "
         s.session_id, s.session_name, s.cwd, COALESCE(s.branch,''),
         s.updated_at, s.agent_name,
-        COALESCE(c.author_name, ''), COALESCE(c.author_email, ''), COALESCE(c.os_user, '')
+        COALESCE(c.author_name, ''), COALESCE(c.author_email, ''), COALESCE(c.os_user, ''),
+        s.name_is_explicit
     ";
     let join = "
         LEFT JOIN checkpoints c
@@ -195,6 +206,7 @@ fn augment_with_jsonls(
                 agent_name: "Claude Code".to_string(),
                 backed_up: false,
                 author,
+                name_is_explicit: parsed.name_is_explicit,
             });
         }
     }
@@ -204,6 +216,7 @@ struct ParsedJsonl {
     session_name: String,
     cwd: String,
     branch: String,
+    name_is_explicit: bool,
 }
 
 fn parse_jsonl(path: &Path) -> ParsedJsonl {
@@ -211,16 +224,20 @@ fn parse_jsonl(path: &Path) -> ParsedJsonl {
         session_name: String::new(),
         cwd: String::new(),
         branch: String::new(),
+        name_is_explicit: false,
     };
     let Ok(file) = std::fs::File::open(path) else { return out; };
     let reader = std::io::BufReader::new(file);
     let mut last_prompt = String::new();
+    let mut custom_title = String::new();
 
     for line in reader.lines().flatten() {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
         match v["type"].as_str() {
             Some("custom-title") => {
-                if let Some(t) = v["customTitle"].as_str() { out.session_name = t.to_string(); }
+                if let Some(t) = v["customTitle"].as_str() {
+                    if !t.trim().is_empty() { custom_title = t.to_string(); }
+                }
             }
             Some("user") | Some("system") => {
                 if out.cwd.is_empty() {
@@ -238,7 +255,12 @@ fn parse_jsonl(path: &Path) -> ParsedJsonl {
             if !b.is_empty() { out.branch = b.to_string(); }
         }
     }
-    if out.session_name.is_empty() { out.session_name = last_prompt; }
+    if !custom_title.is_empty() {
+        out.session_name = custom_title;
+        out.name_is_explicit = true;
+    } else {
+        out.session_name = last_prompt;
+    }
     out.session_name = sanitize_one_line(&out.session_name);
     out
 }

@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::process::Command;
 
@@ -23,6 +21,66 @@ struct PendingCheckpoint {
     last_turn_ts: String,
     os_user: Option<String>,
     direct: Option<CommitAuthor>,
+}
+
+/// Walk ~/.claude/projects/**/*.jsonl and upsert any session whose UUID
+/// isn't already in the DB. Picks up sessions that ran before `gossamer init`
+/// installed the session-start hook, plus any session that for whatever
+/// reason never got captured by entire's checkpoint branch.
+pub(crate) fn backfill_local_jsonls(
+    conn: &rusqlite::Connection,
+    repos: &[(i64, String, String)],
+) -> Result<usize> {
+    let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME unset"))?;
+    let projects = std::path::PathBuf::from(&home).join(".claude/projects");
+    let Ok(dirs) = std::fs::read_dir(&projects) else { return Ok(0); };
+
+    let known: std::collections::HashSet<String> = {
+        let mut out = std::collections::HashSet::new();
+        if let Ok(mut stmt) = conn.prepare("SELECT session_id FROM sessions") {
+            if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                for r in rows.flatten() { out.insert(r); }
+            }
+        }
+        out
+    };
+
+    let user = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    let mut count = 0usize;
+    for dir in dirs.flatten() {
+        let path = dir.path();
+        if !path.is_dir() { continue; }
+        let Ok(files) = std::fs::read_dir(&path) else { continue; };
+        for f in files.flatten() {
+            let p = f.path();
+            if p.extension().and_then(|e| e.to_str()) != Some("jsonl") { continue; }
+            let Some(sid) = p.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue; };
+            if known.contains(&sid) { continue; }
+
+            let Ok(bytes) = std::fs::read(&p) else { continue; };
+            let parsed = match crate::parsers::dispatch_shadow_session(&bytes, &sid) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+
+            // Longest-prefix match so a cwd inside a worktree still attaches
+            // to the right registered repo.
+            let repo_id = repos.iter()
+                .filter(|(_, d, _)| parsed.cwd.starts_with(d.as_str()))
+                .max_by_key(|(_, d, _)| d.len())
+                .map(|(id, _, _)| *id);
+
+            if upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
+                              &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
+                              &parsed.branch, repo_id, parsed.name_is_explicit).is_ok() {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
 }
 
 /// Extract the OS username from a session's cwd. The JSONL captures the cwd
@@ -64,6 +122,12 @@ pub fn run(json: bool) -> Result<()> {
             Err(e) => eprintln!("'{}': error — {}", name, e),
         }
     }
+
+    let backfilled = backfill_local_jsonls(&conn, &repos).unwrap_or(0);
+    if !json && backfilled > 0 {
+        println!("Backfilled {} local session(s) from ~/.claude/projects.", backfilled);
+    }
+    grand_total += backfilled;
 
     if !json { println!("\n{} session(s) indexed.", grand_total); }
 
@@ -144,18 +208,17 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             Err(_) => continue,
         };
 
-        let parsed = match parse_session(&meta_bytes, &jsonl_bytes, &user) {
+        let parsed = match crate::parsers::dispatch_session(&meta_bytes, &jsonl_bytes) {
             Ok(p) => p,
             Err(e) => { eprintln!("  skipping {}: {}", meta_path, e); continue; }
         };
-        let (session_id, agent_name, created_at, updated_at, cwd, session_name, branch) = parsed;
 
-        upsert_session(conn, &session_id, &agent_name, &user,
-                       &created_at, &updated_at, &cwd, &session_name,
-                       &branch, Some(repo_id))?;
+        upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
+                       &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
+                       &parsed.branch, Some(repo_id), parsed.name_is_explicit)?;
 
         let checkpoint_number = checkpoint_number_from_path(meta_path).unwrap_or(0);
-        let os_user = cwd_to_os_user(&cwd);
+        let os_user = cwd_to_os_user(&parsed.cwd);
         let direct = direct_authors.get(&jsonl_path)
             .or_else(|| direct_authors.get(meta_path))
             .cloned();
@@ -165,10 +228,10 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
         }
 
         pending.push(PendingCheckpoint {
-            session_id,
+            session_id: parsed.session_id,
             checkpoint_number,
             jsonl_path,
-            last_turn_ts: updated_at,
+            last_turn_ts: parsed.updated_at,
             os_user,
             direct,
         });
@@ -259,88 +322,6 @@ pub(crate) fn list_shadow_branches(repo_dir: &str) -> Vec<String> {
         .collect()
 }
 
-/// Parse a shadow-branch session purely from its `full.jsonl`. There's no
-/// `metadata.json` here, so created_at, session_name, etc. all come from the
-/// JSONL itself.
-pub(crate) fn parse_shadow_session(
-    jsonl_bytes: &[u8],
-    session_id: &str,
-) -> Result<(String, String, String, String, String, String, String)> {
-    let mut earliest: Option<DateTime<Utc>> = None;
-    let mut latest: Option<DateTime<Utc>> = None;
-    let mut cwd = String::new();
-    let mut first_meaningful_prompt: Option<String> = None;
-    let mut first_any_prompt: Option<String> = None;
-    let mut custom_title: Option<String> = None;
-    let mut branch = String::new();
-
-    for line in jsonl_bytes.split(|&b| b == b'\n') {
-        if line.is_empty() { continue; }
-        let v: Value = match serde_json::from_slice(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
-            if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-                let dt: DateTime<Utc> = dt.with_timezone(&Utc);
-                if earliest.map_or(true, |e| dt < e) { earliest = Some(dt); }
-                if latest.map_or(true, |l| dt > l)   { latest   = Some(dt); }
-            }
-        }
-
-        if cwd.is_empty() {
-            if let Some(c) = v.get("cwd").and_then(Value::as_str) { cwd = c.to_string(); }
-        }
-
-        if let Some(b) = v.get("gitBranch").and_then(Value::as_str) {
-            if !b.is_empty() { branch = b.to_string(); }
-        }
-
-        match v.get("type").and_then(Value::as_str) {
-            Some("custom-title") => {
-                if let Some(t) = v.get("customTitle").and_then(Value::as_str) {
-                    if !t.trim().is_empty() { custom_title = Some(t.trim().to_string()); }
-                }
-            }
-            Some("user") => {
-                if let Some(text) = extract_user_text(&v["message"]["content"]) {
-                    if first_any_prompt.is_none() { first_any_prompt = Some(text.clone()); }
-                    if first_meaningful_prompt.is_none() && !is_wrapper_prompt(&text) {
-                        first_meaningful_prompt = Some(text);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let created_at = earliest.unwrap_or_else(Utc::now);
-    let updated_at = latest.unwrap_or(created_at);
-    let session_name = custom_title
-        .or(first_meaningful_prompt)
-        .or(first_any_prompt)
-        .unwrap_or_else(|| format!("session:{}", &session_id[..session_id.len().min(8)]));
-    let session_name = crate::commands::session_list::sanitize_one_line(&session_name);
-
-    // No reliable agent identifier on the shadow branch — default to Claude Code
-    // since that's the primary supported agent. upsert_session preserves any
-    // existing non-empty agent_name set by the checkpoint scan or the
-    // session-start hook, so this default only sticks for sessions seen
-    // exclusively via the shadow path.
-    let agent_name = "Claude Code".to_string();
-
-    Ok((
-        session_id.to_string(),
-        agent_name,
-        created_at.to_rfc3339(),
-        updated_at.to_rfc3339(),
-        cwd,
-        session_name,
-        branch,
-    ))
-}
-
 /// Scan every shadow branch in the repo and upsert any sessions found. Shadow
 /// branches commit on every prompt, so this picks up in-progress sessions long
 /// before they reach `entire/checkpoints/v1`.
@@ -368,11 +349,11 @@ pub(crate) fn index_shadow_branches(conn: &rusqlite::Connection, repo_id: i64, r
                 Err(_) => continue,
             };
 
-            match parse_shadow_session(&jsonl_bytes, session_id) {
-                Ok((sid, agent_name, created_at, updated_at, cwd, session_name, shadow_branch)) => {
-                    upsert_session(conn, &sid, &agent_name, &user,
-                                   &created_at, &updated_at, &cwd, &session_name,
-                                   &shadow_branch, Some(repo_id))?;
+            match crate::parsers::dispatch_shadow_session(&jsonl_bytes, session_id) {
+                Ok(p) => {
+                    upsert_session(conn, &p.session_id, &p.agent_name, &user,
+                                   &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
+                                   &p.branch, Some(repo_id), p.name_is_explicit)?;
                     count += 1;
                 }
                 Err(e) => eprintln!("  skipping {}:{} — {}", branch, line, e),
@@ -442,115 +423,6 @@ pub(crate) fn checkpoint_remote_url(repo_dir: &str) -> Option<String> {
     Some(url)
 }
 
-#[allow(clippy::type_complexity)]
-pub(crate) fn parse_session(
-    meta_bytes: &[u8],
-    jsonl_bytes: &[u8],
-    user: &str,
-) -> Result<(String, String, String, String, String, String, String)> {
-    #[derive(Deserialize)]
-    struct SessionMetadata {
-        session_id: String,
-        agent: Option<String>,
-        created_at: Option<String>,
-        branch: Option<String>,
-        summary: Option<Summary>,
-    }
-    #[derive(Deserialize)]
-    struct Summary {
-        intent: Option<String>,
-    }
-
-    let _ = user; // signature kept for callers; user comes from env at upsert time
-
-    let meta: SessionMetadata = serde_json::from_slice(meta_bytes)
-        .context("failed to parse metadata.json")?;
-
-    let created_at: DateTime<Utc> = meta
-        .created_at
-        .as_deref()
-        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(Utc::now);
-
-    let session_name = meta
-        .summary
-        .and_then(|s| s.intent)
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("session:{}", &meta.session_id[..8]));
-
-    let agent_name = meta.agent.unwrap_or_else(|| "unknown".to_string());
-    let meta_branch = meta.branch.unwrap_or_default();
-
-    let mut latest: Option<DateTime<Utc>> = None;
-    let mut cwd = String::new();
-    let mut first_meaningful_prompt: Option<String> = None;
-    let mut first_any_prompt: Option<String> = None;
-    let mut custom_title: Option<String> = None;
-    let mut jsonl_branch = String::new();
-
-    for line in jsonl_bytes.split(|&b| b == b'\n') {
-        if line.is_empty() { continue; }
-        let v: Value = match serde_json::from_slice(line) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        if let Some(ts) = v.get("timestamp").and_then(Value::as_str) {
-            if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-                let dt: DateTime<Utc> = dt.with_timezone(&Utc);
-                if latest.map_or(true, |l| dt > l) { latest = Some(dt); }
-            }
-        }
-
-        if cwd.is_empty() {
-            if let Some(c) = v.get("cwd").and_then(Value::as_str) { cwd = c.to_string(); }
-        }
-
-        if let Some(b) = v.get("gitBranch").and_then(Value::as_str) {
-            if !b.is_empty() { jsonl_branch = b.to_string(); }
-        }
-
-        match v.get("type").and_then(Value::as_str) {
-            Some("custom-title") => {
-                if let Some(t) = v.get("customTitle").and_then(Value::as_str) {
-                    if !t.trim().is_empty() { custom_title = Some(t.trim().to_string()); }
-                }
-            }
-            Some("user") => {
-                if let Some(text) = extract_user_text(&v["message"]["content"]) {
-                    if first_any_prompt.is_none() { first_any_prompt = Some(text.clone()); }
-                    if first_meaningful_prompt.is_none() && !is_wrapper_prompt(&text) {
-                        first_meaningful_prompt = Some(text);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let updated_at = latest.unwrap_or(created_at);
-    // Priority: explicit rename > first meaningful prompt > first prompt of any kind > metadata summary
-    let session_name = custom_title
-        .or(first_meaningful_prompt)
-        .or(first_any_prompt)
-        .unwrap_or(session_name);
-    let session_name = crate::commands::session_list::sanitize_one_line(&session_name);
-    // Prefer the JSONL's last gitBranch (it tracks branch switches mid-session);
-    // metadata.json's branch is captured at session start and may be stale.
-    let branch = if !jsonl_branch.is_empty() { jsonl_branch } else { meta_branch };
-
-    Ok((
-        meta.session_id,
-        agent_name,
-        created_at.to_rfc3339(),
-        updated_at.to_rfc3339(),
-        cwd,
-        session_name,
-        branch,
-    ))
-}
-
 /// Walk `entire/checkpoints/v1` once and map every added file path to the
 /// commit that introduced it. We restrict to commits whose subject begins
 /// with "Checkpoint:" — entireio's standard prefix for the direct, single-
@@ -607,45 +479,6 @@ pub(crate) fn checkpoint_number_from_path(meta_path: &str) -> Option<u32> {
     meta_path.split('/').nth(2)?.parse().ok()
 }
 
-/// Pull a user message's text out of either the string or block-array shape
-/// that Claude Code uses. Trims and returns None for empty content.
-fn extract_user_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(s) => {
-            let t = s.trim();
-            if t.is_empty() { None } else { Some(t.to_string()) }
-        }
-        Value::Array(blocks) => {
-            let texts: Vec<&str> = blocks.iter()
-                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|b| b.get("text").and_then(Value::as_str))
-                .collect();
-            let joined = texts.join("\n");
-            let t = joined.trim();
-            if t.is_empty() { None } else { Some(t.to_string()) }
-        }
-        _ => None,
-    }
-}
-
-/// Prompts whose first line is just a wrapper tag carry no user intent —
-/// they're slash-command metadata, bash output captured by Claude Code, task
-/// notifications, etc. Skip these when deciding the session's display name.
-fn is_wrapper_prompt(text: &str) -> bool {
-    let first_line = text.lines().next().unwrap_or("").trim_start();
-    const TAGS: &[&str] = &[
-        "<command-message",
-        "<command-name",
-        "<local-command-caveat",
-        "<task-notification",
-        "<system-reminder",
-        "<bash-input",
-        "<bash-stdout",
-        "<bash-stderr",
-    ];
-    TAGS.iter().any(|tag| first_line.starts_with(tag))
-}
-
 pub(crate) fn upsert_checkpoint(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -687,6 +520,7 @@ pub(crate) fn upsert_checkpoint(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn upsert_session(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -698,6 +532,7 @@ pub(crate) fn upsert_session(
     session_name: &str,
     branch: &str,
     repo_id: Option<i64>,
+    name_is_explicit: bool,
 ) -> Result<()> {
     // agent_name is preserved on update if the existing row already has one —
     // shadow branches don't carry a reliable agent identifier, so we don't want
@@ -705,22 +540,35 @@ pub(crate) fn upsert_session(
     // session-start hook already set authoritatively. Same idea for branch
     // and repo_id: a checkpoint pass that doesn't have these shouldn't wipe
     // out values previously written by a more authoritative pass.
+    //
+    // name_is_explicit + session_name are tied: an explicit name (from
+    // /rename) always wins over a derived one (first prompt). Same-tier
+    // updates overwrite normally.
     conn.execute(
         "INSERT INTO sessions
-            (session_id, agent_name, user, created_at, updated_at, cwd, session_name, branch, repo_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            (session_id, agent_name, user, created_at, updated_at, cwd, session_name, branch, repo_id, name_is_explicit)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(session_id) DO UPDATE SET
-           agent_name   = CASE WHEN COALESCE(sessions.agent_name, '') = ''
-                               THEN excluded.agent_name
-                               ELSE sessions.agent_name END,
-           updated_at   = MAX(sessions.updated_at, excluded.updated_at),
-           cwd          = CASE WHEN excluded.cwd != '' THEN excluded.cwd ELSE sessions.cwd END,
-           session_name = excluded.session_name,
-           branch       = CASE WHEN excluded.branch != '' THEN excluded.branch ELSE sessions.branch END,
-           repo_id      = COALESCE(excluded.repo_id, sessions.repo_id)",
+           agent_name       = CASE WHEN COALESCE(sessions.agent_name, '') = ''
+                                   THEN excluded.agent_name
+                                   ELSE sessions.agent_name END,
+           updated_at       = MAX(sessions.updated_at, excluded.updated_at),
+           cwd              = CASE WHEN excluded.cwd != '' THEN excluded.cwd ELSE sessions.cwd END,
+           session_name     = CASE
+                                WHEN excluded.name_is_explicit = 1 THEN excluded.session_name
+                                WHEN sessions.name_is_explicit = 1 THEN sessions.session_name
+                                ELSE excluded.session_name
+                              END,
+           name_is_explicit = CASE
+                                WHEN excluded.name_is_explicit = 1 OR sessions.name_is_explicit = 1 THEN 1
+                                ELSE 0
+                              END,
+           branch           = CASE WHEN excluded.branch != '' THEN excluded.branch ELSE sessions.branch END,
+           repo_id          = COALESCE(excluded.repo_id, sessions.repo_id)",
         rusqlite::params![
             session_id, agent_name, user, created_at, updated_at,
-            cwd, session_name, branch, repo_id
+            cwd, session_name, branch, repo_id,
+            if name_is_explicit { 1i64 } else { 0i64 }
         ],
     )?;
     Ok(())

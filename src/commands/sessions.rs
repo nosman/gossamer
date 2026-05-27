@@ -6,18 +6,30 @@ use crossterm::{
     execute,
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use std::collections::HashSet;
 use std::env;
 use std::io::{self, Write};
 
-use crate::{db, commands::status::fetch_repos};
+use crate::{db, commands::status::{self, fetch_repos, NewSessionConfig}};
 use crate::commands::session_list::{self, DisplaySession, Scope};
+use crate::entity::repository::Repository;
 
+// Outcomes that need to happen after the TUI exits.
+// - `Quit` propagates a full-app exit (q pressed anywhere in this loop or a
+//   nested viewer like show/search).
+// - `Resume`/`LaunchNewSession` `exec` into another process.
+// `Show` doesn't go here because it runs inline within the loop, so hitting
+// back in the transcript viewer drops us back to this list.
 enum Action {
-    Show(String),
+    Quit,
     Resume(String, String), // (id, cwd)
+    LaunchNewSession(NewSessionConfig),
 }
 
-pub fn run(all: bool, json: bool) -> Result<()> {
+/// Returns `Ok(true)` if the user pressed `q` (full app quit) anywhere within
+/// the sessions TUI or a nested viewer (show/search). `Ok(false)` for a
+/// normal back-out, JSON mode, or empty list.
+pub fn run(all: bool, json: bool) -> Result<bool> {
     let conn = db::connect()?;
 
     let repos = fetch_repos(&conn)?;
@@ -29,8 +41,10 @@ pub fn run(all: bool, json: bool) -> Result<()> {
     let mut sessions = session_list::fetch(Scope::All, all);
 
     // Pin sessions belonging to the current repo to the top while preserving
-    // recency-DESC within each group. session_id → repo_id lookup happens here
-    // (one query) so we don't run it per row.
+    // recency-DESC within each group, and remember which sessions are local so
+    // the renderer can flag them with a star. session_id → repo_id lookup
+    // happens here (one query) so we don't run it per row.
+    let mut local_sessions: HashSet<String> = HashSet::new();
     if let Some(current) = current_repo_id {
         let repo_id_for: std::collections::HashMap<String, i64> = {
             let mut map = std::collections::HashMap::new();
@@ -45,9 +59,19 @@ pub fn run(all: bool, json: bool) -> Result<()> {
             }
             map
         };
+        // Local set: sessions whose repo_id matches the current repo, plus any
+        // session whose cwd is within the repo's directory (catches untracked
+        // JSONL-only sessions augmented by session_list::fetch).
+        let current_dir = repos.iter().find(|r| r.id as i64 == current)
+            .map(|r| r.directory.clone()).unwrap_or_default();
+        for s in &sessions {
+            let by_id = repo_id_for.get(&s.session_id) == Some(&current);
+            let by_cwd = !current_dir.is_empty() && s.cwd.starts_with(current_dir.as_str());
+            if by_id || by_cwd { local_sessions.insert(s.session_id.clone()); }
+        }
         sessions.sort_by(|a, b| {
-            let a_local = repo_id_for.get(&a.session_id) == Some(&current);
-            let b_local = repo_id_for.get(&b.session_id) == Some(&current);
+            let a_local = local_sessions.contains(&a.session_id);
+            let b_local = local_sessions.contains(&b.session_id);
             b_local.cmp(&a_local).then(b.updated_at.cmp(&a.updated_at))
         });
     }
@@ -64,12 +88,12 @@ pub fn run(all: bool, json: bool) -> Result<()> {
             "backed_up": s.backed_up,
         })).collect();
         println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "sessions": arr }))?);
-        return Ok(());
+        return Ok(false);
     }
 
     if sessions.is_empty() {
         println!("No sessions found.");
-        return Ok(());
+        return Ok(false);
     }
 
     let orig_hook = std::panic::take_hook();
@@ -84,64 +108,210 @@ pub fn run(all: bool, json: bool) -> Result<()> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let action = tui_loop(&mut stdout, &sessions);
+    let action = tui_loop(&mut stdout, &sessions, &local_sessions, &repos);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
 
+    let quit_app = matches!(action, Some(Action::Quit));
     match action {
-        Some(Action::Show(id)) => { super::show::run(&id)?; }
+        Some(Action::Quit) => {}
         Some(Action::Resume(id, cwd)) => { super::show::resume_session(&id, &cwd); }
+        Some(Action::LaunchNewSession(cfg)) => { status::launch_new_session(cfg); }
         None => {}
     }
 
-    Ok(())
+    Ok(quit_app)
 }
 
-fn tui_loop(stdout: &mut impl Write, sessions: &[DisplaySession]) -> Option<Action> {
-    let mut sel = 0usize;
+/// Find the tracked repo that contains a session's cwd, falling back to the
+/// caller-supplied default (e.g. the current working dir's repo) when the
+/// session is from outside any tracked repo. Returns `None` only if no repo
+/// could be determined at all — callers should bail in that case.
+fn repo_for_session<'a>(s: &DisplaySession, repos: &'a [Repository], fallback: Option<&'a Repository>) -> Option<&'a Repository> {
+    repos.iter().find(|r| s.cwd.starts_with(r.directory.as_str())).or(fallback)
+}
+
+// Screens on the navigation stack. Only one variant today, but the stack
+// shape mirrors status.rs::Screen so future drill-down screens can slot in
+// the same way (push to enter, pop to back out).
+enum Screen {
+    Sessions { sel: usize },
+}
+
+// Commands produced inside the key-handling match arms and executed after the
+// borrow on `stack` ends. Mirrors the Cmd enum in status.rs.
+enum Cmd {
+    None,
+    Break,
+    Back,
+    Show(String),
+    Resume(String, String),                  // (session_id, cwd)
+    Search(String),
+    NewWorktree(String, String),             // (repo_dir, branch)
+    NewSession(NewSessionConfig),
+    Tidy(String),                            // repo_dir
+    Redraw,
+}
+
+fn tui_loop(
+    stdout: &mut impl Write,
+    sessions: &[DisplaySession],
+    local_sessions: &HashSet<String>,
+    repos: &[Repository],
+) -> Option<Action> {
+    // Fallback for `n`/`s`/`t` when the selected session's cwd doesn't match
+    // any tracked repo (e.g. JSONL-only sessions from before init): prefer the
+    // repo for the current working directory.
+    let cwd_now = env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
+    let cwd_repo: Option<&Repository> = cwd_now.as_deref()
+        .and_then(|cwd| repos.iter().find(|r| cwd.starts_with(r.directory.as_str())));
+
+    let mut stack: Vec<Screen> = vec![Screen::Sessions { sel: 0 }];
 
     loop {
         let (w, h) = terminal::size().unwrap_or((120, 40));
         let w = w as usize;
         let h = h as usize;
 
-        draw(stdout, sessions, sel, w, h).ok();
+        match stack.last().unwrap() {
+            Screen::Sessions { sel } => { draw(stdout, sessions, local_sessions, *sel, w, h).ok(); }
+        }
 
-        match event::read().ok()? {
-            Event::Key(k) => match k.code {
-                KeyCode::Char('q') | KeyCode::Esc => break,
-                KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
-                    terminal::disable_raw_mode().ok();
-                    std::process::exit(0);
+        let cmd = match event::read().ok()? {
+            Event::Key(k) => match stack.last_mut().unwrap() {
+                Screen::Sessions { sel } => match k.code {
+                    KeyCode::Char('q') => Cmd::Break,
+                    KeyCode::Esc => Cmd::Back,
+                    KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                        terminal::disable_raw_mode().ok();
+                        std::process::exit(0);
+                    }
+                    KeyCode::Up   | KeyCode::Char('k') => { if *sel > 0 { *sel -= 1; } Cmd::None }
+                    KeyCode::Down | KeyCode::Char('j') => { if *sel + 1 < sessions.len() { *sel += 1; } Cmd::None }
+                    KeyCode::Char('g') => { *sel = 0; Cmd::None }
+                    KeyCode::Char('G') => { *sel = sessions.len().saturating_sub(1); Cmd::None }
+                    KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter => {
+                        if sessions.is_empty() { Cmd::None }
+                        else { Cmd::Show(sessions[*sel].session_id.clone()) }
+                    }
+                    KeyCode::Char('r') => {
+                        if sessions.is_empty() { Cmd::None }
+                        else {
+                            let s = &sessions[*sel];
+                            Cmd::Resume(s.session_id.clone(), s.cwd.clone())
+                        }
+                    }
+                    KeyCode::Char('/') => match status::collect_search_query(stdout, w, h) {
+                        Some(q) if !q.trim().is_empty() => Cmd::Search(q),
+                        _ => Cmd::Redraw,
+                    },
+                    KeyCode::Char('n') => {
+                        let repo = sessions.get(*sel)
+                            .and_then(|s| repo_for_session(s, repos, cwd_repo));
+                        if let Some(repo) = repo {
+                            match status::collect_text_input(stdout, "  new worktree branch: ", w, h) {
+                                Some(b) if !b.trim().is_empty() => {
+                                    Cmd::NewWorktree(repo.directory.clone(), b.trim().to_string())
+                                }
+                                _ => Cmd::Redraw,
+                            }
+                        } else { Cmd::Redraw }
+                    }
+                    KeyCode::Char('s') => {
+                        let repo = sessions.get(*sel)
+                            .and_then(|s| repo_for_session(s, repos, cwd_repo))
+                            .or(cwd_repo);
+                        if let Some(repo) = repo {
+                            match status::new_session_wizard(stdout, &repo.directory, w, h) {
+                                Some(cfg) => Cmd::NewSession(cfg),
+                                None => Cmd::Redraw,
+                            }
+                        } else { Cmd::Redraw }
+                    }
+                    KeyCode::Char('t') => {
+                        let repo = sessions.get(*sel)
+                            .and_then(|s| repo_for_session(s, repos, cwd_repo))
+                            .or(cwd_repo);
+                        match repo {
+                            Some(r) => Cmd::Tidy(r.directory.clone()),
+                            None => Cmd::None,
+                        }
+                    }
+                    _ => Cmd::None,
                 }
-                KeyCode::Up   | KeyCode::Char('k') => { if sel > 0 { sel -= 1; } }
-                KeyCode::Down | KeyCode::Char('j') => { if sel + 1 < sessions.len() { sel += 1; } }
-                KeyCode::Char('g') => { sel = 0; }
-                KeyCode::Char('G') => { sel = sessions.len().saturating_sub(1); }
-                KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter => {
-                    return Some(Action::Show(sessions[sel].session_id.clone()));
-                }
-                KeyCode::Char('r') => {
-                    let s = &sessions[sel];
-                    return Some(Action::Resume(s.session_id.clone(), s.cwd.clone()));
-                }
-                _ => {}
             },
-            Event::Resize(_, _) => {
+            Event::Resize(_, _) => Cmd::Redraw,
+            _ => Cmd::None,
+        };
+
+        match cmd {
+            Cmd::None => {}
+            Cmd::Break => return Some(Action::Quit),
+            Cmd::Back => {
+                stack.pop();
+                if stack.is_empty() { break; }
+            }
+            Cmd::Show(id) => {
+                // Transcript viewer is its own self-contained TUI: step out of
+                // the alternate screen, run it, then come back and redraw.
+                // If the user pressed `q` in the viewer, propagate the full-app
+                // exit instead of resuming this loop.
+                execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                terminal::disable_raw_mode().ok();
+                let quit_app = super::show::run(&id).unwrap_or(false);
+                terminal::enable_raw_mode().ok();
+                if quit_app { return Some(Action::Quit); }
+                execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
-            _ => {}
+            Cmd::Resume(id, cwd) => return Some(Action::Resume(id, cwd)),
+            Cmd::Search(query) => {
+                execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
+                terminal::disable_raw_mode().ok();
+                let quit_app = super::search::run(&query, 10, false).unwrap_or(false);
+                terminal::enable_raw_mode().ok();
+                if quit_app { return Some(Action::Quit); }
+                execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
+            Cmd::NewWorktree(repo_dir, branch) => {
+                let msg = status::create_worktree(&repo_dir, &branch);
+                let display: String = msg.chars().take(w).collect();
+                let padded = format!("{:<width$}", display, width = w);
+                execute!(stdout, cursor::MoveTo(0, (h - 1) as u16)).ok();
+                write!(stdout, "\x1b[7m{padded}\x1b[0m").ok();
+                stdout.flush().ok();
+            }
+            Cmd::NewSession(cfg) => return Some(Action::LaunchNewSession(cfg)),
+            Cmd::Tidy(repo_dir) => {
+                if let Some(r) = repos.iter().find(|r| r.directory == repo_dir) {
+                    super::tidy::tui_tidy(stdout, std::slice::from_ref(r), 7, false, w, h);
+                    execute!(stdout, terminal::Clear(ClearType::All)).ok();
+                }
+            }
+            Cmd::Redraw => { execute!(stdout, terminal::Clear(ClearType::All)).ok(); }
         }
     }
 
     None
 }
 
-fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usize, h: usize) -> io::Result<()> {
+fn draw(
+    stdout: &mut impl Write,
+    sessions: &[DisplaySession],
+    local_sessions: &HashSet<String>,
+    sel: usize,
+    w: usize,
+    h: usize,
+) -> io::Result<()> {
     let t = crate::theme::get();
     let sel_bg = t.sel_bg;
+    // Reserve the leading cell only if at least one row will use the star.
+    // Otherwise we'd lose two columns of width for no visible benefit (e.g.
+    // when not invoked from inside a tracked repo).
+    let any_local = sessions.iter().any(|s| local_sessions.contains(&s.session_id));
 
     let content_h = h.saturating_sub(1);
     let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
@@ -179,6 +349,9 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         } else {
             (t.unbacked_name, t.unbacked_meta, "·")
         };
+        // Derived names (first-prompt fallback) render in the secondary color
+        // so they're visually distinct from /rename'd explicit titles.
+        let name_col = if s.backed_up && !s.name_is_explicit { t.text_secondary } else { name_col };
         let branch_col = if s.backed_up { t.link } else { t.stale };
 
         let clean = session_list::sanitize_one_line(&s.session_name);
@@ -188,8 +361,18 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
         let cwd_short = short_cwd(&s.cwd);
         let cwd_padded = format!("{:<cwd_w$}", cwd_short);
 
+        let star_prefix = if any_local {
+            if local_sessions.contains(&s.session_id) {
+                format!("\x1b[{fc}m★\x1b[0m ", fc = t.fresh)
+            } else {
+                "  ".to_string()
+            }
+        } else {
+            String::new()
+        };
+
         let mut line = format!(
-            "\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[{dm}m{cwd_padded}\x1b[0m",
+            "{star_prefix}\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m  \x1b[{dm}m{cwd_padded}\x1b[0m",
             dm = t.text_dim,
         );
 
@@ -226,7 +409,7 @@ fn draw(stdout: &mut impl Write, sessions: &[DisplaySession], sel: usize, w: usi
     }
 
     let bar = format!(
-        "  {} sessions   ↑↓/jk navigate   space/enter: view   r: resume   q: quit  ",
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   t: tidy   /: search   q: quit  ",
         sessions.len()
     );
     let display: String = bar.chars().take(w).collect();

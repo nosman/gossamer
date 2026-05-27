@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod entity;
 mod ingest;
+mod parsers;
 mod theme;
 mod watermark;
 
@@ -126,12 +127,12 @@ fn main() -> Result<()> {
     let json = cli.json;
     match cli.command.unwrap_or(Commands::Repo) {
         Commands::Init => commands::init::run(json)?,
-        Commands::Repo => commands::status::run(json)?,
-        Commands::Sessions { all } => commands::sessions::run(all, json)?,
+        Commands::Repo => { commands::status::run(json)?; }
+        Commands::Sessions { all } => { commands::sessions::run(all, json)?; }
         Commands::Index => commands::index::run(json)?,
         Commands::Refresh => commands::refresh::run(json)?,
-        Commands::Show { session } => commands::show::run(&session)?,
-        Commands::Search { query, top_k } => commands::search::run(&query.join(" "), top_k, json)?,
+        Commands::Show { session } => { commands::show::run(&session)?; }
+        Commands::Search { query, top_k } => { commands::search::run(&query.join(" "), top_k, json)?; }
         Commands::NewSession { agent, branch, name, prompt } => {
             commands::new_session::run(agent, branch, name, prompt)?
         }

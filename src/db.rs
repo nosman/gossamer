@@ -30,6 +30,7 @@ pub fn connect() -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN os_user TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN branch TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN repo_id INTEGER", []);
+    let _ = conn.execute("ALTER TABLE sessions ADD COLUMN name_is_explicit INTEGER NOT NULL DEFAULT 0", []);
 
     conn.execute_batch("
         CREATE TABLE IF NOT EXISTS sessions (
