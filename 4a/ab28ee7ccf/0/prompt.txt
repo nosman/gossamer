@@ -1,0 +1,49 @@
+Why is the "verified-profiles-debug" session not showing a username? that is a relatively long-lived session
+
+---
+
+We also need to highlight the named sessions in the gossamer repo view, like we do everywhere else
+
+---
+
+[Image #7] ok but did you reindex all? this still looks bad
+
+---
+
+Ok but the problem is that session WAS backed up: Entire: Active Claude Code session detected
+  Last prompt: Element should have an ownerId right? that's a userId. Pass that ownerId in t...
+
+Link this commit to session context?
+  [Y]es / [n]o / [a]lways (remember my choice): Y
+
+---
+
+what do you mean by outer-loop repo?
+
+---
+
+is this going to be brittle? especially if i want to resume a session across a different machine
+
+---
+
+Yeah we need to match across remote urls. Entire checkpoints ARE tied to git repos, so we can use the git remote there (make sure to detect the case where checkpoints are backed up to a separate repo and join it). Otherwise we can still get the remote by seeing if there is a git repo in the cwd and calling git remote
+
+---
+
+ok but now all of scott's sessions appear to be in cosmos-www and when i select one, it doesn't show me the session details page anymore
+
+---
+
+Ok so did we find scott's sessions?
+
+---
+
+are we still looking for repos by remote?
+
+---
+
+no don't drop the steps. If anything, you should be using the git remotes as the SOURCE OF TRUTH. Anything else is more brittle and depends entirely on where i cloned a directory.
+
+---
+
+but for scott, we're getting his sessions from the entire/checkpoints/v1 branch! so you should already know the git repo.

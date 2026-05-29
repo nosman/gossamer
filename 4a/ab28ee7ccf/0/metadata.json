@@ -1,0 +1,157 @@
+{
+  "cli_version": "0.6.0",
+  "checkpoint_id": "4aab28ee7ccf",
+  "session_id": "a91b56e5-f173-4bde-b497-51eefbbc53c2",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-29T14:37:39.753179Z",
+  "branch": "main",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "src/commands/index.rs",
+    "src/commands/refresh.rs",
+    "src/commands/session_list.rs",
+    "src/commands/sessions.rs",
+    "src/commands/show.rs",
+    "src/commands/status.rs",
+    "src/db.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-7",
+  "turn_id": "8f74b64a796f",
+  "checkpoint_transcript_start": 2222,
+  "transcript_lines_at_start": 2222,
+  "token_usage": {
+    "input_tokens": 205,
+    "cache_creation_tokens": 583210,
+    "cache_read_tokens": 37524101,
+    "output_tokens": 114687,
+    "api_call_count": 147
+  },
+  "session_metrics": {
+    "turn_count": 53
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-29T14:37:39.633949Z",
+    "agent_lines": 367,
+    "agent_removed": 36,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 367,
+    "total_lines_changed": 403,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 18,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 18
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 18,
+      "user_lines_removed": 0,
+      "agent_lines_added": 8,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 18
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 18,
+      "user_lines_removed": 0,
+      "agent_lines_added": 12,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 18
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 18,
+      "user_lines_removed": 0,
+      "agent_lines_added": 40,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 18
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 83,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 83,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 83,
+      "agent_lines_removed": 12,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 235,
+      "agent_lines_removed": 31,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 9,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 358,
+      "agent_lines_removed": 36,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 10,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 358,
+      "agent_lines_removed": 36,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    },
+    {
+      "checkpoint_number": 11,
+      "user_lines_added": 23,
+      "user_lines_removed": 0,
+      "agent_lines_added": 364,
+      "agent_lines_removed": 36,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 23
+      }
+    }
+  ]
+}
