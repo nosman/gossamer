@@ -187,6 +187,18 @@ fn augment_with_jsonls(
                 if !parsed.session_name.is_empty() { existing.session_name = parsed.session_name; }
                 if file_mtime > existing.updated_at { existing.updated_at = file_mtime; }
                 if !parsed.branch.is_empty() { existing.branch = parsed.branch; }
+                // A custom-title in the JSONL outranks the DB flag. Without
+                // this, /rename'd sessions stay tagged as "derived" until the
+                // next index run, so they render gray in the lists.
+                if parsed.name_is_explicit { existing.name_is_explicit = true; }
+                // Sessions inserted by the SessionStart hook but never indexed
+                // from a checkpoint branch have no `checkpoints` row, so the
+                // author column came back empty. Fall back to the cwd's
+                // os-user — same fallback used for brand-new untracked rows.
+                if existing.author.is_empty() {
+                    let cwd = if !existing.cwd.is_empty() { existing.cwd.as_str() } else { parsed.cwd.as_str() };
+                    existing.author = cwd_os_user(cwd).unwrap_or_default();
+                }
                 continue;
             }
 

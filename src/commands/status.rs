@@ -497,14 +497,22 @@ fn draw_sessions(
                 _              => t.text_dim,
             };
 
-            let (name_col, meta_col, dot_char) = if s.backed_up {
-                (t.backed_name, t.backed_meta, "*")
+            let (meta_col, dot_char) = if s.backed_up {
+                (t.backed_meta, "*")
             } else {
-                (t.unbacked_name, t.unbacked_meta, "·")
+                (t.unbacked_meta, "·")
             };
-            // Derived names (first-prompt fallback) render in the secondary
-            // color so they're visually distinct from /rename'd titles.
-            let name_col = if s.backed_up && !s.name_is_explicit { t.text_secondary } else { name_col };
+            // Name color is driven by whether the user explicitly named the
+            // session (`/rename` or custom-title), not by whether it's been
+            // checkpointed. Explicit names always pop; derived first-prompt
+            // fallbacks render dim regardless of backed_up.
+            let name_col = if s.name_is_explicit {
+                t.backed_name
+            } else if s.backed_up {
+                t.text_secondary
+            } else {
+                t.unbacked_name
+            };
             let branch_col = if s.backed_up { t.link } else { t.stale };
 
             let name_padded = format!("{:<name_w$}", name);

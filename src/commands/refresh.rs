@@ -3,7 +3,7 @@ use std::process::Command;
 
 use crate::db;
 use super::index::{
-    BRANCH, fetch_checkpoint_branch, git_show, index_shadow_branches, is_meta_path,
+    BRANCH, RepoResolver, fetch_checkpoint_branch, git_show, index_shadow_branches, is_meta_path,
     upsert_session,
 };
 
@@ -24,10 +24,12 @@ pub fn run(json: bool) -> Result<()> {
         return Ok(());
     }
 
+    let resolver = RepoResolver::new(&conn)?;
+
     let mut grand_total = 0usize;
 
     for (repo_id, dir, name) in &repos {
-        match refresh_repo(&conn, *repo_id, dir) {
+        match refresh_repo(&conn, *repo_id, dir, &resolver) {
             Ok(0) => { if !json { println!("'{}': up to date.", name); } }
             Ok(n) => {
                 if !json { println!("'{}': {} new session(s) indexed.", name, n); }
@@ -59,13 +61,13 @@ pub fn run(json: bool) -> Result<()> {
     Ok(())
 }
 
-fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str) -> Result<usize> {
+fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, resolver: &RepoResolver) -> Result<usize> {
     fetch_checkpoint_branch(repo_dir);
 
     // Shadow branches advance on every prompt, so we always sweep them — even
     // when the checkpoint head is unchanged, an active session can have new
     // turns visible only on its shadow ref.
-    let shadow_count = index_shadow_branches(conn, repo_id, repo_dir).unwrap_or(0);
+    let shadow_count = index_shadow_branches(conn, repo_id, repo_dir, resolver).unwrap_or(0);
 
     // Check checkpoint branch exists.
     let check = Command::new("git")
@@ -135,9 +137,10 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str) -> Re
         };
         match crate::parsers::dispatch_session(&meta_bytes, &jsonl_bytes) {
             Ok(p) => {
+                let resolved_id = resolver.resolve(&p.cwd, Some(repo_id));
                 upsert_session(conn, &p.session_id, &p.agent_name, &user,
                                &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
-                               &p.branch, Some(repo_id), p.name_is_explicit)?;
+                               &p.branch, resolved_id, p.name_is_explicit)?;
                 count += 1;
             }
             Err(e) => eprintln!("  skipping {}: {}", meta_path, e),

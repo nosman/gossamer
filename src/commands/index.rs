@@ -1,11 +1,201 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::process::Command;
 
 use crate::{db, ingest};
 
 pub(crate) const BRANCH: &str = "entire/checkpoints/v1";
+
+/// Resolves a session's owning repository. Remote URL is the source of truth
+/// — local paths are incidental to where someone happened to clone a repo.
+/// Order of precedence:
+///   1. **Mode B** (indexed repo's remote IS some tracked project's declared
+///      `.entire/settings.json::checkpoint_remote`): pick the project that
+///      uses this shared checkpoint repo; disambiguate by cwd if multiple.
+///   2. **Mode A** (we have an indexing context but it isn't a shared
+///      checkpoint repo): the file IS in this repo's checkpoint branch, so
+///      by direct evidence it's this repo's session. The indexing context's
+///      remote URL is authoritative — no need to consult the cwd.
+///   3. **Backfill / no indexing context**: derive remote from cwd.
+///      a. `git -C cwd remote get-url origin` matched against `repositories.remote`
+///      b. cwd longest-prefix against tracked dirs (cross-machine fallback)
+///      c. user-home-stripped suffix match (Scott's `/Users/sholodak/cosmos/X`
+///         matches my `/Users/stsoucas/cosmos/X`)
+///   4. Returns None if no signal at all.
+///
+/// Results of `git remote get-url origin` are cached so the cwd-derivation
+/// path doesn't shell out repeatedly during a long index.
+pub(crate) struct RepoResolver {
+    repos: Vec<(i64, String, String)>,           // (id, directory, remote)
+    by_remote: HashMap<String, i64>,             // normalized remote URL → repo_id
+    project_for_checkpoint: HashMap<String, Vec<i64>>, // normalized cp-remote URL → project ids
+    cwd_remote_cache: RefCell<HashMap<String, Option<String>>>,
+}
+
+impl RepoResolver {
+    pub fn new(conn: &rusqlite::Connection) -> Result<Self> {
+        let mut stmt = conn.prepare("SELECT id, directory, remote FROM repositories")?;
+        let repos: Vec<(i64, String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect::<Result<_, _>>()?;
+
+        let mut by_remote = HashMap::new();
+        let mut project_for_checkpoint: HashMap<String, Vec<i64>> = HashMap::new();
+        for (id, dir, remote) in &repos {
+            if !remote.is_empty() {
+                by_remote.insert(normalize_remote(remote), *id);
+            }
+            if let Some(cp_url) = checkpoint_remote_url(dir) {
+                project_for_checkpoint.entry(normalize_remote(&cp_url))
+                    .or_default()
+                    .push(*id);
+            }
+        }
+
+        Ok(Self {
+            repos,
+            by_remote,
+            project_for_checkpoint,
+            cwd_remote_cache: RefCell::new(HashMap::new()),
+        })
+    }
+
+    pub fn resolve(&self, cwd: &str, indexing_context: Option<i64>) -> Option<i64> {
+        // ── INDEXING CONTEXT (when we have one) ────────────────────────
+        // We know the remote URL of the repo we're scanning — that IS the
+        // session's remote URL, modulo the Mode B fan-out.
+        if let Some(ctx_id) = indexing_context {
+            if let Some(ctx_remote) = self.remote_of(ctx_id) {
+                // 1. Mode B: ctx is a shared checkpoint repo. Disambiguate
+                //    among the projects that use it as their checkpoint
+                //    remote.
+                if let Some(candidates) = self.project_for_checkpoint.get(&ctx_remote) {
+                    if candidates.len() == 1 { return Some(candidates[0]); }
+                    for &cand in candidates {
+                        if let Some((_, dir, _)) = self.repos.iter().find(|(id, _, _)| *id == cand) {
+                            if let Some(name) = std::path::Path::new(dir).file_name().and_then(|s| s.to_str()) {
+                                if cwd.contains(name) { return Some(cand); }
+                            }
+                        }
+                    }
+                    if !candidates.is_empty() { return Some(candidates[0]); }
+                }
+                // 2. Mode A: ctx IS the project. Direct evidence — the file
+                //    is in this repo's checkpoint branch — beats any cwd
+                //    heuristic we could run.
+                return Some(ctx_id);
+            }
+        }
+
+        // ── NO INDEXING CONTEXT (backfill) ─────────────────────────────
+        // We're walking ~/.claude/projects without knowing which repo's
+        // branch each session came from. Derive remote from cwd.
+
+        // 3a. cwd is a local git workdir — ask it for origin URL.
+        if !cwd.is_empty() {
+            if let Some(remote_url) = self.cached_origin(cwd) {
+                if let Some(&id) = self.by_remote.get(&normalize_remote(&remote_url)) {
+                    return Some(id);
+                }
+            }
+        }
+
+        // 3b/c. Path heuristics — brittle, but the only thing left for
+        //       cross-machine cwds that don't exist locally.
+        self.from_path(cwd)
+    }
+
+    fn from_path(&self, cwd: &str) -> Option<i64> {
+        if cwd.is_empty() { return None; }
+        // a) cwd is literally inside a tracked dir.
+        let mut best: Option<(usize, i64)> = None;
+        for (id, dir, _) in &self.repos {
+            if cwd.starts_with(dir.as_str()) {
+                let n = dir.len();
+                if best.map_or(true, |(b, _)| n > b) { best = Some((n, *id)); }
+            }
+        }
+        if let Some((_, id)) = best { return Some(id); }
+
+        // b) Same project, different user-home. `/Users/sholodak/cosmos/foo`
+        //    matches my `/Users/stsoucas/cosmos/foo` after stripping the
+        //    leading `/Users/<user>/`.
+        let cwd_suffix = strip_user_home(cwd)?;
+        let mut best: Option<(usize, i64)> = None;
+        for (id, dir, _) in &self.repos {
+            if let Some(dir_suffix) = strip_user_home(dir) {
+                if path_prefix_match(cwd_suffix, dir_suffix) {
+                    let n = dir_suffix.len();
+                    if best.map_or(true, |(b, _)| n > b) { best = Some((n, *id)); }
+                }
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    fn remote_of(&self, repo_id: i64) -> Option<String> {
+        self.repos.iter().find(|(id, _, _)| *id == repo_id).map(|(_, _, r)| normalize_remote(r))
+    }
+
+    fn cached_origin(&self, cwd: &str) -> Option<String> {
+        let mut cache = self.cwd_remote_cache.borrow_mut();
+        if let Some(hit) = cache.get(cwd) { return hit.clone(); }
+        let resolved = git_origin_url(cwd);
+        cache.insert(cwd.to_string(), resolved.clone());
+        resolved
+    }
+}
+
+fn git_origin_url(cwd: &str) -> Option<String> {
+    if !std::path::Path::new(cwd).is_dir() { return None; }
+    let out = Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(cwd)
+        .output().ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8(out.stdout).ok()?;
+    let s = s.trim();
+    if s.is_empty() { None } else { Some(s.to_string()) }
+}
+
+/// Strip a leading `/Users/<x>/` or `/home/<x>/` prefix from a path. Returns
+/// the remainder (project-relative path). None if the path doesn't start with
+/// a recognized home prefix or has nothing after the username segment.
+fn strip_user_home(path: &str) -> Option<&str> {
+    for home_root in ["/Users/", "/home/"] {
+        if let Some(rest) = path.strip_prefix(home_root) {
+            return rest.split_once('/').map(|(_user, after)| after);
+        }
+    }
+    None
+}
+
+/// Like `starts_with` but only matches at a path boundary, so
+/// `cosmos/cosmos-graphql-foo` does NOT match prefix `cosmos/cosmos-graphql`.
+fn path_prefix_match(haystack: &str, needle: &str) -> bool {
+    if haystack == needle { return true; }
+    if !haystack.starts_with(needle) { return false; }
+    // Char immediately after the needle must be a path separator.
+    haystack.as_bytes().get(needle.len()) == Some(&b'/')
+}
+
+/// Normalize a git remote URL into a comparable form. SSH and HTTPS variants
+/// of the same repo (`git@github.com:owner/repo.git` vs
+/// `https://github.com/owner/repo`) both collapse to the same key.
+pub(crate) fn normalize_remote(url: &str) -> String {
+    let s = url.trim().trim_end_matches('/').trim_end_matches(".git");
+    if let Some(rest) = s.strip_prefix("git@") {
+        if let Some((host, path)) = rest.split_once(':') {
+            return format!("https://{}/{}", host.to_lowercase(), path);
+        }
+    }
+    if let Some(rest) = s.strip_prefix("ssh://git@") {
+        return format!("https://{}", rest.to_lowercase());
+    }
+    s.to_lowercase()
+}
 
 #[derive(Clone)]
 pub(crate) struct CommitAuthor {
@@ -29,7 +219,8 @@ struct PendingCheckpoint {
 /// reason never got captured by entire's checkpoint branch.
 pub(crate) fn backfill_local_jsonls(
     conn: &rusqlite::Connection,
-    repos: &[(i64, String, String)],
+    _repos: &[(i64, String, String)],
+    resolver: &RepoResolver,
 ) -> Result<usize> {
     let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME unset"))?;
     let projects = std::path::PathBuf::from(&home).join(".claude/projects");
@@ -66,12 +257,10 @@ pub(crate) fn backfill_local_jsonls(
                 Err(_) => continue,
             };
 
-            // Longest-prefix match so a cwd inside a worktree still attaches
-            // to the right registered repo.
-            let repo_id = repos.iter()
-                .filter(|(_, d, _)| parsed.cwd.starts_with(d.as_str()))
-                .max_by_key(|(_, d, _)| d.len())
-                .map(|(id, _, _)| *id);
+            // No indexing context here — backfill doesn't know which repo's
+            // branch this came from. Resolver tries cwd-prefix then git
+            // remote; gives up if neither matches a tracked project.
+            let repo_id = resolver.resolve(&parsed.cwd, None);
 
             if upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
                               &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
@@ -110,10 +299,12 @@ pub fn run(json: bool) -> Result<()> {
         return Ok(());
     }
 
+    let resolver = RepoResolver::new(&conn)?;
+
     let mut grand_total = 0usize;
 
     for (repo_id, dir, name) in &repos {
-        match index_repo(&conn, *repo_id, dir, name) {
+        match index_repo(&conn, *repo_id, dir, name, &resolver) {
             Ok(0) => { if !json { println!("'{}': no {} branch found.", name, BRANCH); } }
             Ok(n) => {
                 if !json { println!("'{}': indexed {} session(s).", name, n); }
@@ -123,7 +314,7 @@ pub fn run(json: bool) -> Result<()> {
         }
     }
 
-    let backfilled = backfill_local_jsonls(&conn, &repos).unwrap_or(0);
+    let backfilled = backfill_local_jsonls(&conn, &repos, &resolver).unwrap_or(0);
     if !json && backfilled > 0 {
         println!("Backfilled {} local session(s) from ~/.claude/projects.", backfilled);
     }
@@ -157,7 +348,7 @@ pub(crate) fn is_meta_path(l: &str) -> bool {
         && l.split('/').nth(2).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
 }
 
-fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_name: &str) -> Result<usize> {
+fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_name: &str, resolver: &RepoResolver) -> Result<usize> {
     fetch_checkpoint_branch(repo_dir);
 
     let check = Command::new("git")
@@ -213,9 +404,10 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             Err(e) => { eprintln!("  skipping {}: {}", meta_path, e); continue; }
         };
 
+        let resolved_id = resolver.resolve(&parsed.cwd, Some(repo_id));
         upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
                        &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
-                       &parsed.branch, Some(repo_id), parsed.name_is_explicit)?;
+                       &parsed.branch, resolved_id, parsed.name_is_explicit)?;
 
         let checkpoint_number = checkpoint_number_from_path(meta_path).unwrap_or(0);
         let os_user = cwd_to_os_user(&parsed.cwd);
@@ -265,7 +457,7 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
     // Then sweep shadow branches for in-progress sessions that haven't been
     // checkpointed yet. These often advance several prompts ahead of the
     // checkpoint branch.
-    count += index_shadow_branches(conn, repo_id, repo_dir)?;
+    count += index_shadow_branches(conn, repo_id, repo_dir, resolver)?;
 
     Ok(count)
 }
@@ -325,7 +517,7 @@ pub(crate) fn list_shadow_branches(repo_dir: &str) -> Vec<String> {
 /// Scan every shadow branch in the repo and upsert any sessions found. Shadow
 /// branches commit on every prompt, so this picks up in-progress sessions long
 /// before they reach `entire/checkpoints/v1`.
-pub(crate) fn index_shadow_branches(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str) -> Result<usize> {
+pub(crate) fn index_shadow_branches(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, resolver: &RepoResolver) -> Result<usize> {
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "unknown".to_string());
@@ -351,9 +543,10 @@ pub(crate) fn index_shadow_branches(conn: &rusqlite::Connection, repo_id: i64, r
 
             match crate::parsers::dispatch_shadow_session(&jsonl_bytes, session_id) {
                 Ok(p) => {
+                    let resolved_id = resolver.resolve(&p.cwd, Some(repo_id));
                     upsert_session(conn, &p.session_id, &p.agent_name, &user,
                                    &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
-                                   &p.branch, Some(repo_id), p.name_is_explicit)?;
+                                   &p.branch, resolved_id, p.name_is_explicit)?;
                     count += 1;
                 }
                 Err(e) => eprintln!("  skipping {}:{} — {}", branch, line, e),
@@ -534,6 +727,9 @@ pub(crate) fn upsert_session(
     repo_id: Option<i64>,
     name_is_explicit: bool,
 ) -> Result<()> {
+    // Callers are responsible for resolving repo_id through RepoResolver
+    // before calling — see resolve_repo_id docstring for precedence.
+    //
     // agent_name is preserved on update if the existing row already has one —
     // shadow branches don't carry a reliable agent identifier, so we don't want
     // a shadow upsert to clobber an agent_name that the checkpoint scan or the

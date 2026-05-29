@@ -237,18 +237,41 @@ fn find_session(id: &str) -> Option<PathBuf> {
 
 fn extract_from_checkpoint(session_id: &str) -> Option<PathBuf> {
     let conn = crate::db::connect().ok()?;
-    let (jsonl_path, repo_dir): (String, String) = conn.query_row(
-        "SELECT jsonl_path, repo_dir FROM checkpoints
+    let jsonl_path: String = conn.query_row(
+        "SELECT jsonl_path FROM checkpoints
          WHERE session_id = ?1
            AND jsonl_path IS NOT NULL
-           AND repo_dir   IS NOT NULL
          ORDER BY checkpoint_number DESC
          LIMIT 1",
         [session_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     ).ok()?;
 
-    let bytes = crate::commands::index::git_show(&repo_dir, &jsonl_path).ok()?;
+    // The stored `repo_dir` is whichever repo's index pass last wrote this
+    // checkpoint row — sometimes stale (the file may since have been removed
+    // from that repo's branch, or the same file lives in multiple repos'
+    // shared checkpoint branch). Try the recorded repo_dir first, then fall
+    // back to every other tracked repo. Whichever clone actually has the path
+    // in its checkpoint branch wins.
+    let preferred: Option<String> = conn.query_row(
+        "SELECT repo_dir FROM checkpoints
+         WHERE session_id = ?1 AND repo_dir IS NOT NULL
+         ORDER BY checkpoint_number DESC LIMIT 1",
+        [session_id], |row| row.get(0),
+    ).ok();
+
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(p) = preferred { candidates.push(p); }
+    if let Ok(mut stmt) = conn.prepare("SELECT directory FROM repositories") {
+        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+            for r in rows.flatten() {
+                if !candidates.contains(&r) { candidates.push(r); }
+            }
+        }
+    }
+
+    let bytes = candidates.iter()
+        .find_map(|dir| crate::commands::index::git_show(dir, &jsonl_path).ok())?;
 
     let home = std::env::var("HOME").ok()?;
     let cache_dir = PathBuf::from(&home).join(".gossamer").join("sessions");
