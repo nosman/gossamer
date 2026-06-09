@@ -125,6 +125,12 @@ enum Commands {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let json = cli.json;
+    // Detect the terminal theme before any command enables raw mode.
+    // termbg queries the terminal via OSC 11, which requires non-raw mode.
+    // Non-interactive contexts (pipes, hooks) skip this; termbg returns fast on no-tty.
+    if !json && std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        theme::get();
+    }
     match cli.command.unwrap_or(Commands::Repo) {
         Commands::Init => commands::init::run(json)?,
         Commands::Repo => { commands::status::run(json)?; }

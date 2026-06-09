@@ -569,25 +569,25 @@ static MD_SKIN: OnceLock<termimad::MadSkin> = OnceLock::new();
 
 fn md_skin() -> &'static termimad::MadSkin {
     MD_SKIN.get_or_init(|| {
-        use crossterm::style::{Attribute, Color};
+        use crossterm::style::Attribute;
         let t = crate::theme::get();
         let mut skin = termimad::MadSkin::default();
-        skin.bold.set_fg(Color::AnsiValue(t.md_bold));
+        skin.bold.set_fg(t.md_bold);
         skin.bold.add_attr(Attribute::Bold);
-        skin.italic.set_fg(Color::AnsiValue(t.md_italic));
+        skin.italic.set_fg(t.md_italic);
         skin.italic.add_attr(Attribute::Italic);
-        skin.inline_code.set_fg(Color::AnsiValue(t.md_code));
+        skin.inline_code.set_fg(t.md_code);
         skin.inline_code.object_style.background_color = None;
-        skin.code_block.compound_style.set_fg(Color::AnsiValue(t.md_code));
+        skin.code_block.compound_style.set_fg(t.md_code);
         skin.code_block.compound_style.object_style.background_color = None;
-        skin.paragraph.compound_style.set_fg(Color::AnsiValue(t.md_text));
-        skin.headers[0].compound_style.set_fg(Color::AnsiValue(t.md_h1));
+        skin.paragraph.compound_style.set_fg(t.md_text);
+        skin.headers[0].compound_style.set_fg(t.md_h1);
         skin.headers[0].compound_style.add_attr(Attribute::Bold);
-        skin.headers[1].compound_style.set_fg(Color::AnsiValue(t.md_h2));
+        skin.headers[1].compound_style.set_fg(t.md_h2);
         skin.headers[1].compound_style.add_attr(Attribute::Bold);
-        skin.headers[2].compound_style.set_fg(Color::AnsiValue(t.md_h3));
+        skin.headers[2].compound_style.set_fg(t.md_h3);
         skin.headers[2].compound_style.add_attr(Attribute::Bold);
-        skin.bullet.set_fg(Color::AnsiValue(t.md_text));
+        skin.bullet.set_fg(t.md_text);
         skin
     })
 }

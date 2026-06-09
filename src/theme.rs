@@ -1,33 +1,70 @@
 use std::sync::OnceLock;
+use std::time::Duration;
+
+// ── SGR parameter strings for the standard 16 ANSI colors ────────────────────
+// These map to whatever palette the user's terminal defines (Solarized, Nord,
+// Dracula, etc.) — the terminal theme controls the actual RGB values.
+
+// Foreground — standard
+const BLACK:   &str = "30";
+const RED:     &str = "31";
+const GREEN:   &str = "32";
+const YELLOW:  &str = "33";
+const BLUE:    &str = "34";
+const MAGENTA: &str = "35";
+const CYAN:    &str = "36";
+const WHITE:   &str = "37"; // color-7: "gray" in dark themes, base text in Solarized
+
+// Foreground — bright ("intense") variants
+const BRIGHT_BLACK:   &str = "90"; // dark gray — universally readable as "dim"
+const BRIGHT_GREEN:   &str = "92";
+const BRIGHT_CYAN:    &str = "96";
+const BRIGHT_WHITE:   &str = "97";
+
+// Background
+const BG_BRIGHT_BLACK: &str = "100"; // dark gray bg — visible selection on both dark and light
+
+// Bold + color composites (bold attribute + standard color in one SGR string)
+const BOLD_YELLOW: &str = "1;33";
+const BOLD_BLUE:   &str = "1;34";
+const BOLD_RED:    &str = "1;31";
+const BOLD_WHITE:  &str = "1;97";
+const BOLD_BLACK:  &str = "1;30";
+
+// ── Theme struct ──────────────────────────────────────────────────────────────
 
 pub struct Theme {
-    /// Row selection background, e.g. "48;5;236"
+    /// Row selection background ("48;5;N" or base-16 bg code)
     pub sel_bg: &'static str,
-    /// Metadata, paths, decorative separators
+
+    /// Metadata, timestamps, paths, decorative separators
     pub text_dim: &'static str,
-    /// Tertiary text ("… N more lines", non-backed meta)
+    /// Very secondary ("… N more lines", non-backed meta)
     pub text_faint: &'static str,
-    /// Normal readable text
+    /// Normal readable foreground text
     pub text_primary: &'static str,
-    /// Tool input secondary lines
+    /// Tool input secondary argument lines
     pub text_secondary: &'static str,
-    /// Recent / active indicator (green)
+
+    /// Recent/active indicator — green
     pub fresh: &'static str,
-    /// Moderate age / soft warning (orange)
+    /// Moderate age / soft warning — yellow/amber
     pub moderate: &'static str,
-    /// Inactive branch / stale state (gray)
+    /// Inactive branch / stale state — gray
     pub stale: &'static str,
-    /// Errors, detached HEAD (red)
+    /// Errors, detached HEAD — red
     pub error: &'static str,
-    /// Bold section headers (gold/amber)
+
+    /// Bold section/page headers
     pub header: &'static str,
-    /// Main branch accent (gold/amber, non-bold)
+    /// Non-bold accent: main branch name
     pub accent: &'static str,
-    /// Inline label color: branch tags in show, tool names (yellow)
+    /// Inline label color: branch tags, tool names
     pub label: &'static str,
-    /// Linked worktrees, backed-up branches (blue)
+    /// Linked worktrees, backed-up branches
     pub link: &'static str,
-    /// Backed-up session name column
+
+    /// Backed-up session name column (bold)
     pub backed_name: &'static str,
     /// Backed-up session metadata column
     pub backed_meta: &'static str,
@@ -35,21 +72,89 @@ pub struct Theme {
     pub unbacked_name: &'static str,
     /// Non-backed session metadata column
     pub unbacked_meta: &'static str,
-    /// Non-error tool result (purple)
+
+    /// Non-error tool result — magenta/purple
     pub tool_ok: &'static str,
-    /// Bold tidy panel warning title
+    /// Bold tidy panel warning title — red
     pub tidy_warn: &'static str,
-    /// ANSI 256 code for inactive/unbacked agents
-    pub stale_agent: u8,
-    // ── Markdown skin (AnsiValue indices) ────────────────────────────────────
-    pub md_code: u8,
-    pub md_text: u8,
-    pub md_h1: u8,
-    pub md_h2: u8,
-    pub md_h3: u8,
-    pub md_bold: u8,
-    pub md_italic: u8,
+
+    // ── Markdown skin (crossterm Color, passed directly to MadSkin) ──────────
+    pub md_code: crossterm::style::Color,
+    pub md_text: crossterm::style::Color,
+    pub md_h1:   crossterm::style::Color,
+    pub md_h2:   crossterm::style::Color,
+    pub md_h3:   crossterm::style::Color,
+    pub md_bold: crossterm::style::Color,
+    pub md_italic: crossterm::style::Color,
 }
+
+// ── Palettes ──────────────────────────────────────────────────────────────────
+
+pub fn dark() -> Theme {
+    use crossterm::style::Color;
+    Theme {
+        sel_bg:         BG_BRIGHT_BLACK,  // dark gray bg — subtle selection on dark terminal
+        text_dim:       BRIGHT_BLACK,     // gray — metadata, separators
+        text_faint:     BRIGHT_BLACK,     // same gray — "N more lines" etc.
+        text_primary:   BRIGHT_WHITE,     // near-white — primary readable text
+        text_secondary: WHITE,            // color-7 — slightly dimmer than primary
+        fresh:          BRIGHT_GREEN,     // vivid green — very recent
+        moderate:       YELLOW,           // yellow — moderate age
+        stale:          BRIGHT_BLACK,     // gray — inactive
+        error:          RED,              // red — detached, errors
+        header:         BOLD_YELLOW,      // bold yellow — section titles
+        accent:         YELLOW,           // yellow — main branch
+        label:          CYAN,             // cyan — inline labels, tool names
+        link:           BRIGHT_CYAN,      // bright cyan — linked worktrees, backed-up branches
+        backed_name:    BOLD_WHITE,       // bold bright white — prominent session name
+        backed_meta:    BRIGHT_BLACK,     // gray — id, timestamp
+        unbacked_name:  WHITE,            // color-7 — dimmer, not backed up
+        unbacked_meta:  BRIGHT_BLACK,     // gray
+        tool_ok:        MAGENTA,          // magenta — non-error tool result
+        tidy_warn:      "1;91",           // bold bright red — destructive action warning
+        md_code:        Color::Cyan,
+        md_text:        Color::Grey,
+        md_h1:          Color::Yellow,
+        md_h2:          Color::DarkYellow,
+        md_h3:          Color::DarkCyan,
+        md_bold:        Color::White,
+        md_italic:      Color::Grey,
+    }
+}
+
+pub fn light() -> Theme {
+    use crossterm::style::Color;
+    Theme {
+        sel_bg:         BG_BRIGHT_BLACK,  // dark gray bg — clearly visible on light terminal
+        text_dim:       BRIGHT_BLACK,     // dark gray — same, readable on light bg
+        text_faint:     BRIGHT_BLACK,
+        text_primary:   BLACK,            // near-black — primary text on light bg
+        text_secondary: BRIGHT_BLACK,     // dark gray
+        fresh:          GREEN,            // dark green — more readable on light than bright green
+        moderate:       YELLOW,           // yellow — same
+        stale:          WHITE,            // color-7 — subtle on light
+        error:          RED,              // dark red — better contrast on light than bright red
+        header:         BOLD_BLUE,        // bold blue — yellow has poor contrast on white bg
+        accent:         BLUE,             // blue — main branch on light bg
+        label:          CYAN,             // cyan — same
+        link:           BLUE,             // blue — more readable than cyan on light bg
+        backed_name:    BOLD_BLACK,       // bold black — prominent on light bg
+        backed_meta:    BRIGHT_BLACK,     // dark gray
+        unbacked_name:  BRIGHT_BLACK,     // dark gray
+        unbacked_meta:  BRIGHT_BLACK,
+        tool_ok:        MAGENTA,          // same
+        tidy_warn:      BOLD_RED,         // bold red
+        md_code:        Color::DarkCyan,
+        md_text:        Color::Black,
+        md_h1:          Color::DarkBlue,
+        md_h2:          Color::DarkBlue,
+        md_h3:          Color::DarkCyan,
+        md_bold:        Color::Black,
+        md_italic:      Color::DarkGrey,
+    }
+}
+
+// ── Detection ─────────────────────────────────────────────────────────────────
 
 static THEME: OnceLock<Theme> = OnceLock::new();
 
@@ -58,7 +163,7 @@ pub fn get() -> &'static Theme {
 }
 
 fn detect() -> Theme {
-    // Explicit override wins
+    // 1. Explicit user override — always wins
     if let Ok(v) = std::env::var("GOSSAMER_THEME") {
         match v.to_lowercase().as_str() {
             "light" => return light(),
@@ -67,14 +172,16 @@ fn detect() -> Theme {
         }
     }
 
-    // Query the terminal directly for its background colour (OSC 11). Works in
-    // iTerm2, Terminal.app, Alacritty, Kitty, WezTerm, foot, modern xterm, etc.
-    if let Some(luma) = query_terminal_luma() {
-        return if luma > 0.5 { light() } else { dark() };
+    // 2. OSC 11 query — ask the terminal for its background color
+    //    termbg sends ESC ]11;?ST, reads the RGB response, and classifies it.
+    //    This works on most modern terminals (kitty, Alacritty, iTerm2, VTE, xterm).
+    //    Terminals that ignore OSC 11 cause a timeout; we fall through to step 3.
+    if let Ok(termbg::Theme::Light) = termbg::theme(Duration::from_millis(100)) {
+        return light();
     }
 
-    // COLORFGBG="fg;bg" — set by rxvt and a few configs; background index 7
-    // (white) or 15 (bright white) means a light terminal.
+    // 3. COLORFGBG="fg;bg" — set by some older terminals (rxvt, etc.)
+    //    Background index 7 (white) or 15 (bright white) → light theme.
     if let Ok(v) = std::env::var("COLORFGBG") {
         if let Some(bg) = v.rsplit(';').next().and_then(|s| s.trim().parse::<u8>().ok()) {
             if bg == 7 || bg == 15 {
@@ -83,172 +190,6 @@ fn detect() -> Theme {
         }
     }
 
+    // 4. Default to dark
     dark()
-}
-
-/// Query the controlling terminal for its background colour via OSC 11 and
-/// return the perceived luminance (0.0 = black, 1.0 = white). Returns None if
-/// we couldn't talk to a terminal or the response didn't parse.
-#[cfg(unix)]
-fn query_terminal_luma() -> Option<f32> {
-    use std::io::{Read, Write};
-    use std::os::unix::io::AsRawFd;
-    use std::time::Instant;
-
-    // Open /dev/tty so we work even when stdout is redirected.
-    let mut tty = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-        .ok()?;
-    let fd = tty.as_raw_fd();
-
-    // Snapshot termios so we can restore it.
-    let mut orig: libc::termios = unsafe { std::mem::zeroed() };
-    if unsafe { libc::tcgetattr(fd, &mut orig) } != 0 {
-        return None;
-    }
-    let mut raw = orig;
-    unsafe { libc::cfmakeraw(&mut raw) };
-    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &raw) } != 0 {
-        return None;
-    }
-
-    // Send the query and read the response with a short timeout. Some
-    // terminals (older tmux, screen without DCS passthrough) won't reply, so
-    // we have to bail quickly to avoid stalling the TUI.
-    let _ = tty.write_all(b"\x1b]11;?\x1b\\");
-    let _ = tty.flush();
-
-    let mut buf: Vec<u8> = Vec::with_capacity(64);
-    let mut chunk = [0u8; 64];
-    let timeout_ms: i32 = 150;
-    let start = Instant::now();
-
-    loop {
-        let elapsed = start.elapsed().as_millis() as i32;
-        let remaining = timeout_ms - elapsed;
-        if remaining <= 0 {
-            break;
-        }
-        let mut pfd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let n = unsafe { libc::poll(&mut pfd, 1, remaining) };
-        if n <= 0 {
-            break;
-        }
-        let r = match tty.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(r) => r,
-        };
-        buf.extend_from_slice(&chunk[..r]);
-        // Response terminates with BEL (0x07) or ST (ESC \).
-        if buf.contains(&0x07) || buf.windows(2).any(|w| w == b"\x1b\\") {
-            break;
-        }
-    }
-
-    // Restore termios no matter what.
-    unsafe { libc::tcsetattr(fd, libc::TCSANOW, &orig) };
-
-    parse_osc11_luma(&buf)
-}
-
-#[cfg(not(unix))]
-fn query_terminal_luma() -> Option<f32> {
-    None
-}
-
-/// Parse `\x1b]11;rgb:RRRR/GGGG/BBBB\x07` (lengths may be 1-4 hex digits per
-/// channel) and return relative luminance.
-fn parse_osc11_luma(buf: &[u8]) -> Option<f32> {
-    let s = std::str::from_utf8(buf).ok()?;
-    let rest = s.split("rgb:").nth(1)?;
-    let mut parts = rest.split('/');
-    let r = parse_hex_channel(parts.next()?)?;
-    let g = parse_hex_channel(parts.next()?)?;
-    let b = parse_hex_channel(parts.next()?)?;
-    // Rec. 709 luminance is a fine proxy for "is this a light or dark bg".
-    Some(0.2126 * r + 0.7152 * g + 0.0722 * b)
-}
-
-fn parse_hex_channel(s: &str) -> Option<f32> {
-    let hex: String = s.chars().take_while(|c| c.is_ascii_hexdigit()).collect();
-    if hex.is_empty() {
-        return None;
-    }
-    let raw = u32::from_str_radix(&hex, 16).ok()?;
-    // Normalise: 1-hex => /15, 2-hex => /255, 4-hex => /65535, etc.
-    let max = (1u32 << (4 * hex.len() as u32)).saturating_sub(1).max(1);
-    Some(raw as f32 / max as f32)
-}
-
-pub fn dark() -> Theme {
-    Theme {
-        sel_bg:         "48;5;236",
-        text_dim:       "38;5;240",
-        text_faint:     "38;5;238",
-        text_primary:   "38;5;255",
-        text_secondary: "38;5;245",
-        fresh:          "38;5;46",
-        moderate:       "38;5;214",
-        stale:          "38;5;239",
-        error:          "38;5;196",
-        header:         "1;38;5;229",
-        accent:         "38;5;229",
-        label:          "38;5;220",
-        link:           "38;5;75",
-        backed_name:    "1;38;5;255",
-        backed_meta:    "38;5;240",
-        unbacked_name:  "38;5;242",
-        unbacked_meta:  "38;5;238",
-        tool_ok:        "38;5;177",
-        tidy_warn:      "1;38;5;203",
-        stale_agent:    239,
-        md_code:        116,
-        md_text:        252,
-        md_h1:          229,
-        md_h2:          222,
-        md_h3:          216,
-        md_bold:        255,
-        md_italic:      252,
-    }
-}
-
-pub fn light() -> Theme {
-    // Tuned for a white-ish background. Avoid the 136 mustard family — it's
-    // unreadable on white. Headers and accents use darker amber/brown; the
-    // soft "meta" colours stay above ~4:1 contrast so they're still legible.
-    Theme {
-        sel_bg:         "48;5;254",
-        text_dim:       "38;5;238",
-        text_faint:     "38;5;243",
-        text_primary:   "38;5;232",
-        text_secondary: "38;5;240",
-        fresh:          "38;5;34",
-        moderate:       "38;5;130",
-        stale:          "38;5;243",
-        error:          "38;5;124",
-        header:         "1;38;5;94",
-        accent:         "38;5;94",
-        label:          "38;5;130",
-        link:           "38;5;26",
-        backed_name:    "1;38;5;232",
-        backed_meta:    "38;5;240",
-        unbacked_name:  "38;5;241",
-        unbacked_meta:  "38;5;243",
-        tool_ok:        "38;5;91",
-        tidy_warn:      "1;38;5;124",
-        stale_agent:    243,
-        md_code:        23,
-        md_text:        234,
-        md_h1:          94,
-        md_h2:          130,
-        md_h3:          94,
-        md_bold:        232,
-        md_italic:      238,
-    }
 }
