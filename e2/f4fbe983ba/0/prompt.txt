@@ -1,0 +1,5 @@
+is this the idiomatic way to handle themes in the terminal? how does using the terminal's settings work?
+
+---
+
+Ok let's do that. are we using semantic names for colors? Use the standard 8 base colors: Utilize basic semantic names (Black, Red, Green, Yellow, Blue, Magenta, Cyan, White) and their "bright" variants
