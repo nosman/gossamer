@@ -531,10 +531,14 @@ fn draw_sessions(
             }
 
             if agent_w > 0 {
-                let col = if s.backed_up { agent_color(&s.agent_name) } else { t.stale_agent };
                 let a: String = s.agent_name.chars().take(agent_w).collect();
                 let pad = " ".repeat(agent_w - a.chars().count());
-                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+                if s.backed_up {
+                    let col = agent_color(&s.agent_name);
+                    line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+                } else {
+                    line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
+                }
             }
 
             line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));

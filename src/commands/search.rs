@@ -510,10 +510,14 @@ fn draw(
             }
 
             if agent_w > 0 {
-                let col = if group.backed_up { agent_color(&group.agent) } else { t.stale_agent };
                 let a: String = group.agent.chars().take(agent_w).collect();
                 let pad = " ".repeat(agent_w - a.chars().count());
-                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+                if group.backed_up {
+                    let col = agent_color(&group.agent);
+                    line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
+                } else {
+                    line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
+                }
             }
 
             if let Some(sid) = &group.session_id {
