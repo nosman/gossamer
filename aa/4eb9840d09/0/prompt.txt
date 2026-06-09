@@ -1,0 +1,80 @@
+If a session tracks across multiple repos, is there a way to propagate the session name across the checkpoints?
+
+---
+
+The session here: ▸ repo  cosmos-www  ~/cosmos/cosmos-www  [feat/verified-profiles-foundations]                                                                                                                                                            
+                                                                                                                                                                                                                                         
+(untitled session)  claude  05/14/26
+
+── user  05/14/26
+
+  what query is being used to get the verified profile's public collections?
+
+── claude  05/14/26
+
+  The verified profile's public collections come from two GraphQL queries:
+ is across multiple
+
+---
+
+ok let's do those
+
+---
+
+The problem is tho when i backfill a ~/.claude/projects JSONL, then i index an entireio checkpoint, what happens when there are session collisions? does the entireio take precedence? what happens?
+
+---
+
+entire attach is backward-looking, it grabs whatever session data it can find and creates a checkpoint from it
+
+---
+
+can you add some color coding on the sessions table to differentiate the sessions that have been explicitly named vs the sessions that we're showing the most recent prompt for?
+
+---
+
+can you migrate? did you migrate? when i do gossame repo i don't see anything different
+
+---
+
+I'm seeing some divergence here: look at the investigate-bans session [Image #5] it's not highlighted at all in the top-level sessions view. however, in the repo -> sessions view, it correctly shows as bold [Image #6]
+
+---
+
+i'm looking at a session from codex: * session:019e59a7                          mgmt                                         Scott Holodak  Codex        019e59a7  2 days ago . it doesn't show any log messages, why?
+
+---
+
+Ok but entireio normalizes it... How do you think the session got into the database in the first place? Shouldn't we already be parsing session logs from the entire/checkpoints/v1 branch and therefore getting the events? why would be write our own session adapter?
+
+---
+
+So entire only normalizes the metadata? Damn. Ok well let's learn to parse codex full jsonl files then. First step is to make sure we are using separate processing pipelines. keep the claude parsing separate from the codex parsing.
+
+---
+
+Yes do that please
+
+---
+
+in the top-level sessions screen, show a green star for the sessions that happen to be in the current directory
+
+---
+
+now we are running into some divergence again between the sessions command and the repo -> session navigation: the menus are different in each case, but they should be basically the same. Look at all the options in the individual repo sessions view and add those to the top-level sessions view. Keep only the ones that make sense tho.
+
+---
+
+great. now, when i go from top-level sessions into a session and back using the arrow keys, it exits the app. i would expect going from individual session and hitting back to go back to the top-level sessions.
+
+---
+
+Are we still keeping a stack to track which screens we've seen and navigating based on that? ie go to a new screen is stack push, go back is stack pop?
+
+---
+
+yes make it consistent, stack in both.
+
+---
+
+q for quit should exit the whole app not just the current screen. back arrow is enough to take us out of the current screen.
