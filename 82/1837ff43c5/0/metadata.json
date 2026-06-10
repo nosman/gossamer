@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "821837ff43c5",
+  "session_id": "ede0cb33-fc0d-4ad8-80ef-860c9374e4b3",
+  "strategy": "manual-commit",
+  "created_at": "2026-06-10T16:47:57.890795Z",
+  "branch": "gossamer-cleanup",
+  "checkpoints_count": 14,
+  "files_touched": [
+    "src/commands/handoff.rs",
+    "src/commands/init.rs",
+    "src/commands/mod.rs",
+    "src/commands/search.rs",
+    "src/commands/sessions.rs",
+    "src/commands/show.rs",
+    "src/commands/status.rs",
+    "src/main.rs",
+    "src/theme.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-4-6",
+  "turn_id": "d1bdf2adc29b",
+  "token_usage": {
+    "input_tokens": 161,
+    "cache_creation_tokens": 285194,
+    "cache_read_tokens": 9057859,
+    "output_tokens": 115460,
+    "api_call_count": 131
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-06-10T16:47:57.537218Z",
+    "agent_lines": 967,
+    "agent_removed": 949,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 967,
+    "total_lines_changed": 1916,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
