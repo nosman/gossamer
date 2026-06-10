@@ -1197,15 +1197,7 @@ fn draw(
         if flat_idx < end {
             let (card_idx, line) = &flat[flat_idx];
             if *card_idx == sel {
-                let is_first = flat_idx == 0 || flat[flat_idx - 1].0 != sel;
-                let is_last  = flat_idx + 1 >= flat.len() || flat[flat_idx + 1].0 != sel;
-                let bar = match (is_first, is_last) {
-                    (true,  true)  => "─ ",
-                    (true,  false) => "╭ ",
-                    (false, true)  => "╰ ",
-                    (false, false) => "│ ",
-                };
-                write!(buf, "\x1b[{}m{bar}\x1b[0m{line}", accent)?;
+                write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
             } else {
                 write!(buf, "  ")?;
                 buf.extend_from_slice(line.as_bytes());
