@@ -36,6 +36,8 @@ const BOLD_BLACK:  &str = "1;30";
 pub struct Theme {
     /// Row selection background ("48;5;N" or base-16 bg code)
     pub sel_bg: &'static str,
+    /// Dim text color when rendered on top of sel_bg (replaces text_dim/text_faint so it stays readable)
+    pub sel_text_dim: &'static str,
 
     /// Metadata, timestamps, paths, decorative separators
     pub text_dim: &'static str,
@@ -94,6 +96,7 @@ pub fn dark() -> Theme {
     use crossterm::style::Color;
     Theme {
         sel_bg:         BG_BRIGHT_BLACK,  // dark gray bg — subtle selection on dark terminal
+        sel_text_dim:   BRIGHT_WHITE,     // bright white — maximally readable on dark gray sel bg
         text_dim:       BRIGHT_BLACK,     // gray — metadata, separators
         text_faint:     BRIGHT_BLACK,     // same gray — "N more lines" etc.
         text_primary:   BRIGHT_WHITE,     // near-white — primary readable text
@@ -126,6 +129,7 @@ pub fn light() -> Theme {
     use crossterm::style::Color;
     Theme {
         sel_bg:         BG_BRIGHT_BLACK,  // dark gray bg — clearly visible on light terminal
+        sel_text_dim:   BRIGHT_WHITE,     // bright white — maximally readable on dark gray sel bg
         text_dim:       BRIGHT_BLACK,     // dark gray — same, readable on light bg
         text_faint:     BRIGHT_BLACK,
         text_primary:   BLACK,            // near-black — primary text on light bg

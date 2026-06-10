@@ -1,6 +1,5 @@
 pub mod attach;
 pub mod clean;
-pub mod handoff;
 pub mod tidy;
 pub mod index;
 pub mod init;
