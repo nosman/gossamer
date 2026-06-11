@@ -110,18 +110,6 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<bool> {
         }
     }
 
-    // Attribute each user message to the author of the checkpoint commit that
-    // first captured it. Falls back to a plain "user" label when the session
-    // has no checkpoint rows (shadow-branch-only sessions).
-    let authors = fetch_authors(uuid);
-    if !authors.is_empty() {
-        for card in cards.iter_mut() {
-            if let Card::UserMsg { ts, author, .. } = card {
-                *author = attribute(&authors, ts);
-            }
-        }
-    }
-
     // Extract branch and cwd from the Header before cards are consumed by pager.
     let session_branch = cards.iter().find_map(|c| {
         if let Card::Header { branch, .. } = c { Some(branch.clone()) } else { None }
@@ -129,6 +117,23 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<bool> {
     let session_cwd = cards.iter().find_map(|c| {
         if let Card::Header { cwd, .. } = c { Some(cwd.clone()) } else { None }
     }).unwrap_or_default();
+
+    // Attribute each user message to the checkpoint author, or fall back to
+    // git config user.name for sessions not yet indexed from the checkpoint branch.
+    let authors = fetch_authors(uuid);
+    if !authors.is_empty() {
+        for card in cards.iter_mut() {
+            if let Card::UserMsg { ts, author, .. } = card {
+                *author = attribute(&authors, ts);
+            }
+        }
+    } else if let Some(name) = git_config_user(&session_cwd) {
+        for card in cards.iter_mut() {
+            if let Card::UserMsg { author, .. } = card {
+                *author = Some(name.clone());
+            }
+        }
+    }
 
     // Look up the repo that owns this session's cwd and prepend a RepoLink card.
     if let Ok(conn) = crate::db::connect() {
@@ -215,6 +220,25 @@ fn attribute(authors: &[CheckpointAuthor], ts: &str) -> Option<String> {
     // Card's timestamp is past every checkpoint we've seen — attribute to
     // the most recent author (latest checkpoint).
     authors.last().map(|a| a.label.clone())
+}
+
+fn git_config_user(cwd: &str) -> Option<String> {
+    for key in ["user.name", "user.email"] {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["config", key]);
+        if !cwd.is_empty() && std::path::Path::new(cwd).exists() {
+            cmd.current_dir(cwd);
+        }
+        if let Some(s) = cmd.output().ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            return Some(s);
+        }
+    }
+    None
 }
 
 fn find_session(id: &str) -> Option<PathBuf> {
@@ -759,106 +783,7 @@ fn render_one_tool_call(part: &AsstPart, w: usize) -> Vec<String> {
     lines
 }
 
-// Visible character width, skipping ANSI escape sequences.
-fn visible_width(s: &str) -> usize {
-    let mut w = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // consume up to and including the final byte of the CSI sequence
-            for nc in chars.by_ref() {
-                if nc.is_ascii_alphabetic() { break; }
-            }
-        } else {
-            w += 1;
-        }
-    }
-    w
-}
 
-// Apply a selection background to a pre-colored ANSI string.
-// Parses SGR sequences properly so that any explicit background color emitted
-// by termimad (e.g. `\x1b[48;5;238m` for inline code) is replaced with the
-// selection background rather than overriding it.
-fn with_bg(s: &str, bg: &str) -> String {
-    let bg_seq  = format!("\x1b[{bg}m");
-    let mut out = bg_seq.clone();
-    let bytes   = s.as_bytes();
-    let mut i   = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'\x1b' && bytes.get(i + 1) == Some(&b'[') {
-            // Parse CSI sequence: ESC [ <params> <cmd>
-            let esc_start   = i;
-            i += 2;
-            let params_start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_alphabetic() { i += 1; }
-            let cmd    = *bytes.get(i).unwrap_or(&b'm');
-            let params = &s[params_start..i];
-            i += 1;
-
-            if cmd == b'm' {
-                out.push_str(&rewrite_sgr(params, &bg_seq));
-            } else {
-                out.push_str(&s[esc_start..i]);
-            }
-        } else {
-            let ch_len = s[i..].chars().next().map_or(1, |c| c.len_utf8());
-            out.push_str(&s[i..i + ch_len]);
-            i += ch_len;
-        }
-    }
-
-    out
-}
-
-// Rewrite a single SGR parameter string so that any background colour is
-// replaced with the selection background. Foreground / attribute codes are
-// kept; a pure reset gets the background re-appended.
-fn rewrite_sgr(params: &str, bg_seq: &str) -> String {
-    if params.is_empty() || params == "0" {
-        return format!("\x1b[0m{bg_seq}");
-    }
-
-    let mut non_bg: Vec<&str> = Vec::new();
-    let mut found_bg = false;
-    let mut segs = params.split(';').peekable();
-
-    while let Some(seg) = segs.next() {
-        match seg {
-            // Standard background colours 40-47 and bright 100-107
-            "40"|"41"|"42"|"43"|"44"|"45"|"46"|"47"
-            |"100"|"101"|"102"|"103"|"104"|"105"|"106"|"107" => {
-                found_bg = true;
-            }
-            // 256-colour or true-colour background: 48;5;N or 48;2;R;G;B
-            "48" => {
-                found_bg = true;
-                match segs.next().as_deref() {
-                    Some("5") => { segs.next(); }          // skip N
-                    Some("2") => { segs.next(); segs.next(); segs.next(); } // skip R;G;B
-                    _ => {}
-                }
-            }
-            // \x1b[49m — reset background to default (termimad uses this, not \x1b[0m)
-            "49" => { found_bg = true; }
-            // Reset within a combined sequence — keep it
-            "0" => non_bg.push("0"),
-            other => non_bg.push(other),
-        }
-    }
-
-    if !found_bg {
-        return format!("\x1b[{params}m");
-    }
-
-    let mut result = String::new();
-    if !non_bg.is_empty() {
-        result.push_str(&format!("\x1b[{}m", non_bg.join(";")));
-    }
-    result.push_str(bg_seq);
-    result
-}
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
     if width < 4 { return text.lines().map(str::to_string).collect(); }
@@ -1256,7 +1181,7 @@ fn draw(
     flash:  Option<&str>,
 ) -> io::Result<()> {
     use crossterm::queue;
-    let sel_bg = crate::theme::get().sel_bg;
+    let accent = crate::theme::get().accent;
 
     let end = (scroll + h).min(flat.len());
 
@@ -1272,11 +1197,9 @@ fn draw(
         if flat_idx < end {
             let (card_idx, line) = &flat[flat_idx];
             if *card_idx == sel {
-                let line_bg = with_bg(line, sel_bg);
-                let vis = visible_width(line);
-                let pad = w.saturating_sub(vis);
-                write!(buf, "\x1b[{sel_bg}m{line_bg}{}\x1b[0m", " ".repeat(pad))?;
+                write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
             } else {
+                write!(buf, "  ")?;
                 buf.extend_from_slice(line.as_bytes());
             }
         }

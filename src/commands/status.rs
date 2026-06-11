@@ -90,13 +90,9 @@ pub fn run(json: bool) -> Result<bool> {
 
     if !io::stdout().is_terminal() && cd_file.is_none() {
         // Plain list when truly non-interactive (piped, no wrapper)
-        let cwd = env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
-        let current_dir = cwd.as_deref().and_then(|cwd| {
-            repos.iter().find(|r| cwd.starts_with(r.directory.as_str())).map(|r| r.directory.as_str())
-        });
-        for repo in &repos {
-            let is_cur = current_dir == Some(repo.directory.as_str());
-            let dot = if is_cur { "*" } else { " " };
+        let cur_idx = find_repo_for_cwd(&repos);
+        for (i, repo) in repos.iter().enumerate() {
+            let dot = if cur_idx == Some(i) { "*" } else { " " };
             println!("{dot} {}  {}  {}", repo.name, repo.directory, repo.remote);
         }
         return Ok(false);
@@ -115,7 +111,9 @@ pub fn run(json: bool) -> Result<bool> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let outcome = tui_loop(&mut stdout, &repos, cd_file.is_some(), None);
+    let start_repo = find_repo_for_cwd(&repos);
+
+    let outcome = tui_loop(&mut stdout, &repos, cd_file.is_some(), start_repo);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -154,25 +152,26 @@ enum Screen {
 }
 
 fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_repo: Option<usize>) -> Result<Option<TuiOutcome>> {
-    let cwd = env::current_dir().ok().map(|p| p.to_string_lossy().to_string());
-    let current_repo_dir = cwd.as_deref().and_then(|cwd| {
-        repos.iter().find(|r| cwd.starts_with(r.directory.as_str())).map(|r| r.directory.as_str())
-    });
+    let current_repo_idx = find_repo_for_cwd(repos);
+    let current_repo_dir = current_repo_idx
+        .and_then(|i| repos.get(i))
+        .map(|r| r.directory.as_str());
 
-    let start_sel = cwd.as_deref()
-        .and_then(|cwd| repos.iter().position(|r| cwd.starts_with(r.directory.as_str())))
-        .unwrap_or(0);
-
-    let initial = if let Some(idx) = start_repo.filter(|&i| i < repos.len()) {
-        let sessions = session_list::fetch(Scope::Repo(&repos[idx]), true);
-        let worktrees = fetch_worktrees(&repos[idx].directory);
-        Screen::Sessions { repo_idx: idx, sel: 0, sessions, worktrees }
-    } else {
-        Screen::Repos { sel: start_sel }
-    };
+    let start_sel = current_repo_idx.unwrap_or(0);
 
     // Navigation stack — back pops; when empty the TUI exits.
-    let mut stack: Vec<Screen> = vec![initial];
+    // When starting inside a tracked repo, seed the stack with the repos list
+    // underneath so pressing Back always returns to it rather than exiting.
+    let mut stack: Vec<Screen> = if let Some(idx) = start_repo.filter(|&i| i < repos.len()) {
+        let sessions = session_list::fetch(Scope::Repo(&repos[idx]), true);
+        let worktrees = fetch_worktrees(&repos[idx].directory);
+        vec![
+            Screen::Repos { sel: idx },
+            Screen::Sessions { repo_idx: idx, sel: 0, sessions, worktrees },
+        ]
+    } else {
+        vec![Screen::Repos { sel: start_sel }]
+    };
 
     // Commands produced inside match arms, executed after the borrow ends.
     enum Cmd {
@@ -892,6 +891,37 @@ pub(super) fn create_worktree(repo_dir: &str, branch: &str) -> String {
 
 use super::agent_color;
 
+// Find which tracked repo the current directory belongs to — handles both the
+// main worktree (starts_with match) and linked worktrees (git-common-dir match).
+fn find_repo_for_cwd(repos: &[Repository]) -> Option<usize> {
+    let cwd = env::current_dir().ok()?;
+    let cwd_str = cwd.to_string_lossy();
+
+    // Main worktree: cwd is inside the repo root
+    if let Some(idx) = repos.iter().position(|r| cwd_str.starts_with(r.directory.as_str())) {
+        return Some(idx);
+    }
+
+    // Linked worktree: git-common-dir points to the main repo's .git
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(&cwd)
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+
+    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let common_path = if std::path::Path::new(&common).is_absolute() {
+        std::path::PathBuf::from(&common)
+    } else {
+        cwd.join(&common)
+    };
+
+    // common_path is the .git dir; its parent is the repo root
+    let repo_root = common_path.parent()?.to_string_lossy().to_string();
+    repos.iter().position(|r| r.directory == repo_root)
+}
+
 fn short_path_s(path: &str) -> String {
     let home = std::env::var("HOME").unwrap_or_default();
     if !home.is_empty() && path.starts_with(&home) {
@@ -902,8 +932,14 @@ fn short_path_s(path: &str) -> String {
 }
 
 fn with_bg(s: &str, bg: &str) -> String {
-    let reinsert = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert);
+    let t = crate::theme::get();
+    let dim_esc   = format!("\x1b[{}m", t.text_dim);
+    let faint_esc = format!("\x1b[{}m", t.text_faint);
+    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
+    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
+    let body = s.replace("\x1b[0m", &reinsert)
+                .replace(&dim_esc,   &sel_dim)
+                .replace(&faint_esc, &sel_dim);
     format!("\x1b[{bg}m{body}")
 }
 

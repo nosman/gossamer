@@ -753,8 +753,15 @@ fn age_secs_hit(iso: &str) -> i64 {
 use super::agent_color;
 
 fn with_bg(s: &str, bg: &str) -> String {
-    let reinsert = format!("\x1b[0m\x1b[{bg}m");
-    format!("\x1b[{bg}m{}", s.replace("\x1b[0m", &reinsert))
+    let t = crate::theme::get();
+    let dim_esc   = format!("\x1b[{}m", t.text_dim);
+    let faint_esc = format!("\x1b[{}m", t.text_faint);
+    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
+    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
+    let body = s.replace("\x1b[0m", &reinsert)
+                .replace(&dim_esc,   &sel_dim)
+                .replace(&faint_esc, &sel_dim);
+    format!("\x1b[{bg}m{body}")
 }
 
 fn visible_len(s: &str) -> usize {

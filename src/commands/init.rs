@@ -111,7 +111,7 @@ fn run_configure_wizard(cwd_str: &str) -> Result<()> {
         .collect();
 
     // ── Step 2–4: boolean questions (default: sensible safe values) ───────────
-    let skip_push     = !ask_yn("Auto-push sessions on git push", false)?;
+    let skip_push     = !ask_yn("Auto-push sessions on git push", true)?;
     let telemetry     = ask_yn("Enable anonymous telemetry", false)?;
     let abs_hook_path = ask_yn("Absolute git hook path (for GUI clients like GitHub Desktop)", false)?;
 

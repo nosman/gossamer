@@ -101,14 +101,6 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
-    /// Push a session's checkpoint to the remote so another agent can resume it
-    Handoff {
-        /// Session ID (full UUID or unambiguous prefix)
-        session_id: String,
-        /// Force push even if the remote has diverged
-        #[arg(short, long)]
-        force: bool,
-    },
     /// Show or set gossamer configuration
     Config {
         /// Path to the witchcraft assets directory (enables semantic search)
@@ -146,7 +138,6 @@ fn main() -> Result<()> {
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
         Commands::Tidy { dry_run, days, force, sessions } => commands::tidy::run(days, dry_run, force, sessions, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
-        Commands::Handoff { session_id, force } => commands::handoff::run(&session_id, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
         Commands::Config { assets: None }       => config::show(),
         Commands::SessionStart => commands::session_start::run()?,
