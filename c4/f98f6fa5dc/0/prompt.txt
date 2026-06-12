@@ -1,0 +1,132 @@
+Let's clean up the gossamer init flow. I think the push-to-remote false default setting should be set to true. The happy path should just be to have the checkpoint branch in the same repo as the code. The wizard can let them change it tho.
+
+---
+
+Next, if i run the gossamer repo command from a repo already being indexed by gossamer, don't show me all the repos, just open the corresponding repo details page.
+
+---
+
+rebase the latest changes from main into this branch
+
+---
+
+Get rid of the gossamer handoff command, now that we are pushing the checkpoints branch to the remote by default.
+
+---
+
+did we ever try and display the user's name in the session details screen? why are mine not showing up?
+
+---
+
+yes let's do that
+
+---
+
+The grey text doesn't show up great on a grey highlight when it's selected. when a block is highlighted, change the color to stand out from the highlight. make sure to use the semantic colors like we recently decided.
+
+---
+
+I still don't see any changes
+
+---
+
+Still not seeing anything. specifically in the individual session view. The tool calls rows are completely illegible.
+
+---
+
+[Image #1]
+
+---
+
+This still isn't working. Not even in the other views [Image #2]
+
+---
+
+Great it works now. What if we interted the backgrounds? the currently selected row would be the darker color, and all unselected rows would be lighter. what do you think?
+
+---
+
+we don't want to go back to the hardcoded colors! what if we hightlight the left margin of the current row? and maybe add lines between the selected message and its neighbors? that way the background won't make it hard to read, but we'll also be able to see the selection well
+
+---
+
+Uh... idk what happened but the top-level repos function doesn't render properly anymore. Did something revert? Also there is no margin being selected. Also, running gossamer repo in a worktree directory should also just straight to the repo details view
+
+---
+
+$pwd
+
+---
+
+Make the left-margin selection bar thicker. also i don't think it needs to be a bracket shape, just a vertical bar, let's try that.
+
+---
+
+Now, let's revisit search, since it is still inconsistent with our recent changes (especially showing selected rows). go over search and make sure the selection works the same way. Extract code into shared helpers when possible.
+
+---
+
+i don't see the margin selection here tho: [Image #3]
+
+---
+
+i'm getting a weird mix of styles now tho: [Image #4]. if anything, you could highlight the header row and then write the sidebar for the search hits text
+
+---
+
+Great, now add the same treament to the session details view, highlight the first row for the selected message (user + timestamp)
+
+---
+
+Wait where did the search go?
+
+---
+
+The / key is missing from the bottom menu
+
+---
+
+let's make sure the navigation experience is consistent across all screens. when i do search from within the app, i can't use the left arrow to get back to the previous screen i was at.
+
+---
+
+is the in-app search adding a colon to the search term? [Image #5]
+
+---
+
+Another cleanup- there are xml system prompts that show up sometimes as the user prompt. we should render them inline so that it's visually not so heavy and illegible
+
+---
+
+i don't see any difference: [Image #6]
+
+---
+
+There are a bunch of stale/invalid sessions appearing. some of these are because i changed the repo that lived in the gossamer directory. Write a command to get rid of such sessions from the database. it should look for the session id, and it it doesn't appear in any entire checkpoints or claude session files, just delete it and its associated search index
+
+---
+
+Is there a command to reindex all live sessions? or even just reindex a repo from entire checkpoint history + claude sessions with this cwd?
+
+---
+
+Is there an option to remove a single session?
+
+---
+
+Can you show that command in the action bar at the bottom? A new keystroke should clear the selected session (in either the global sessions menu or the git repo details page). It should ask you to confirm before deleting
+
+---
+
+Let's make a new command, gossamer discover, which looks through the claude code probjects, scans each session's cwd, and sees if any of them are in a github repo. If the cwd is in a github repo, and it's not already in our database, initialize gossamer with it. Add both an in-app command from the main menu (which should let you select/unselect the suggested repos), and a cli version of the same command.
+
+---
+
+Hmm, there is one issue- we need to deduplicate between checked out worktrees. when i do dry-run it prints: gossamer % gossamer discover --dry-run
+Scanning… done.
+Found 4 new GitHub repos:
+  gossamer-cli  ~/p/gossamer-remote-server
+  gossamer-cli  ~/p/gossamer-gossamer-handoff
+  gossamer-cli  ~/p/gossamer-gossamer-cleanup
+  witchcraft  ~/p/witchcraft
+. this shouldn't print gossmer-cli 3 times because gossamer-cli is already registered.
