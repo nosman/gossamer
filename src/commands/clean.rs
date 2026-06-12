@@ -53,6 +53,35 @@ fn find_jsonl_by_title(title: &str) -> Option<String> {
     None
 }
 
+/// Delete a session from the DB and search index without printing anything.
+/// Runs `entire clean` silently. Returns the number of DB rows deleted.
+/// Safe to call from inside a TUI (no stdout writes).
+pub(crate) fn remove_session(session_id: &str) -> Result<usize> {
+    let conn = db::connect()?;
+    let rows = conn.execute(
+        "DELETE FROM sessions WHERE session_id = ?1",
+        rusqlite::params![session_id],
+    )?;
+    conn.execute("DELETE FROM event_log   WHERE session_id = ?1", rusqlite::params![session_id])?;
+    conn.execute("DELETE FROM checkpoints WHERE session_id = ?1", rusqlite::params![session_id])?;
+
+    if let Ok(mut wc_db) = ingest::open_search_db() {
+        let filter = witchcraft::types::SqlStatementInternal {
+            statement_type: witchcraft::types::SqlStatementType::Condition,
+            condition: Some(witchcraft::types::SqlConditionInternal {
+                key: "$.session_id".to_string(),
+                operator: witchcraft::types::SqlOperator::Equals,
+                value: Some(witchcraft::types::SqlValue::String(session_id.to_string())),
+            }),
+            logic: None,
+            statements: None,
+        };
+        let _ = wc_db.delete_with_filter(&filter);
+    }
+
+    Ok(rows)
+}
+
 pub fn run(session_id_or_name: &str, json: bool) -> Result<()> {
     let conn = db::connect()?;
     let session_id = resolve_session_id(&conn, session_id_or_name);

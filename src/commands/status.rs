@@ -46,7 +46,7 @@ const AGENTS: &[(&str, &str, u8)] = &[
 /// or the `gr` `cd` outcome.
 pub fn run(json: bool) -> Result<bool> {
     let conn = db::connect()?;
-    let repos = fetch_repos(&conn)?;
+    let mut repos = fetch_repos(&conn)?;
 
     if json {
         let arr: Vec<serde_json::Value> = repos.iter().map(|r| {
@@ -113,7 +113,7 @@ pub fn run(json: bool) -> Result<bool> {
 
     let start_repo = find_repo_for_cwd(&repos);
 
-    let outcome = tui_loop(&mut stdout, &repos, cd_file.is_some(), start_repo);
+    let outcome = tui_loop(&mut stdout, &mut repos, cd_file.is_some(), start_repo);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -151,11 +151,11 @@ enum Screen {
     Sessions { repo_idx: usize, sel: usize, sessions: Vec<RepoSession>, worktrees: Vec<RepoWorktree> },
 }
 
-fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_repo: Option<usize>) -> Result<Option<TuiOutcome>> {
+fn tui_loop(stdout: &mut impl Write, repos: &mut Vec<Repository>, has_cd: bool, start_repo: Option<usize>) -> Result<Option<TuiOutcome>> {
     let current_repo_idx = find_repo_for_cwd(repos);
-    let current_repo_dir = current_repo_idx
+    let current_repo_dir: Option<String> = current_repo_idx
         .and_then(|i| repos.get(i))
-        .map(|r| r.directory.as_str());
+        .map(|r| r.directory.clone());
 
     let start_sel = current_repo_idx.unwrap_or(0);
 
@@ -173,6 +173,9 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         vec![Screen::Repos { sel: start_sel }]
     };
 
+    let mut awaiting_delete = false;
+    let mut flash: Option<&'static str> = None;
+
     // Commands produced inside match arms, executed after the borrow ends.
     enum Cmd {
         None,
@@ -182,6 +185,8 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         Cd(String),
         ShowSession(String),
         ResumeSession(String, String), // (session_id, repo_dir)
+        DeleteSession(String),         // session_id
+        Discover,
         Search(String),
         NewWorktree(String), // branch name
         NewSession(NewSessionConfig),
@@ -195,9 +200,9 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
         let h = h as usize;
 
         match stack.last().unwrap() {
-            Screen::Repos { sel } => draw_repos(stdout, repos, *sel, current_repo_dir, w, h, has_cd)?,
+            Screen::Repos { sel } => draw_repos(stdout, repos, *sel, current_repo_dir.as_deref(), w, h, has_cd)?,
             Screen::Sessions { repo_idx, sel, sessions, worktrees } => {
-                draw_sessions(stdout, repos, *repo_idx, sessions, worktrees, *sel, w, h)?
+                draw_sessions(stdout, repos, *repo_idx, sessions, worktrees, *sel, w, h, flash)?
             }
         }
 
@@ -224,10 +229,11 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                             None => Cmd::Redraw,
                         }
                     }
-                    KeyCode::Char('/') => match collect_search_query(stdout, w, h) {
+                    KeyCode::Char('/') => match super::collect_search_query(stdout, w, h) {
                         Some(q) if !q.trim().is_empty() => Cmd::Search(q),
                         _ => Cmd::Redraw,
                     },
+                    KeyCode::Char('d') => Cmd::Discover,
                     _ => Cmd::None,
                 },
                 Screen::Sessions { sel, sessions, repo_idx, .. } => match k.code {
@@ -250,11 +256,21 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                         if sessions.is_empty() { Cmd::None }
                         else { Cmd::ResumeSession(sessions[*sel].session_id.clone(), repos[*repo_idx].directory.clone()) }
                     }
-                    KeyCode::Char('/') => match collect_search_query(stdout, w, h) {
+                    KeyCode::Char('d') if !sessions.is_empty() => {
+                        awaiting_delete = true;
+                        flash = Some("  Delete session? Press y to confirm, any other key to cancel  ");
+                        Cmd::None
+                    }
+                    KeyCode::Char('y') if awaiting_delete => {
+                        awaiting_delete = false;
+                        flash = None;
+                        Cmd::DeleteSession(sessions[*sel].session_id.clone())
+                    }
+                    KeyCode::Char('/') => match super::collect_search_query(stdout, w, h) {
                         Some(q) if !q.trim().is_empty() => Cmd::Search(q),
                         _ => Cmd::Redraw,
                     },
-                    KeyCode::Char('n') => match collect_text_input(stdout, "  new worktree branch: ", w, h) {
+                    KeyCode::Char('n') => match super::collect_text_input(stdout, "  new worktree branch: ", w, h) {
                         Some(b) if !b.trim().is_empty() => Cmd::NewWorktree(b.trim().to_string()),
                         _ => Cmd::Redraw,
                     },
@@ -266,7 +282,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                         }
                     }
                     KeyCode::Char('t') => Cmd::Tidy,
-                    _ => Cmd::None,
+                    _ => { awaiting_delete = false; flash = None; Cmd::None }
                 },
             },
             Event::Resize(_, _) => Cmd::Redraw,
@@ -287,6 +303,14 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
             }
             Cmd::Cd(path) => return Ok(Some(TuiOutcome::CdTo(path))),
             Cmd::ResumeSession(id, cwd) => return Ok(Some(TuiOutcome::ResumeSession { id, cwd })),
+            Cmd::DeleteSession(id) => {
+                super::clean::remove_session(&id).ok();
+                if let Some(Screen::Sessions { sel, sessions, .. }) = stack.last_mut() {
+                    sessions.retain(|s| s.session_id != id);
+                    if *sel >= sessions.len() && !sessions.is_empty() { *sel = sessions.len() - 1; }
+                }
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
             Cmd::ShowSession(id) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
@@ -349,6 +373,34 @@ fn tui_loop(stdout: &mut impl Write, repos: &[Repository], has_cd: bool, start_r
                 }
             }
             Cmd::Redraw => { execute!(stdout, terminal::Clear(ClearType::All)).ok(); }
+            Cmd::Discover => {
+                let (tw, th) = terminal::size().unwrap_or((120, 40));
+                let scanning = format!("{:<width$}", "  Scanning for new repos…", width = tw as usize);
+                execute!(stdout, cursor::MoveTo(0, th - 1)).ok();
+                write!(stdout, "\x1b[7m{scanning}\x1b[0m").ok();
+                stdout.flush().ok();
+
+                let known: std::collections::HashSet<String> = repos.iter().map(|r| r.directory.clone()).collect();
+                let candidates = super::discover::scan_candidates(&known);
+
+                if candidates.is_empty() {
+                    let msg = format!("{:<width$}", "  No new GitHub repos found in Claude session history — press any key  ", width = tw as usize);
+                    execute!(stdout, cursor::MoveTo(0, th - 1)).ok();
+                    write!(stdout, "\x1b[7m{msg}\x1b[0m").ok();
+                    stdout.flush().ok();
+                    event::read().ok();
+                } else if let Some(selected) = super::discover::tui_discover(stdout, candidates, tw as usize, th as usize) {
+                    if !selected.is_empty() {
+                        if let Ok(conn) = crate::db::connect() {
+                            super::discover::register_and_backfill(&conn, &selected).ok();
+                            if let Ok(new_repos) = fetch_repos(&conn) {
+                                *repos = new_repos;
+                            }
+                        }
+                    }
+                }
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
         }
     }
 
@@ -366,12 +418,10 @@ fn draw_repos(
     h: usize,
     has_cd: bool,
 ) -> io::Result<()> {
+    use crossterm::queue;
     let t = crate::theme::get();
-    let sel_bg = t.sel_bg;
-
-    execute!(stdout, cursor::MoveTo(0, 0))?;
-
     let content_h = h.saturating_sub(1);
+    let mut buf: Vec<u8> = Vec::with_capacity((w + 40) * (h + 2));
     let mut row = 0usize;
 
     let name_w = repos.iter().map(|r| r.name.chars().count()).max().unwrap_or(0);
@@ -391,24 +441,23 @@ fn draw_repos(
             repo.remote, pm = t.text_primary, dm = t.text_dim,
         );
 
-        print_row(stdout, &line, is_sel, sel_bg, w, row as u16)?;
+        super::render_row(&mut buf, &line, is_sel, row, w)?;
         row += 1;
     }
 
-    // Clear remaining rows
     while row < content_h {
-        execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+        queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
         row += 1;
     }
 
-    // Status bar
     let cd_hint = if has_cd { "   c: cd" } else { "" };
     let bar = format!(
-        "  {} repos   ↑↓/jk navigate   space: sessions   s: new session   /: search{}   q: quit  ",
+        "  {} repos   ↑↓/jk navigate   space: sessions   s: new session   d: discover   / search{}   q: quit  ",
         repos.len(), cd_hint
     );
-    draw_status(stdout, &bar, w, h)?;
+    super::draw_statusbar(&mut buf, &bar, w, h)?;
 
+    stdout.write_all(&buf)?;
     stdout.flush()
 }
 
@@ -421,15 +470,16 @@ fn draw_sessions(
     sel: usize,
     w: usize,
     h: usize,
+    flash: Option<&str>,
 ) -> io::Result<()> {
+    use crossterm::queue;
     let t = crate::theme::get();
-    let sel_bg = t.sel_bg;
-
-    execute!(stdout, cursor::MoveTo(0, 0))?;
-    write!(stdout, "\x1b[{hd}m{}\x1b[0m", repos[repo_idx].name, hd = t.header)?;
-    execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
-
     let content_h = h.saturating_sub(2); // header + status bar
+    let mut buf: Vec<u8> = Vec::with_capacity((w + 40) * (h + 2));
+
+    // Header row
+    queue!(buf, cursor::MoveTo(0, 0), terminal::Clear(ClearType::UntilNewLine))?;
+    write!(buf, "\x1b[{hd}m{}\x1b[0m", repos[repo_idx].name, hd = t.header)?;
     let mut row = 1usize;
 
     // ── Worktrees ────────────────────────────────────────────────────────────
@@ -445,20 +495,18 @@ fn draw_sessions(
                 (t.link, wt.branch.clone())
             };
 
-            let path_short = short_path_s(&wt.path);
+            let path_short = super::short_path(&wt.path);
             let line = format!(
                 "\x1b[{dm}m  @ \x1b[{branch_col}m{branch_label}\x1b[0m  \x1b[{dm}m{path_short}\x1b[0m",
                 dm = t.text_dim,
             );
-            execute!(stdout, cursor::MoveTo(0, row as u16))?;
-            write!(stdout, "{line}")?;
-            execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+            queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+            write!(buf, "{line}")?;
             row += 1;
         }
 
-        // Blank separator between worktrees and sessions
         if row < content_h {
-            execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+            queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
             row += 1;
         }
     }
@@ -470,13 +518,11 @@ fn draw_sessions(
 
     if sessions.is_empty() {
         if row < content_h {
-            execute!(stdout, cursor::MoveTo(0, row as u16))?;
-            write!(stdout, "\x1b[{dm}m  no sessions found\x1b[0m", dm = t.text_dim)?;
-            execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+            queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+            write!(buf, "\x1b[{dm}m  no sessions found\x1b[0m", dm = t.text_dim)?;
             row += 1;
         }
     } else {
-        // Pre-compute column widths for table alignment
         let name_w   = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
         let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
@@ -501,10 +547,6 @@ fn draw_sessions(
             } else {
                 (t.unbacked_meta, "·")
             };
-            // Name color is driven by whether the user explicitly named the
-            // session (`/rename` or custom-title), not by whether it's been
-            // checkpointed. Explicit names always pop; derived first-prompt
-            // fallbacks render dim regardless of backed_up.
             let name_col = if s.name_is_explicit {
                 t.backed_name
             } else if s.backed_up {
@@ -542,44 +584,29 @@ fn draw_sessions(
 
             line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
-            print_row(stdout, &line, i == sel, sel_bg, w, row as u16)?;
+            super::render_row(&mut buf, &line, i == sel, row, w)?;
             row += 1;
         }
     }
 
     while row < content_h {
-        execute!(stdout, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+        queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
         row += 1;
     }
 
-    let bar = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   t: tidy   /: search   ←/h: back   q: quit  ",
+    let base = format!(
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: new session   n: new worktree   t: tidy   / search   ←/h: back   q: quit  ",
         sessions.len()
     );
-    draw_status(stdout, &bar, w, h)?;
+    let bar = if let Some(msg) = flash {
+        let skip = msg.chars().count();
+        let rest: String = base.chars().skip(skip).collect();
+        format!("{msg}{rest}")
+    } else { base };
+    super::draw_statusbar(&mut buf, &bar, w, h)?;
 
+    stdout.write_all(&buf)?;
     stdout.flush()
-}
-
-fn print_row(stdout: &mut impl Write, line: &str, selected: bool, bg: &str, w: usize, row: u16) -> io::Result<()> {
-    execute!(stdout, cursor::MoveTo(0, row))?;
-    if selected {
-        let colored = with_bg(line, bg);
-        let vis = visible_width(line);
-        let pad = w.saturating_sub(vis);
-        write!(stdout, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
-    } else {
-        write!(stdout, "{line}")?;
-        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
-    }
-    Ok(())
-}
-
-fn draw_status(stdout: &mut impl Write, bar: &str, w: usize, h: usize) -> io::Result<()> {
-    let display: String = bar.chars().take(w).collect();
-    let padded = format!("{:<width$}", display, width = w);
-    execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
-    write!(stdout, "\x1b[7m{padded}\x1b[0m")
 }
 
 // ── Worktree loading ──────────────────────────────────────────────────────────
@@ -630,54 +657,6 @@ fn fetch_worktrees(repo_dir: &str) -> Vec<RepoWorktree> {
 // ── Session loading ───────────────────────────────────────────────────────────
 
 // ── Text input prompt ─────────────────────────────────────────────────────────
-
-/// Generic single-line input shown in the status bar. Returns None on Esc.
-pub(super) fn collect_text_input(stdout: &mut impl Write, prefix: &str, w: usize, h: usize) -> Option<String> {
-    let mut value = String::new();
-    execute!(stdout, cursor::Show).ok();
-    draw_input_bar(stdout, prefix, &value, w, h).ok();
-
-    loop {
-        match event::read().ok()? {
-            Event::Key(k) => match k.code {
-                KeyCode::Esc => {
-                    execute!(stdout, cursor::Hide).ok();
-                    return None;
-                }
-                KeyCode::Enter => {
-                    execute!(stdout, cursor::Hide).ok();
-                    return Some(value);
-                }
-                KeyCode::Backspace => {
-                    value.pop();
-                    draw_input_bar(stdout, prefix, &value, w, h).ok();
-                }
-                KeyCode::Char(c) => {
-                    value.push(c);
-                    draw_input_bar(stdout, prefix, &value, w, h).ok();
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-    }
-}
-
-fn draw_input_bar(stdout: &mut impl Write, prefix: &str, value: &str, w: usize, h: usize) -> io::Result<()> {
-    let prefix_len = prefix.chars().count();
-    let text: String = value.chars().take(w.saturating_sub(prefix_len + 2)).collect();
-    let content = format!("{prefix}{text}");
-    let padded = format!("{:<width$}", content, width = w);
-    execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
-    write!(stdout, "\x1b[7m{padded}\x1b[0m")?;
-    let col = (prefix_len + text.chars().count()).min(w.saturating_sub(1)) as u16;
-    execute!(stdout, cursor::MoveTo(col, (h - 1) as u16))?;
-    stdout.flush()
-}
-
-pub(super) fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) -> Option<String> {
-    collect_text_input(stdout, "  / ", w, h)
-}
 
 // ── New session wizard ────────────────────────────────────────────────────────
 
@@ -764,7 +743,7 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
         } else {
             "  type to enter   enter: next   esc: cancel  "
         };
-        draw_status(stdout, bar, w, h).ok();
+        super::draw_statusbar(stdout, bar, w, h).ok();
 
         // Position terminal cursor for text input steps
         if step > 0 {
@@ -879,7 +858,7 @@ pub(super) fn create_worktree(repo_dir: &str, branch: &str) -> String {
     match out {
         Err(e) => format!("Error: {e}"),
         Ok(o) if o.status.success() => {
-            format!("Created worktree: {}", short_path_s(wt_path.to_str().unwrap_or("")))
+            format!("Created worktree: {}", super::short_path(wt_path.to_str().unwrap_or("")))
         }
         Ok(o) => {
             let msg = String::from_utf8_lossy(&o.stderr);
@@ -922,39 +901,6 @@ fn find_repo_for_cwd(repos: &[Repository]) -> Option<usize> {
     repos.iter().position(|r| r.directory == repo_root)
 }
 
-fn short_path_s(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && path.starts_with(&home) {
-        format!("~{}", &path[home.len()..])
-    } else {
-        path.to_string()
-    }
-}
-
-fn with_bg(s: &str, bg: &str) -> String {
-    let t = crate::theme::get();
-    let dim_esc   = format!("\x1b[{}m", t.text_dim);
-    let faint_esc = format!("\x1b[{}m", t.text_faint);
-    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
-    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert)
-                .replace(&dim_esc,   &sel_dim)
-                .replace(&faint_esc, &sel_dim);
-    format!("\x1b[{bg}m{body}")
-}
-
-fn visible_width(s: &str) -> usize {
-    let mut w = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for nc in chars.by_ref() { if nc.is_ascii_alphabetic() { break; } }
-        } else {
-            w += 1;
-        }
-    }
-    w
-}
 
 fn relative_time(dt: DateTime<Utc>) -> String {
     let secs = (Utc::now() - dt).num_seconds().max(0);
@@ -972,7 +918,7 @@ fn relative_time(dt: DateTime<Utc>) -> String {
 
 pub fn run_for_dir(repo_dir: &str) -> Result<bool> {
     let conn = db::connect()?;
-    let repos = fetch_repos(&conn)?;
+    let mut repos = fetch_repos(&conn)?;
     let start = repos.iter().position(|r| r.directory == repo_dir);
 
     let orig_hook = std::panic::take_hook();
@@ -987,7 +933,7 @@ pub fn run_for_dir(repo_dir: &str) -> Result<bool> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let outcome = tui_loop(&mut stdout, &repos, false, start);
+    let outcome = tui_loop(&mut stdout, &mut repos, false, start);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;

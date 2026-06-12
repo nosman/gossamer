@@ -75,6 +75,18 @@ enum Commands {
         /// Session ID to clean up
         session_id: String,
     },
+    /// Remove sessions from the DB that no longer exist in any checkpoint or Claude session file
+    Purge {
+        /// List stale sessions without deleting them
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Scan Claude Code session history for untracked GitHub repos and register them
+    Discover {
+        /// List candidates without registering them
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Remove git worktrees that have had no recent session activity
     Tidy {
         /// Only list stale worktrees without removing them
@@ -136,6 +148,8 @@ fn main() -> Result<()> {
         }
         Commands::Resume { session_id } => commands::resume::run(&session_id)?,
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
+        Commands::Purge { dry_run } => commands::purge::run(dry_run, json)?,
+        Commands::Discover { dry_run } => commands::discover::run(dry_run, json)?,
         Commands::Tidy { dry_run, days, force, sessions } => commands::tidy::run(days, dry_run, force, sessions, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,

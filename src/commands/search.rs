@@ -200,7 +200,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
             SearchHit {
                 kind: HitKind::Session,
                 title: name,
-                dir: short_path(&cwd),
+                dir: super::short_path(&cwd),
                 excerpt_lines: vec![],
                 session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
@@ -215,7 +215,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
             SearchHit {
                 kind: HitKind::Repo,
                 title: name,
-                dir: short_path(&dir),
+                dir: super::short_path(&dir),
                 excerpt_lines: vec![],
                 session_id: None,
                 repo_dir: Some(dir),
@@ -265,7 +265,7 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
             SearchHit {
                 kind: HitKind::Log,
                 title: name,
-                dir: short_path(&project),
+                dir: super::short_path(&project),
                 excerpt_lines,
                 session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
@@ -379,7 +379,7 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
         match event::read()? {
             Event::Key(k) => match k.code {
                 KeyCode::Char('q') => { quit_app = true; break; }
-                KeyCode::Esc => break,
+                KeyCode::Esc | KeyCode::Left => break,
                 KeyCode::Char('c') if k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                     execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                     terminal::disable_raw_mode().ok();
@@ -450,7 +450,6 @@ fn draw(
 ) -> io::Result<()> {
     use crossterm::queue;
     let t = crate::theme::get();
-    let sel_bg = t.sel_bg;
     const TS_W: usize = 12; // fixed width of the timestamp column in excerpt rows
 
     let content_h = h.saturating_sub(2);
@@ -466,6 +465,18 @@ fn draw(
     let agent_w  = groups.iter().map(|g| g.agent.chars().count()).max().unwrap_or(0);
     let author_w = groups.iter().map(|g| g.author.chars().count()).max().unwrap_or(0);
     let branch_w = groups.iter().map(|g| g.branch.chars().count()).max().unwrap_or(0).min(30);
+
+    let accent = t.accent;
+    // Write one content line into the buffer using the ▌ bar for selection.
+    let mut write_row = |buf: &mut Vec<u8>, line: &str, selected: bool, screen_row: usize| -> io::Result<()> {
+        queue!(buf, cursor::MoveTo(0, screen_row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+        if selected {
+            write!(buf, "\x1b[{accent}m▌\x1b[0m {line}")?;
+        } else {
+            write!(buf, "  {line}")?;
+        }
+        Ok(())
+    };
 
     let mut screen_row = 1usize; // next terminal row to write (row 0 is title bar)
     let mut abs_row    = 0usize; // absolute content row (before scroll is applied)
@@ -528,7 +539,8 @@ fn draw(
                 line.push_str(&format!("  \x1b[{meta_col}mrepo\x1b[0m"));
             }
 
-            render_row(&mut buf, &line, selected, sel_bg, screen_row, w)?;
+            // Header row: full background highlight so the session name pops.
+            super::render_row(&mut buf, &line, selected, screen_row, w)?;
             screen_row += 1;
         }
         abs_row += 1;
@@ -555,7 +567,8 @@ fn draw(
                         format!("{excerpt_indent}\x1b[{sc}m{text_t}\x1b[0m", sc = t.text_secondary)
                     };
 
-                    render_row(&mut buf, &exc_line, selected, sel_bg, screen_row, w)?;
+                    // Excerpt rows: ▌ bar ties them visually to the selected header.
+                    write_row(&mut buf, &exc_line, selected, screen_row)?;
                     screen_row += 1;
                 }
                 abs_row += 1;
@@ -576,29 +589,12 @@ fn draw(
         screen_row += 1;
     }
 
-    // Status bar
-    let bar = "  ↑↓/jk: navigate   space/→: open   q/esc: quit  ";
-    let padded = format!("{:<width$}", bar.chars().take(w).collect::<String>(), width = w);
-    queue!(buf, cursor::MoveTo(0, (h - 1) as u16))?;
-    write!(buf, "\x1b[7m{padded}\x1b[0m")?;
+    super::draw_statusbar(&mut buf, "  ↑↓/jk: navigate   space/→: open   ←/esc: back   q: quit  ", w, h)?;
 
     stdout.write_all(&buf)?;
     stdout.flush()
 }
 
-fn render_row(buf: &mut Vec<u8>, line: &str, selected: bool, bg: &str, row: usize, w: usize) -> io::Result<()> {
-    use crossterm::queue;
-    queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
-    if selected {
-        let colored = with_bg(line, bg);
-        let vis = visible_len(line);
-        let pad = w.saturating_sub(vis);
-        write!(buf, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
-    } else {
-        write!(buf, "{line}")?;
-    }
-    Ok(())
-}
 
 // ── DB enrichment ─────────────────────────────────────────────────────────────
 
@@ -676,7 +672,7 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
                 Some(SearchHit {
                     kind: HitKind::Session,
                     title: session_name,
-                    dir: short_path(&cwd),
+                    dir: super::short_path(&cwd),
                     excerpt_lines: vec![],
                     session_id: Some(session_id),
                     repo_dir: None,
@@ -711,7 +707,7 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
                 Some(SearchHit {
                     kind: HitKind::Repo,
                     title: name,
-                    dir: short_path(&directory),
+                    dir: super::short_path(&directory),
                     excerpt_lines: vec![],
                     session_id: None,
                     repo_dir: Some(directory),
@@ -752,36 +748,3 @@ fn age_secs_hit(iso: &str) -> i64 {
 
 use super::agent_color;
 
-fn with_bg(s: &str, bg: &str) -> String {
-    let t = crate::theme::get();
-    let dim_esc   = format!("\x1b[{}m", t.text_dim);
-    let faint_esc = format!("\x1b[{}m", t.text_faint);
-    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
-    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert)
-                .replace(&dim_esc,   &sel_dim)
-                .replace(&faint_esc, &sel_dim);
-    format!("\x1b[{bg}m{body}")
-}
-
-fn visible_len(s: &str) -> usize {
-    let mut w = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for nc in chars.by_ref() { if nc.is_ascii_alphabetic() { break; } }
-        } else {
-            w += 1;
-        }
-    }
-    w
-}
-
-fn short_path(path: &str) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && path.starts_with(&home) {
-        format!("~{}", &path[home.len()..])
-    } else {
-        path.to_string()
-    }
-}

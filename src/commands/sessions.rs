@@ -108,7 +108,7 @@ pub fn run(all: bool, json: bool) -> Result<bool> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let action = tui_loop(&mut stdout, &sessions, &local_sessions, &repos);
+    let action = tui_loop(&mut stdout, &mut sessions, &local_sessions, &repos);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -147,6 +147,7 @@ enum Cmd {
     Back,
     Show(String),
     Resume(String, String),                  // (session_id, cwd)
+    Delete(String),                          // session_id
     Search(String),
     NewWorktree(String, String),             // (repo_dir, branch)
     NewSession(NewSessionConfig),
@@ -156,7 +157,7 @@ enum Cmd {
 
 fn tui_loop(
     stdout: &mut impl Write,
-    sessions: &[DisplaySession],
+    sessions: &mut Vec<DisplaySession>,
     local_sessions: &HashSet<String>,
     repos: &[Repository],
 ) -> Option<Action> {
@@ -168,6 +169,8 @@ fn tui_loop(
         .and_then(|cwd| repos.iter().find(|r| cwd.starts_with(r.directory.as_str())));
 
     let mut stack: Vec<Screen> = vec![Screen::Sessions { sel: 0 }];
+    let mut awaiting_delete = false;
+    let mut flash: Option<&'static str> = None;
 
     loop {
         let (w, h) = terminal::size().unwrap_or((120, 40));
@@ -175,7 +178,7 @@ fn tui_loop(
         let h = h as usize;
 
         match stack.last().unwrap() {
-            Screen::Sessions { sel } => { draw(stdout, sessions, local_sessions, *sel, w, h).ok(); }
+            Screen::Sessions { sel } => { draw(stdout, sessions, local_sessions, *sel, w, h, flash).ok(); }
         }
 
         let cmd = match event::read().ok()? {
@@ -203,7 +206,17 @@ fn tui_loop(
                             Cmd::Resume(s.session_id.clone(), s.cwd.clone())
                         }
                     }
-                    KeyCode::Char('/') => match status::collect_search_query(stdout, w, h) {
+                    KeyCode::Char('d') if !sessions.is_empty() => {
+                        awaiting_delete = true;
+                        flash = Some("  Delete session? Press y to confirm, any other key to cancel  ");
+                        Cmd::None
+                    }
+                    KeyCode::Char('y') if awaiting_delete => {
+                        awaiting_delete = false;
+                        flash = None;
+                        Cmd::Delete(sessions[*sel].session_id.clone())
+                    }
+                    KeyCode::Char('/') => match super::collect_search_query(stdout, w, h) {
                         Some(q) if !q.trim().is_empty() => Cmd::Search(q),
                         _ => Cmd::Redraw,
                     },
@@ -211,7 +224,7 @@ fn tui_loop(
                         let repo = sessions.get(*sel)
                             .and_then(|s| repo_for_session(s, repos, cwd_repo));
                         if let Some(repo) = repo {
-                            match status::collect_text_input(stdout, "  new worktree branch: ", w, h) {
+                            match super::collect_text_input(stdout, "  new worktree branch: ", w, h) {
                                 Some(b) if !b.trim().is_empty() => {
                                     Cmd::NewWorktree(repo.directory.clone(), b.trim().to_string())
                                 }
@@ -239,7 +252,7 @@ fn tui_loop(
                             None => Cmd::None,
                         }
                     }
-                    _ => Cmd::None,
+                    _ => { awaiting_delete = false; flash = None; Cmd::None }
                 }
             },
             Event::Resize(_, _) => Cmd::Redraw,
@@ -267,6 +280,14 @@ fn tui_loop(
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
             Cmd::Resume(id, cwd) => return Some(Action::Resume(id, cwd)),
+            Cmd::Delete(id) => {
+                super::clean::remove_session(&id).ok();
+                sessions.retain(|s| s.session_id != id);
+                if let Some(Screen::Sessions { sel }) = stack.last_mut() {
+                    if *sel >= sessions.len() && !sessions.is_empty() { *sel = sessions.len() - 1; }
+                }
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
             Cmd::Search(query) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
@@ -305,9 +326,9 @@ fn draw(
     sel: usize,
     w: usize,
     h: usize,
+    flash: Option<&str>,
 ) -> io::Result<()> {
     let t = crate::theme::get();
-    let sel_bg = t.sel_bg;
     // Reserve the leading cell only if at least one row will use the star.
     // Otherwise we'd lose two columns of width for no visible benefit (e.g.
     // when not invoked from inside a tracked repo).
@@ -410,20 +431,26 @@ fn draw(
         line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
         if is_sel {
-            let colored = with_bg(&line, sel_bg);
-            let vis = visible_width(&line);
+            let bg = crate::theme::get().sel_bg;
+            let colored = super::with_bg(&line, bg);
+            let vis = super::visible_width(&line);
             let pad = w.saturating_sub(vis);
-            write!(stdout, "\x1b[{sel_bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
+            write!(stdout, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
         } else {
             write!(stdout, "{line}")?;
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
         }
     }
 
-    let bar = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   t: tidy   /: search   q: quit  ",
+    let base = format!(
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: new session   n: new worktree   t: tidy   / search   q: quit  ",
         sessions.len()
     );
+    let bar = if let Some(msg) = flash {
+        let skip = msg.chars().count();
+        let rest: String = base.chars().skip(skip).collect();
+        format!("{msg}{rest}")
+    } else { base };
     let display: String = bar.chars().take(w).collect();
     let padded = format!("{:<width$}", display, width = w);
     execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
@@ -464,27 +491,3 @@ fn short_cwd(cwd: &str) -> String {
     }
 }
 
-fn with_bg(s: &str, bg: &str) -> String {
-    let t = crate::theme::get();
-    let dim_esc   = format!("\x1b[{}m", t.text_dim);
-    let faint_esc = format!("\x1b[{}m", t.text_faint);
-    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
-    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert)
-                .replace(&dim_esc,   &sel_dim)
-                .replace(&faint_esc, &sel_dim);
-    format!("\x1b[{bg}m{body}")
-}
-
-fn visible_width(s: &str) -> usize {
-    let mut w = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for nc in chars.by_ref() { if nc.is_ascii_alphabetic() { break; } }
-        } else {
-            w += 1;
-        }
-    }
-    w
-}
