@@ -23,21 +23,11 @@ struct RepoWorktree {
 }
 
 pub(super) struct NewSessionConfig {
-    #[allow(dead_code)] // displayed by the wizard panel; consumers don't use it after the fact
-    pub agent_name: String,
-    pub agent_cli: String,
     pub branch: Option<String>, // None = no new worktree
     pub session_name: String,
     pub prompt: String,
     pub repo_dir: String,
 }
-
-// (display_name, cli_command, terminal_256_color)
-const AGENTS: &[(&str, &str, u8)] = &[
-    ("Claude Code", "claude", 214),
-    ("Gemini CLI",  "gemini", 75),
-    ("Aider",       "aider",  42),
-];
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -314,11 +304,15 @@ fn tui_loop(stdout: &mut impl Write, repos: &mut Vec<Repository>, has_cd: bool, 
             Cmd::ShowSession(id) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let quit_app = super::show::run(&id).unwrap_or(false);
+                let result = super::show::run(&id);
                 terminal::enable_raw_mode().ok();
-                if quit_app { return Ok(Some(TuiOutcome::Quit)); }
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
+                match result {
+                    Ok(true) => return Ok(Some(TuiOutcome::Quit)),
+                    Err(_) => { flash = Some("  Transcript not found — run `gossamer index` to backfill  "); }
+                    Ok(false) => {}
+                }
             }
             Cmd::Search(query) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
@@ -527,6 +521,7 @@ fn draw_sessions(
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
         let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
         let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
+        let tokens_w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
 
         for (i, s) in sessions.iter().enumerate().skip(scroll) {
             if row >= content_h { break; }
@@ -580,6 +575,12 @@ fn draw_sessions(
                 } else {
                     line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
                 }
+            }
+
+            if tokens_w > 0 {
+                let tok = session_list::fmt_tokens(s.tokens_used);
+                let pad = " ".repeat(tokens_w - tok.chars().count());
+                line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim, tk = t.tool_ok));
             }
 
             line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
@@ -660,97 +661,65 @@ fn fetch_worktrees(repo_dir: &str) -> Vec<RepoWorktree> {
 
 // ── New session wizard ────────────────────────────────────────────────────────
 
-/// A 4-step panel drawn over the bottom of the screen. Each completed step
+/// A 3-step panel drawn over the bottom of the screen. Each completed step
 /// stays visible with its confirmed value while the user fills the next one.
 pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usize) -> Option<NewSessionConfig> {
     const LABEL_W: usize = 24;
-    // Panel rows: title, blank, agent, branch, name, prompt, blank  (7 rows + 1 status bar)
-    const PANEL_H: usize = 7;
+    // Panel rows: title, blank, branch, name, prompt, blank  (6 rows + 1 status bar)
+    const PANEL_H: usize = 6;
 
     let t = crate::theme::get();
     let panel_top = h.saturating_sub(PANEL_H + 1);
 
-    let mut step = 0usize;           // 0=agent 1=branch 2=name 3=prompt
-    let mut agent_sel = 0usize;
-    let mut confirmed_agent = 0usize;
+    let mut step = 0usize; // 0=branch 1=name 2=prompt
     let mut inputs = [String::new(), String::new(), String::new()]; // branch, name, prompt
 
     execute!(stdout, cursor::Show).ok();
 
     loop {
         // ── Draw panel ────────────────────────────────────────────────────────
-        // Title row
         execute!(stdout, cursor::MoveTo(0, panel_top as u16)).ok();
         write!(stdout, "\x1b[{hd}m  New Session\x1b[0m", hd = t.header).ok();
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
 
-        // Blank separator
         execute!(stdout, cursor::MoveTo(0, (panel_top + 1) as u16)).ok();
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
 
-        let step_rows  = [panel_top + 2, panel_top + 3, panel_top + 4, panel_top + 5];
-        let step_labels = ["  Agent", "  Worktree branch", "  Session name", "  Prompt"];
+        let step_rows   = [panel_top + 2, panel_top + 3, panel_top + 4];
+        let step_labels = ["  Worktree branch", "  Session name", "  Prompt"];
 
         for (i, (&row, &label)) in step_rows.iter().zip(step_labels.iter()).enumerate() {
             execute!(stdout, cursor::MoveTo(0, row as u16)).ok();
             let lpart = format!("{label:<LABEL_W$}");
 
             if i < step {
-                // Completed — dim label, value in colour
-                let val = if i == 0 {
-                    let (name, _, col) = AGENTS[confirmed_agent];
-                    format!("\x1b[38;5;{col}m{name}\x1b[0m")
+                let v = inputs[i].trim();
+                let val = if v.is_empty() {
+                    format!("\x1b[{ft}m(skip)\x1b[0m", ft = t.text_faint)
                 } else {
-                    let v = inputs[i - 1].trim();
-                    if v.is_empty() { format!("\x1b[{ft}m(skip)\x1b[0m", ft = t.text_faint) }
-                    else            { format!("\x1b[{pm}m{v}\x1b[0m", pm = t.text_primary) }
+                    format!("\x1b[{pm}m{v}\x1b[0m", pm = t.text_primary)
                 };
                 write!(stdout, "\x1b[{dm}m{lpart}\x1b[0m{val}", dm = t.text_dim).ok();
             } else if i == step {
-                // Active step
                 write!(stdout, "\x1b[{pm}m{lpart}\x1b[0m", pm = t.text_primary).ok();
-                if i == 0 {
-                    // Inline agent picker
-                    for (ai, (name, _, col)) in AGENTS.iter().enumerate() {
-                        if ai > 0 { write!(stdout, "\x1b[{ft}m │ \x1b[0m", ft = t.text_faint).ok(); }
-                        if ai == agent_sel {
-                            write!(stdout, "\x1b[{sb};38;5;{col}m {name} \x1b[0m", sb = t.sel_bg).ok();
-                        } else {
-                            write!(stdout, "\x1b[{dm}m {name}\x1b[0m", dm = t.text_dim).ok();
-                        }
-                    }
-                } else {
-                    // Text input — print typed chars, terminal cursor sits here
-                    write!(stdout, "\x1b[{pm}m{}\x1b[0m", inputs[i - 1], pm = t.text_primary).ok();
-                }
+                write!(stdout, "\x1b[{pm}m{}\x1b[0m", inputs[i], pm = t.text_primary).ok();
             } else {
-                // Future step — very dim label only
                 write!(stdout, "\x1b[{ft}m{lpart}\x1b[0m", ft = t.text_faint).ok();
             }
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
         }
 
-        // Trailing blank row
-        let blank2 = panel_top + 6;
+        let blank2 = panel_top + 5;
         if blank2 < h.saturating_sub(1) {
             execute!(stdout, cursor::MoveTo(0, blank2 as u16)).ok();
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
         }
 
-        // Status bar hint
-        let bar = if step == 0 {
-            "  ↑↓/jk: select agent   enter: confirm   esc: cancel  "
-        } else {
-            "  type to enter   enter: next   esc: cancel  "
-        };
-        super::draw_statusbar(stdout, bar, w, h).ok();
+        super::draw_statusbar(stdout, "  type to enter   enter: next   esc: cancel  ", w, h).ok();
 
-        // Position terminal cursor for text input steps
-        if step > 0 {
-            let row = step_rows[step];
-            let col = (LABEL_W + inputs[step - 1].len()).min(w.saturating_sub(1));
-            execute!(stdout, cursor::MoveTo(col as u16, row as u16)).ok();
-        }
+        let row = step_rows[step];
+        let col = (LABEL_W + inputs[step].len()).min(w.saturating_sub(1));
+        execute!(stdout, cursor::MoveTo(col as u16, row as u16)).ok();
         stdout.flush().ok();
 
         // ── Handle input ──────────────────────────────────────────────────────
@@ -760,28 +729,16 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
                     execute!(stdout, cursor::Hide).ok();
                     return None;
                 }
-                KeyCode::Up   | KeyCode::Char('k') if step == 0 => {
-                    if agent_sel > 0 { agent_sel -= 1; }
-                }
-                KeyCode::Down | KeyCode::Char('j') if step == 0 => {
-                    if agent_sel + 1 < AGENTS.len() { agent_sel += 1; }
-                }
-                KeyCode::Backspace if step > 0 => {
-                    inputs[step - 1].pop();
-                }
-                KeyCode::Char(c) if step > 0 && !k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
-                    inputs[step - 1].push(c);
+                KeyCode::Backspace => { inputs[step].pop(); }
+                KeyCode::Char(c) if !k.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                    inputs[step].push(c);
                 }
                 KeyCode::Enter => match step {
-                    0 => { confirmed_agent = agent_sel; step = 1; }
-                    1 | 2 => { step += 1; }
+                    0 | 1 => { step += 1; }
                     _ => {
                         execute!(stdout, cursor::Hide).ok();
-                        let (agent_name, agent_cli, _) = AGENTS[confirmed_agent];
                         let branch_raw = inputs[0].trim().to_string();
                         return Some(NewSessionConfig {
-                            agent_name: agent_name.to_string(),
-                            agent_cli: agent_cli.to_string(),
                             branch: if branch_raw.is_empty() { None } else { Some(branch_raw) },
                             session_name: inputs[1].trim().to_string(),
                             prompt: inputs[2].trim().to_string(),
@@ -799,7 +756,7 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Create the worktree (if `cfg.branch` is set), copy the prompt to the
-/// clipboard, then `exec` the agent. Only returns if `exec` failed.
+/// clipboard, then `exec` claude. Only returns if `exec` failed.
 pub(super) fn launch_new_session(cfg: NewSessionConfig) {
     use std::os::unix::process::CommandExt;
 
@@ -829,12 +786,12 @@ pub(super) fn launch_new_session(cfg: NewSessionConfig) {
     }
 
     let session_name = cfg.session_name.trim().to_string();
-    let mut cmd = std::process::Command::new(&cfg.agent_cli);
+    let mut cmd = std::process::Command::new("claude");
     if !launch_dir.is_empty() { cmd.current_dir(&launch_dir); }
     if !session_name.is_empty() { cmd.args(["-n", &session_name]); }
     if !prompt.is_empty() { cmd.arg(&prompt); }
     let err = cmd.exec();
-    eprintln!("Failed to launch {}: {err}", cfg.agent_cli);
+    eprintln!("Failed to launch claude: {err}");
 }
 
 pub(super) fn create_worktree(repo_dir: &str, branch: &str) -> String {

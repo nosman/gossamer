@@ -123,16 +123,8 @@ pub(super) fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) 
     collect_text_input(stdout, "  / ", w, h)
 }
 
-pub fn agent_color(name: &str) -> u8 {
-    if      name.contains("Claude")   { 214 }
-    else if name.contains("Copilot")  { 99  }
-    else if name.contains("Cursor")   { 33  }
-    else if name.contains("Gemini")   { 75  }
-    else if name.contains("Aider")    { 42  }
-    else if name.contains("ChatGPT")  { 35  }
-    else if name.contains("Windsurf") { 44  }
-    else if name.contains("Amazon Q") { 208 }
-    else                              { 245 }
+pub fn agent_color(_name: &str) -> u8 {
+    214 // Claude Code orange
 }
 
 /// Deterministic per-author color so the same human always renders the same

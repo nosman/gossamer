@@ -140,7 +140,7 @@ fn refresh_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, resol
                 let resolved_id = resolver.resolve(&p.cwd, Some(repo_id));
                 upsert_session(conn, &p.session_id, &p.agent_name, &user,
                                &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
-                               &p.branch, resolved_id, p.name_is_explicit)?;
+                               &p.branch, resolved_id, p.name_is_explicit, p.tokens_used)?;
                 count += 1;
             }
             Err(e) => eprintln!("  skipping {}: {}", meta_path, e),

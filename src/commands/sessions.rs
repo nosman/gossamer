@@ -267,17 +267,17 @@ fn tui_loop(
                 if stack.is_empty() { break; }
             }
             Cmd::Show(id) => {
-                // Transcript viewer is its own self-contained TUI: step out of
-                // the alternate screen, run it, then come back and redraw.
-                // If the user pressed `q` in the viewer, propagate the full-app
-                // exit instead of resuming this loop.
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let quit_app = super::show::run(&id).unwrap_or(false);
+                let result = super::show::run(&id);
                 terminal::enable_raw_mode().ok();
-                if quit_app { return Some(Action::Quit); }
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
+                match result {
+                    Ok(true) => return Some(Action::Quit),
+                    Err(_) => { flash = Some("  Transcript not found — run `gossamer index` to backfill  "); }
+                    Ok(false) => {}
+                }
             }
             Cmd::Resume(id, cwd) => return Some(Action::Resume(id, cwd)),
             Cmd::Delete(id) => {
@@ -343,6 +343,7 @@ fn draw(
     let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
     let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
     let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
+    let tokens_w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
 
     execute!(stdout, cursor::MoveTo(0, 0))?;
 
@@ -426,6 +427,12 @@ fn draw(
             } else {
                 line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
             }
+        }
+
+        if tokens_w > 0 {
+            let tok = session_list::fmt_tokens(s.tokens_used);
+            let pad = " ".repeat(tokens_w - tok.chars().count());
+            line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim, tk = t.tool_ok));
         }
 
         line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));

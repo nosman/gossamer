@@ -51,15 +51,12 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         top_k: usize,
     },
-    /// Start a new AI coding session, optionally in a fresh git worktree
+    /// Start a new Claude Code session, optionally in a fresh git worktree
     NewSession {
-        /// Agent to use: claude, gemini, aider [default: claude]
-        #[arg(long, short = 'a')]
-        agent: Option<String>,
         /// Create a new git worktree on this branch before launching
         #[arg(long, short = 'b')]
         branch: Option<String>,
-        /// Session name (passed as -n to the agent)
+        /// Session name (passed as -n to claude)
         #[arg(long, short = 'n')]
         name: Option<String>,
         /// Initial prompt, also copied to clipboard
@@ -143,8 +140,8 @@ fn main() -> Result<()> {
         Commands::Refresh => commands::refresh::run(json)?,
         Commands::Show { session } => { commands::show::run(&session)?; }
         Commands::Search { query, top_k } => { commands::search::run(&query.join(" "), top_k, json)?; }
-        Commands::NewSession { agent, branch, name, prompt } => {
-            commands::new_session::run(agent, branch, name, prompt)?
+        Commands::NewSession { branch, name, prompt } => {
+            commands::new_session::run(branch, name, prompt)?
         }
         Commands::Resume { session_id } => commands::resume::run(&session_id)?,
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,

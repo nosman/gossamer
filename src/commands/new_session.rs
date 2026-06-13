@@ -1,20 +1,12 @@
 use anyhow::Result;
 use std::io::Write as _;
 
-const AGENTS: &[&str] = &["claude", "gemini", "aider"];
-
 pub fn run(
-    agent: Option<String>,
     branch: Option<String>,
     name: Option<String>,
     prompt: Option<String>,
 ) -> Result<()> {
     let repo_dir = std::env::current_dir()?.to_string_lossy().to_string();
-
-    let agent_cli = agent.as_deref().unwrap_or("claude");
-    if !AGENTS.contains(&agent_cli) {
-        anyhow::bail!("unknown agent '{}'; valid options: {}", agent_cli, AGENTS.join(", "));
-    }
 
     let launch_dir = if let Some(ref branch_name) = branch {
         let result = create_worktree(&repo_dir, branch_name);
@@ -55,7 +47,7 @@ pub fn run(
     }
 
     use std::os::unix::process::CommandExt;
-    let mut cmd = std::process::Command::new(agent_cli);
+    let mut cmd = std::process::Command::new("claude");
     cmd.current_dir(&launch_dir);
     if let Some(ref n) = name {
         if !n.trim().is_empty() {
@@ -68,7 +60,7 @@ pub fn run(
         }
     }
     let err = cmd.exec();
-    anyhow::bail!("failed to launch {agent_cli}: {err}");
+    anyhow::bail!("failed to launch claude: {err}");
 }
 
 fn create_worktree(repo_dir: &str, branch: &str) -> Result<()> {
@@ -81,7 +73,6 @@ fn create_worktree(repo_dir: &str, branch: &str) -> Result<()> {
     let wt_path = parent.join(format!("{repo_name}-{branch}"));
     let wt_str = wt_path.to_string_lossy();
 
-    // Try -b (new branch) first, then fall back for an existing branch.
     let new_branch = std::process::Command::new("git")
         .args(["worktree", "add", "-b", branch, &wt_str])
         .current_dir(repo_dir)
