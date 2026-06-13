@@ -27,6 +27,18 @@ pub struct DisplaySession {
     /// entry in the JSONL); false when it's the derived first-prompt fallback.
     /// Drives the italic/plain distinction in the list renderers.
     pub name_is_explicit: bool,
+    /// Sum of output tokens generated across all assistant turns. 0 when the
+    /// session has never been indexed or has no local JSONL.
+    pub tokens_used: i64,
+}
+
+/// Format a token count compactly for display (empty string for zero).
+pub fn fmt_tokens(n: i64) -> String {
+    if n <= 0 { return String::new(); }
+    if n < 1_000 { return format!("{n}"); }
+    if n < 10_000 { return format!("{:.1}k", n as f64 / 1_000.0); }
+    if n < 1_000_000 { return format!("{}k", n / 1_000); }
+    format!("{:.1}M", n as f64 / 1_000_000.0)
 }
 
 /// Collapse interior whitespace (newlines, tabs, runs of spaces) into a single
@@ -87,6 +99,7 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
         let os_user: String = row.get(8)?;
         let raw_name: String = row.get(1)?;
         let name_is_explicit: i64 = row.get(9)?;
+        let tokens_used: i64 = row.get(10)?;
         Ok(DisplaySession {
             session_id: row.get(0)?,
             session_name: sanitize_one_line(&raw_name),
@@ -99,6 +112,7 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
             backed_up: true,
             author: resolve_author_label(&author_name, &author_email, &os_user),
             name_is_explicit: name_is_explicit != 0,
+            tokens_used,
         })
     };
     // Pull the author of the FIRST checkpoint (lowest checkpoint_number) for
@@ -109,7 +123,7 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
         s.session_id, s.session_name, s.cwd, COALESCE(s.branch,''),
         s.updated_at, s.agent_name,
         COALESCE(c.author_name, ''), COALESCE(c.author_email, ''), COALESCE(c.os_user, ''),
-        s.name_is_explicit
+        s.name_is_explicit, COALESCE(s.tokens_used, 0)
     ";
     let join = "
         LEFT JOIN checkpoints c
@@ -191,6 +205,8 @@ fn augment_with_jsonls(
                 // this, /rename'd sessions stay tagged as "derived" until the
                 // next index run, so they render gray in the lists.
                 if parsed.name_is_explicit { existing.name_is_explicit = true; }
+                // JSONL token count is authoritative when present (live data).
+                if parsed.tokens_used > 0 { existing.tokens_used = parsed.tokens_used; }
                 // Sessions inserted by the SessionStart hook but never indexed
                 // from a checkpoint branch have no `checkpoints` row, so the
                 // author column came back empty. Fall back to the cwd's
@@ -219,6 +235,7 @@ fn augment_with_jsonls(
                 backed_up: false,
                 author,
                 name_is_explicit: parsed.name_is_explicit,
+                tokens_used: parsed.tokens_used,
             });
         }
     }
@@ -229,6 +246,7 @@ struct ParsedJsonl {
     cwd: String,
     branch: String,
     name_is_explicit: bool,
+    tokens_used: i64,
 }
 
 fn parse_jsonl(path: &Path) -> ParsedJsonl {
@@ -237,6 +255,7 @@ fn parse_jsonl(path: &Path) -> ParsedJsonl {
         cwd: String::new(),
         branch: String::new(),
         name_is_explicit: false,
+        tokens_used: 0,
     };
     let Ok(file) = std::fs::File::open(path) else { return out; };
     let reader = std::io::BufReader::new(file);
@@ -254,6 +273,11 @@ fn parse_jsonl(path: &Path) -> ParsedJsonl {
             Some("user") | Some("system") => {
                 if out.cwd.is_empty() {
                     if let Some(c) = v["cwd"].as_str() { out.cwd = c.to_string(); }
+                }
+            }
+            Some("assistant") => {
+                if let Some(n) = v["message"]["usage"]["output_tokens"].as_i64() {
+                    out.tokens_used += n;
                 }
             }
             _ => {}

@@ -674,7 +674,28 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
                 match part {
                     UserPart::Text(text) => {
                         lines.push(String::new());
-                        for l in render_md(text, w.saturating_sub(2)) { lines.push(format!("  {l}")); }
+                        if is_xml_block(text) {
+                            let tag = xml_root_tag(text);
+                            let n = text.lines().count();
+                            if n > 4 {
+                                // Long XML block: collapse to one line.
+                                lines.push(format!("  \x1b[{ft}m‹{tag}  {n} lines›\x1b[0m", ft = th.text_faint));
+                            } else {
+                                // Short XML block: strip tags, show content inline.
+                                let content = strip_xml_tags(text);
+                                let content = content.split_whitespace().collect::<Vec<_>>().join(" ");
+                                let avail = w.saturating_sub(tag.len() + 8);
+                                let preview: String = content.chars().take(avail).collect();
+                                let suffix = if content.chars().count() > avail { " …" } else { "" };
+                                if preview.is_empty() {
+                                    lines.push(format!("  \x1b[{ft}m‹{tag}›\x1b[0m", ft = th.text_faint));
+                                } else {
+                                    lines.push(format!("  \x1b[{ft}m‹{tag}›  {preview}{suffix}\x1b[0m", ft = th.text_faint));
+                                }
+                            }
+                        } else {
+                            for l in render_md(text, w.saturating_sub(2)) { lines.push(format!("  {l}")); }
+                        }
                     }
                     UserPart::ToolResult { name, content, is_error, .. } => {
                         let col = if *is_error { th.error } else { th.tool_ok };
@@ -784,6 +805,35 @@ fn render_one_tool_call(part: &AsstPart, w: usize) -> Vec<String> {
 }
 
 
+
+fn is_xml_block(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with('<') && (t.contains("</") || t.contains("/>"))
+}
+
+fn xml_root_tag(text: &str) -> &str {
+    let t = text.trim_start();
+    let inner = t.strip_prefix('<').unwrap_or(t);
+    let inner = inner.trim_start_matches(['!', '/']);
+    let end = inner.find(|c: char| c == '>' || c == ' ' || c == '\n').unwrap_or(inner.len());
+    let tag = &inner[..end];
+    if tag.is_empty() { "xml" } else { tag }
+}
+
+fn strip_xml_tags(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for c in text.chars() {
+        match c {
+            '<' => { in_tag = true; }
+            '>' => { in_tag = false; }
+            '\n' if in_tag => {}
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
 
 fn wrap(text: &str, width: usize) -> Vec<String> {
     if width < 4 { return text.lines().map(str::to_string).collect(); }
@@ -1150,6 +1200,19 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                         }
                     }
 
+                    (KeyCode::Char('/'), _) => {
+                        if let Some(query) = super::collect_search_query(&mut stdout, w, h) {
+                            if !query.trim().is_empty() {
+                                execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
+                                terminal::disable_raw_mode()?;
+                                super::search::run(&query, 10, false).unwrap_or(false);
+                                terminal::enable_raw_mode()?;
+                                execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
+                                execute!(stdout, terminal::Clear(ClearType::All))?;
+                            }
+                        }
+                    }
+
                     _ => { awaiting_delete = false; flash = prev_flash; }
                 }
             }
@@ -1197,7 +1260,16 @@ fn draw(
         if flat_idx < end {
             let (card_idx, line) = &flat[flat_idx];
             if *card_idx == sel {
-                write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
+                let is_first = flat_idx == 0 || flat[flat_idx - 1].0 != sel;
+                if is_first {
+                    let t = crate::theme::get();
+                    let bg = t.sel_bg;
+                    let colored = super::with_bg(line, bg);
+                    let pad = w.saturating_sub(2 + super::visible_width(line));
+                    write!(buf, "\x1b[{bg}m  {colored}{}\x1b[0m", " ".repeat(pad))?;
+                } else {
+                    write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
+                }
             } else {
                 write!(buf, "  ")?;
                 buf.extend_from_slice(line.as_bytes());
@@ -1208,7 +1280,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  u/PgDn page  g/G ends  y/c copy  r resume  d delete  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {

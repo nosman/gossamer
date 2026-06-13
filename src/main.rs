@@ -51,15 +51,12 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         top_k: usize,
     },
-    /// Start a new AI coding session, optionally in a fresh git worktree
+    /// Start a new Claude Code session, optionally in a fresh git worktree
     NewSession {
-        /// Agent to use: claude, gemini, aider [default: claude]
-        #[arg(long, short = 'a')]
-        agent: Option<String>,
         /// Create a new git worktree on this branch before launching
         #[arg(long, short = 'b')]
         branch: Option<String>,
-        /// Session name (passed as -n to the agent)
+        /// Session name (passed as -n to claude)
         #[arg(long, short = 'n')]
         name: Option<String>,
         /// Initial prompt, also copied to clipboard
@@ -74,6 +71,18 @@ enum Commands {
     Clean {
         /// Session ID to clean up
         session_id: String,
+    },
+    /// Remove sessions from the DB that no longer exist in any checkpoint or Claude session file
+    Purge {
+        /// List stale sessions without deleting them
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Scan Claude Code session history for untracked GitHub repos and register them
+    Discover {
+        /// List candidates without registering them
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Remove git worktrees that have had no recent session activity
     Tidy {
@@ -131,11 +140,13 @@ fn main() -> Result<()> {
         Commands::Refresh => commands::refresh::run(json)?,
         Commands::Show { session } => { commands::show::run(&session)?; }
         Commands::Search { query, top_k } => { commands::search::run(&query.join(" "), top_k, json)?; }
-        Commands::NewSession { agent, branch, name, prompt } => {
-            commands::new_session::run(agent, branch, name, prompt)?
+        Commands::NewSession { branch, name, prompt } => {
+            commands::new_session::run(branch, name, prompt)?
         }
         Commands::Resume { session_id } => commands::resume::run(&session_id)?,
         Commands::Clean { session_id } => commands::clean::run(&session_id, json)?,
+        Commands::Purge { dry_run } => commands::purge::run(dry_run, json)?,
+        Commands::Discover { dry_run } => commands::discover::run(dry_run, json)?,
         Commands::Tidy { dry_run, days, force, sessions } => commands::tidy::run(days, dry_run, force, sessions, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
         Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,

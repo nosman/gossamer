@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use crossterm::{cursor, event::{self, Event, KeyCode}, execute, terminal};
+use crossterm::{event::{self, Event, KeyCode}, terminal};
 use serde_json::{json, Value};
 use std::{env, fs, io::{self, BufRead, Write}, path::PathBuf, process::Command};
 
@@ -24,24 +24,6 @@ gr() {
   rm -f "$tmp"
   [[ -n "$dest" ]] && cd "$dest"
 }"#;
-
-// (entire agent-id, CLI binary to probe for detection)
-const KNOWN_AGENTS: &[(&str, &str)] = &[
-    ("claude-code",     "claude"),
-    ("gemini",          "gemini"),
-    ("codex",           "codex"),
-    ("opencode",        "opencode"),
-    ("cursor",          "cursor"),
-    ("copilot-cli",     "gh"),
-    ("factoryai-droid", "droid"),
-    ("pi",              "pi"),
-];
-
-struct AgentOption {
-    id:       &'static str,
-    detected: bool,
-    selected: bool,
-}
 
 pub fn run(_json: bool) -> Result<()> {
     let cwd = env::current_dir().context("failed to get current directory")?;
@@ -93,29 +75,12 @@ pub fn run(_json: bool) -> Result<()> {
 fn run_configure_wizard(cwd_str: &str) -> Result<()> {
     println!("\n  entire setup\n");
 
-    // ── Step 1: agent multi-select ────────────────────────────────────────────
-    let mut agents: Vec<AgentOption> = KNOWN_AGENTS
-        .iter()
-        .map(|(id, cli)| {
-            let detected = cmd_exists(cli)
-                || (*id == "cursor" && std::path::Path::new("/Applications/Cursor.app").exists());
-            AgentOption { id, detected, selected: detected }
-        })
-        .collect();
-
-    agent_picker(&mut agents)?;
-
-    let chosen_agents: Vec<&str> = agents.iter()
-        .filter(|a| a.selected)
-        .map(|a| a.id)
-        .collect();
-
-    // ── Step 2–4: boolean questions (default: sensible safe values) ───────────
+    // ── Boolean questions (default: sensible safe values) ─────────────────────
     let skip_push     = !ask_yn("Auto-push sessions on git push", true)?;
     let telemetry     = ask_yn("Enable anonymous telemetry", false)?;
     let abs_hook_path = ask_yn("Absolute git hook path (for GUI clients like GitHub Desktop)", false)?;
 
-    // ── Step 5–7: optional string fields ─────────────────────────────────────
+    // ── Optional string fields ────────────────────────────────────────────────
     let checkpoint_remote = ask_optional("Checkpoint remote (e.g. github:org/repo)")?;
     let summarize_prov    = ask_optional("Summarize provider (e.g. anthropic)")?;
     let summarize_model   = if summarize_prov.is_some() {
@@ -151,91 +116,18 @@ fn run_configure_wizard(cwd_str: &str) -> Result<()> {
         anyhow::bail!("`entire configure` exited with {}", status);
     }
 
-    // ── Run `entire agent add` for each selected agent ────────────────────────
-    for agent in &chosen_agents {
-        println!("Running: entire agent add {agent}");
-        let s = Command::new("entire")
-            .args(["agent", "add", agent])
-            .current_dir(cwd_str)
-            .status()
-            .context("failed to run `entire agent add`")?;
-        if !s.success() {
-            eprintln!("warning: `entire agent add {agent}` exited with {s}");
-        }
+    // ── Register Claude Code with entireio ────────────────────────────────────
+    println!("Running: entire agent add claude-code");
+    let s = Command::new("entire")
+        .args(["agent", "add", "claude-code"])
+        .current_dir(cwd_str)
+        .status()
+        .context("failed to run `entire agent add`")?;
+    if !s.success() {
+        eprintln!("warning: `entire agent add claude-code` exited with {s}");
     }
 
     Ok(())
-}
-
-// ── Interactive agent picker ──────────────────────────────────────────────────
-
-fn agent_picker(agents: &mut Vec<AgentOption>) -> Result<()> {
-    let mut stdout = io::stdout();
-
-    terminal::enable_raw_mode()?;
-    let result = agent_picker_inner(&mut stdout, agents);
-    terminal::disable_raw_mode()?;
-    result
-}
-
-fn agent_picker_inner(stdout: &mut impl Write, agents: &mut Vec<AgentOption>) -> Result<()> {
-    write!(stdout, "  Agents  \x1b[38;5;240m↑↓/jk navigate  space toggle  enter confirm\x1b[0m\r\n\r\n")?;
-    stdout.flush()?;
-
-    let (_, list_top) = cursor::position()?;
-    let mut sel = 0usize;
-
-    draw_agent_list(stdout, agents, sel, list_top)?;
-
-    loop {
-        match event::read()? {
-            Event::Key(k) => match k.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if sel > 0 { sel -= 1; }
-                    draw_agent_list(stdout, agents, sel, list_top)?;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if sel + 1 < agents.len() { sel += 1; }
-                    draw_agent_list(stdout, agents, sel, list_top)?;
-                }
-                KeyCode::Char(' ') => {
-                    agents[sel].selected = !agents[sel].selected;
-                    draw_agent_list(stdout, agents, sel, list_top)?;
-                }
-                KeyCode::Enter => break,
-                KeyCode::Esc  => anyhow::bail!("setup aborted"),
-                _ => {}
-            }
-            _ => {}
-        }
-    }
-
-    // Park the cursor below the list before returning to normal mode.
-    execute!(stdout, cursor::MoveTo(0, list_top + agents.len() as u16))?;
-    write!(stdout, "\r\n")?;
-    stdout.flush()?;
-    Ok(())
-}
-
-fn draw_agent_list(stdout: &mut impl Write, agents: &[AgentOption], sel: usize, list_top: u16) -> io::Result<()> {
-    for (i, agent) in agents.iter().enumerate() {
-        execute!(stdout, cursor::MoveTo(0, list_top + i as u16))?;
-        let check      = if agent.selected { "x" } else { " " };
-        let check_col  = if agent.selected { "\x1b[38;5;82m" } else { "\x1b[38;5;240m" };
-        let id_padded  = format!("{:<20}", agent.id);
-        let det        = if agent.detected { "detected" } else { "" };
-        if i == sel {
-            write!(stdout,
-                "\x1b[48;5;236m  [{check_col}{check}\x1b[0m\x1b[48;5;236m] {id_padded}  \x1b[38;5;240m{det}\x1b[0m\x1b[48;5;236m\x1b[K\x1b[0m"
-            )?;
-        } else {
-            let id_col = if agent.selected { "\x1b[38;5;255m" } else { "\x1b[38;5;245m" };
-            write!(stdout,
-                "  [{check_col}{check}\x1b[0m] {id_col}{id_padded}\x1b[0m  \x1b[38;5;240m{det}\x1b[0m\x1b[K"
-            )?;
-        }
-    }
-    stdout.flush()
 }
 
 // ── Prompt helpers ────────────────────────────────────────────────────────────
@@ -273,14 +165,6 @@ fn ask_optional(prompt: &str) -> Result<Option<String>> {
     io::stdin().lock().read_line(&mut line)?;
     let s = line.trim().to_string();
     Ok(if s.is_empty() { None } else { Some(s) })
-}
-
-fn cmd_exists(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
 }
 
 // ── Rest of init (hooks, DB registration) ────────────────────────────────────

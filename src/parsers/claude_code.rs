@@ -19,10 +19,15 @@ pub fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8]) -> Result<ParsedSess
         created_at: Option<String>,
         branch: Option<String>,
         summary: Option<Summary>,
+        token_usage: Option<TokenUsage>,
     }
     #[derive(Deserialize)]
     struct Summary {
         intent: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct TokenUsage {
+        output_tokens: Option<i64>,
     }
 
     let meta: SessionMetadata = serde_json::from_slice(meta_bytes)
@@ -43,6 +48,10 @@ pub fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8]) -> Result<ParsedSess
 
     let agent_name = meta.agent.unwrap_or_else(|| "Claude Code".to_string());
     let meta_branch = meta.branch.unwrap_or_default();
+
+    let tokens_used = meta.token_usage
+        .and_then(|u| u.output_tokens)
+        .unwrap_or(0);
 
     let mut latest: Option<DateTime<Utc>> = None;
     let mut cwd = String::new();
@@ -109,6 +118,7 @@ pub fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8]) -> Result<ParsedSess
         session_name,
         branch,
         name_is_explicit,
+        tokens_used,
     })
 }
 
@@ -120,6 +130,7 @@ pub fn parse_shadow_session(jsonl_bytes: &[u8], session_id: &str) -> Result<Pars
     let mut first_any_prompt: Option<String> = None;
     let mut custom_title: Option<String> = None;
     let mut branch = String::new();
+    let mut tokens_used: i64 = 0;
 
     for line in jsonl_bytes.split(|&b| b == b'\n') {
         if line.is_empty() { continue; }
@@ -158,6 +169,11 @@ pub fn parse_shadow_session(jsonl_bytes: &[u8], session_id: &str) -> Result<Pars
                     }
                 }
             }
+            Some("assistant") => {
+                if let Some(n) = v["message"]["usage"]["output_tokens"].as_i64() {
+                    tokens_used += n;
+                }
+            }
             _ => {}
         }
     }
@@ -180,6 +196,7 @@ pub fn parse_shadow_session(jsonl_bytes: &[u8], session_id: &str) -> Result<Pars
         session_name,
         branch,
         name_is_explicit,
+        tokens_used,
     })
 }
 

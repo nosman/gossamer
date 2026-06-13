@@ -264,7 +264,7 @@ pub(crate) fn backfill_local_jsonls(
 
             if upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
                               &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
-                              &parsed.branch, repo_id, parsed.name_is_explicit).is_ok() {
+                              &parsed.branch, repo_id, parsed.name_is_explicit, parsed.tokens_used).is_ok() {
                 count += 1;
             }
         }
@@ -407,7 +407,7 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
         let resolved_id = resolver.resolve(&parsed.cwd, Some(repo_id));
         upsert_session(conn, &parsed.session_id, &parsed.agent_name, &user,
                        &parsed.created_at, &parsed.updated_at, &parsed.cwd, &parsed.session_name,
-                       &parsed.branch, resolved_id, parsed.name_is_explicit)?;
+                       &parsed.branch, resolved_id, parsed.name_is_explicit, parsed.tokens_used)?;
 
         let checkpoint_number = checkpoint_number_from_path(meta_path).unwrap_or(0);
         let os_user = cwd_to_os_user(&parsed.cwd);
@@ -546,7 +546,7 @@ pub(crate) fn index_shadow_branches(conn: &rusqlite::Connection, repo_id: i64, r
                     let resolved_id = resolver.resolve(&p.cwd, Some(repo_id));
                     upsert_session(conn, &p.session_id, &p.agent_name, &user,
                                    &p.created_at, &p.updated_at, &p.cwd, &p.session_name,
-                                   &p.branch, resolved_id, p.name_is_explicit)?;
+                                   &p.branch, resolved_id, p.name_is_explicit, p.tokens_used)?;
                     count += 1;
                 }
                 Err(e) => eprintln!("  skipping {}:{} — {}", branch, line, e),
@@ -726,6 +726,7 @@ pub(crate) fn upsert_session(
     branch: &str,
     repo_id: Option<i64>,
     name_is_explicit: bool,
+    tokens_used: i64,
 ) -> Result<()> {
     // Callers are responsible for resolving repo_id through RepoResolver
     // before calling — see resolve_repo_id docstring for precedence.
@@ -742,8 +743,8 @@ pub(crate) fn upsert_session(
     // updates overwrite normally.
     conn.execute(
         "INSERT INTO sessions
-            (session_id, agent_name, user, created_at, updated_at, cwd, session_name, branch, repo_id, name_is_explicit)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            (session_id, agent_name, user, created_at, updated_at, cwd, session_name, branch, repo_id, name_is_explicit, tokens_used)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
          ON CONFLICT(session_id) DO UPDATE SET
            agent_name       = CASE WHEN COALESCE(sessions.agent_name, '') = ''
                                    THEN excluded.agent_name
@@ -760,11 +761,13 @@ pub(crate) fn upsert_session(
                                 ELSE 0
                               END,
            branch           = CASE WHEN excluded.branch != '' THEN excluded.branch ELSE sessions.branch END,
-           repo_id          = COALESCE(excluded.repo_id, sessions.repo_id)",
+           repo_id          = COALESCE(excluded.repo_id, sessions.repo_id),
+           tokens_used      = MAX(sessions.tokens_used, excluded.tokens_used)",
         rusqlite::params![
             session_id, agent_name, user, created_at, updated_at,
             cwd, session_name, branch, repo_id,
-            if name_is_explicit { 1i64 } else { 0i64 }
+            if name_is_explicit { 1i64 } else { 0i64 },
+            tokens_used,
         ],
     )?;
     Ok(())

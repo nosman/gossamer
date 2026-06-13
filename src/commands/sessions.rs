@@ -108,7 +108,7 @@ pub fn run(all: bool, json: bool) -> Result<bool> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    let action = tui_loop(&mut stdout, &sessions, &local_sessions, &repos);
+    let action = tui_loop(&mut stdout, &mut sessions, &local_sessions, &repos);
 
     execute!(stdout, LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -147,6 +147,7 @@ enum Cmd {
     Back,
     Show(String),
     Resume(String, String),                  // (session_id, cwd)
+    Delete(String),                          // session_id
     Search(String),
     NewWorktree(String, String),             // (repo_dir, branch)
     NewSession(NewSessionConfig),
@@ -156,7 +157,7 @@ enum Cmd {
 
 fn tui_loop(
     stdout: &mut impl Write,
-    sessions: &[DisplaySession],
+    sessions: &mut Vec<DisplaySession>,
     local_sessions: &HashSet<String>,
     repos: &[Repository],
 ) -> Option<Action> {
@@ -168,6 +169,8 @@ fn tui_loop(
         .and_then(|cwd| repos.iter().find(|r| cwd.starts_with(r.directory.as_str())));
 
     let mut stack: Vec<Screen> = vec![Screen::Sessions { sel: 0 }];
+    let mut awaiting_delete = false;
+    let mut flash: Option<&'static str> = None;
 
     loop {
         let (w, h) = terminal::size().unwrap_or((120, 40));
@@ -175,7 +178,7 @@ fn tui_loop(
         let h = h as usize;
 
         match stack.last().unwrap() {
-            Screen::Sessions { sel } => { draw(stdout, sessions, local_sessions, *sel, w, h).ok(); }
+            Screen::Sessions { sel } => { draw(stdout, sessions, local_sessions, *sel, w, h, flash).ok(); }
         }
 
         let cmd = match event::read().ok()? {
@@ -203,7 +206,17 @@ fn tui_loop(
                             Cmd::Resume(s.session_id.clone(), s.cwd.clone())
                         }
                     }
-                    KeyCode::Char('/') => match status::collect_search_query(stdout, w, h) {
+                    KeyCode::Char('d') if !sessions.is_empty() => {
+                        awaiting_delete = true;
+                        flash = Some("  Delete session? Press y to confirm, any other key to cancel  ");
+                        Cmd::None
+                    }
+                    KeyCode::Char('y') if awaiting_delete => {
+                        awaiting_delete = false;
+                        flash = None;
+                        Cmd::Delete(sessions[*sel].session_id.clone())
+                    }
+                    KeyCode::Char('/') => match super::collect_search_query(stdout, w, h) {
                         Some(q) if !q.trim().is_empty() => Cmd::Search(q),
                         _ => Cmd::Redraw,
                     },
@@ -211,7 +224,7 @@ fn tui_loop(
                         let repo = sessions.get(*sel)
                             .and_then(|s| repo_for_session(s, repos, cwd_repo));
                         if let Some(repo) = repo {
-                            match status::collect_text_input(stdout, "  new worktree branch: ", w, h) {
+                            match super::collect_text_input(stdout, "  new worktree branch: ", w, h) {
                                 Some(b) if !b.trim().is_empty() => {
                                     Cmd::NewWorktree(repo.directory.clone(), b.trim().to_string())
                                 }
@@ -239,7 +252,7 @@ fn tui_loop(
                             None => Cmd::None,
                         }
                     }
-                    _ => Cmd::None,
+                    _ => { awaiting_delete = false; flash = None; Cmd::None }
                 }
             },
             Event::Resize(_, _) => Cmd::Redraw,
@@ -254,19 +267,27 @@ fn tui_loop(
                 if stack.is_empty() { break; }
             }
             Cmd::Show(id) => {
-                // Transcript viewer is its own self-contained TUI: step out of
-                // the alternate screen, run it, then come back and redraw.
-                // If the user pressed `q` in the viewer, propagate the full-app
-                // exit instead of resuming this loop.
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
-                let quit_app = super::show::run(&id).unwrap_or(false);
+                let result = super::show::run(&id);
                 terminal::enable_raw_mode().ok();
-                if quit_app { return Some(Action::Quit); }
                 execute!(stdout, EnterAlternateScreen, cursor::Hide).ok();
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
+                match result {
+                    Ok(true) => return Some(Action::Quit),
+                    Err(_) => { flash = Some("  Transcript not found — run `gossamer index` to backfill  "); }
+                    Ok(false) => {}
+                }
             }
             Cmd::Resume(id, cwd) => return Some(Action::Resume(id, cwd)),
+            Cmd::Delete(id) => {
+                super::clean::remove_session(&id).ok();
+                sessions.retain(|s| s.session_id != id);
+                if let Some(Screen::Sessions { sel }) = stack.last_mut() {
+                    if *sel >= sessions.len() && !sessions.is_empty() { *sel = sessions.len() - 1; }
+                }
+                execute!(stdout, terminal::Clear(ClearType::All)).ok();
+            }
             Cmd::Search(query) => {
                 execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
                 terminal::disable_raw_mode().ok();
@@ -305,15 +326,15 @@ fn draw(
     sel: usize,
     w: usize,
     h: usize,
+    flash: Option<&str>,
 ) -> io::Result<()> {
     let t = crate::theme::get();
-    let sel_bg = t.sel_bg;
     // Reserve the leading cell only if at least one row will use the star.
     // Otherwise we'd lose two columns of width for no visible benefit (e.g.
     // when not invoked from inside a tracked repo).
     let any_local = sessions.iter().any(|s| local_sessions.contains(&s.session_id));
 
-    let content_h = h.saturating_sub(1);
+    let content_h = h.saturating_sub(2); // 1 header + 1 status bar
     let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
 
     // Pre-compute column widths
@@ -321,12 +342,29 @@ fn draw(
     let cwd_w  = sessions.iter().map(|s| short_cwd(&s.cwd).chars().count()).max().unwrap_or(0);
     let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
     let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
-    let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
+    let tokens_w = {
+        let w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
+        if w > 0 { w.max(6) } else { 0 }
+    };
 
+    // ── Header row ────────────────────────────────────────────────────────────
     execute!(stdout, cursor::MoveTo(0, 0))?;
+    {
+        let dm = t.text_dim;
+        let star_gap = if any_local { "  " } else { "" };
+        let mut hdr = format!("{star_gap}  {:<name_w$}", "session");
+        if cwd_w   > 0 { hdr.push_str(&format!("  {:<cwd_w$}",    "directory")); }
+        if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
+        if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
+        if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
+        hdr.push_str("  id        updated");
+        let display: String = hdr.chars().take(w).collect();
+        write!(stdout, "\x1b[{dm}m{display}\x1b[0m")?;
+        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+    }
 
     for row in 0..content_h {
-        execute!(stdout, cursor::MoveTo(0, row as u16))?;
+        execute!(stdout, cursor::MoveTo(0, (row + 1) as u16))?;
         let idx = scroll + row;
         if idx >= sessions.len() {
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
@@ -396,34 +434,35 @@ fn draw(
             line.push_str(&format!("  \x1b[{dm}m{a}{pad}\x1b[0m", dm = t.text_dim));
         }
 
-        if agent_w > 0 {
-            let a: String = s.agent_name.chars().take(agent_w).collect();
-            let pad = " ".repeat(agent_w - a.chars().count());
-            if s.backed_up {
-                let col = agent_color(&s.agent_name);
-                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
-            } else {
-                line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
-            }
+        if tokens_w > 0 {
+            let tok = session_list::fmt_tokens(s.tokens_used);
+            let pad = " ".repeat(tokens_w - tok.chars().count());
+            line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim, tk = t.tool_ok));
         }
 
         line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
 
         if is_sel {
-            let colored = with_bg(&line, sel_bg);
-            let vis = visible_width(&line);
+            let bg = crate::theme::get().sel_bg;
+            let colored = super::with_bg(&line, bg);
+            let vis = super::visible_width(&line);
             let pad = w.saturating_sub(vis);
-            write!(stdout, "\x1b[{sel_bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
+            write!(stdout, "\x1b[{bg}m{colored}{}\x1b[0m", " ".repeat(pad))?;
         } else {
             write!(stdout, "{line}")?;
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
         }
     }
 
-    let bar = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   s: new session   n: new worktree   t: tidy   /: search   q: quit  ",
+    let base = format!(
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: new session   n: new worktree   t: tidy   / search   q: quit  ",
         sessions.len()
     );
+    let bar = if let Some(msg) = flash {
+        let skip = msg.chars().count();
+        let rest: String = base.chars().skip(skip).collect();
+        format!("{msg}{rest}")
+    } else { base };
     let display: String = bar.chars().take(w).collect();
     let padded = format!("{:<width$}", display, width = w);
     execute!(stdout, cursor::MoveTo(0, (h - 1) as u16))?;
@@ -432,7 +471,6 @@ fn draw(
     stdout.flush()
 }
 
-use super::agent_color;
 
 fn relative_time(dt: DateTime<Utc>) -> String {
     let secs = (Utc::now() - dt).num_seconds().max(0);
@@ -464,27 +502,3 @@ fn short_cwd(cwd: &str) -> String {
     }
 }
 
-fn with_bg(s: &str, bg: &str) -> String {
-    let t = crate::theme::get();
-    let dim_esc   = format!("\x1b[{}m", t.text_dim);
-    let faint_esc = format!("\x1b[{}m", t.text_faint);
-    let sel_dim   = format!("\x1b[{}m", t.sel_text_dim);
-    let reinsert  = format!("\x1b[0m\x1b[{bg}m");
-    let body = s.replace("\x1b[0m", &reinsert)
-                .replace(&dim_esc,   &sel_dim)
-                .replace(&faint_esc, &sel_dim);
-    format!("\x1b[{bg}m{body}")
-}
-
-fn visible_width(s: &str) -> usize {
-    let mut w = 0usize;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for nc in chars.by_ref() { if nc.is_ascii_alphabetic() { break; } }
-        } else {
-            w += 1;
-        }
-    }
-    w
-}
