@@ -1,0 +1,5 @@
+There is still an "agent" column in the sessions tables. We already got rid of all support for multiple agents, therefore there is no need for this column. Get rid of it
+
+---
+
+In the new session wizard, if the prompt is too long, the text isn't visible anymore. we should let the new text wrap around or something like that so that it doesn't get cut off.
