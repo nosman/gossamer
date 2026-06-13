@@ -1,0 +1,5 @@
+I just made 2 commits to this session, each of which should have their own checkpoint id. but i'm only seeing the latest one, with the wrong timestamp.
+
+---
+
+can you put the checkpoint row *after* the tool calls and away summary for its turn?
