@@ -1,0 +1,1 @@
+Two little problems: show the ][ navigation in the persistent action bar. Also when i try and copy a checkpoint, i get all the text *except* for the commit hash
