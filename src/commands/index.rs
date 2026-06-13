@@ -497,7 +497,7 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             author.as_ref().map(|a| a.sha.as_str()).unwrap_or("")
         };
 
-        upsert_checkpoint(conn, &p.session_id, p.checkpoint_number,
+        upsert_checkpoint(conn, &p.session_id,
                           effective_sha, author.as_ref(), &p.last_turn_ts,
                           &p.jsonl_path, repo_dir, &os_user_str,
                           commit_message, &p.turn_id, &p.checkpoint_id,
@@ -799,7 +799,6 @@ fn extract_checkpoint_commit(body: &[&str]) -> Option<(String, String)> {
 pub(crate) fn upsert_checkpoint(
     conn: &rusqlite::Connection,
     session_id: &str,
-    checkpoint_number: u32,
     commit_sha: &str,
     author: Option<&CommitAuthor>,
     last_turn_ts: &str,
@@ -817,15 +816,14 @@ pub(crate) fn upsert_checkpoint(
     let (name, email) = author
         .map(|a| (a.name.as_str(), a.email.as_str()))
         .unwrap_or(("", ""));
-    let sha = commit_sha;
     conn.execute(
         "INSERT INTO checkpoints
-            (session_id, checkpoint_number, commit_sha, author_name, author_email,
+            (session_id, checkpoint_id, commit_sha, author_name, author_email,
              last_turn_ts, jsonl_path, repo_dir, os_user,
-             commit_message, turn_id, checkpoint_id, files_touched, token_usage,
+             commit_message, turn_id, files_touched, token_usage,
              initial_attribution, model)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-         ON CONFLICT(session_id, checkpoint_number) DO UPDATE SET
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT(session_id, checkpoint_id) DO UPDATE SET
             commit_sha          = excluded.commit_sha,
             author_name         = excluded.author_name,
             author_email        = excluded.author_email,
@@ -835,15 +833,14 @@ pub(crate) fn upsert_checkpoint(
             os_user             = excluded.os_user,
             commit_message      = excluded.commit_message,
             turn_id             = excluded.turn_id,
-            checkpoint_id       = excluded.checkpoint_id,
             files_touched       = excluded.files_touched,
             token_usage         = excluded.token_usage,
             initial_attribution = excluded.initial_attribution,
             model               = excluded.model",
         rusqlite::params![
             session_id,
-            checkpoint_number as i64,
-            sha,
+            checkpoint_id,
+            commit_sha,
             name,
             email,
             last_turn_ts,
@@ -852,7 +849,6 @@ pub(crate) fn upsert_checkpoint(
             os_user,
             commit_message,
             turn_id,
-            checkpoint_id,
             files_touched,
             token_usage,
             initial_attribution,

@@ -281,8 +281,7 @@ fn git_config_user(cwd: &str) -> Option<String> {
 fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
     let Ok(conn) = crate::db::connect() else { return Vec::new(); };
     let Ok(mut stmt) = conn.prepare(
-        "SELECT checkpoint_number,
-                COALESCE(checkpoint_id, ''),
+        "SELECT checkpoint_id,
                 COALESCE(commit_message, ''),
                 last_turn_ts,
                 COALESCE(author_name, ''),
@@ -293,12 +292,12 @@ fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
                 COALESCE(model, '')
            FROM checkpoints
           WHERE session_id = ?1
-       ORDER BY checkpoint_number ASC"
+       ORDER BY last_turn_ts ASC"
     ) else { return Vec::new(); };
 
     let rows = stmt.query_map([session_id], |row| {
         Ok((
-            row.get::<_, i64>(0)?,
+            row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             row.get::<_, String>(3)?,
@@ -307,15 +306,15 @@ fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
             row.get::<_, String>(6)?,
             row.get::<_, String>(7)?,
             row.get::<_, String>(8)?,
-            row.get::<_, String>(9)?,
         ))
     });
     let Ok(rows) = rows else { return Vec::new(); };
 
     let mut out = Vec::new();
-    for r in rows.flatten() {
-        let (number, checkpoint_id, commit_message, last_turn_ts,
+    for (seq, r) in rows.flatten().enumerate() {
+        let (checkpoint_id, commit_message, last_turn_ts,
              author_name, author_email, files_json, token_json, attr_json, model) = r;
+        let number = (seq + 1) as u32;
 
         let files_touched: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
 
@@ -372,7 +371,16 @@ fn insert_checkpoints(cards: &mut Vec<Card>, checkpoints: Vec<CheckpointData>) {
         let pos = cards.iter().rposition(|c| {
             card_ts(c).map_or(false, |ts| ts <= cp.last_turn_ts.as_str())
         });
-        let insert_at = pos.map(|i| i + 1).unwrap_or(cards.len());
+        let mut insert_at = pos.map(|i| i + 1).unwrap_or(cards.len());
+        // Advance past ToolRound cards and any AsstMsg cards (away summary) that
+        // belong to the same turn — they have no timestamp or a ts ≤ last_turn_ts.
+        while insert_at < cards.len() {
+            match &cards[insert_at] {
+                Card::ToolRound { .. } => { insert_at += 1; }
+                Card::AsstMsg { ts, .. } if ts.as_str() <= cp.last_turn_ts.as_str() => { insert_at += 1; }
+                _ => break,
+            }
+        }
         cards.insert(insert_at, Card::Checkpoint(cp));
     }
 }
