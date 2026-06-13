@@ -27,6 +27,8 @@ enum Card {
 struct CheckpointData {
     number:              u32,
     checkpoint_id:       String,
+    commit_sha:          String,
+    repo_dir:            String,
     commit_message:      String,
     last_turn_ts:        String,
     author_name:         String,
@@ -75,8 +77,9 @@ enum AsstPart {
 enum Selectable {
     Card(usize),
     ToolHeader(usize),
-    ToolCall(usize, usize), // (card_idx, tool_idx)
+    ToolCall(usize, usize),        // (card_idx, tool_idx)
     CheckpointHeader(usize),
+    CheckpointFile(usize, usize),  // (card_idx, file_idx)
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -282,6 +285,8 @@ fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
     let Ok(conn) = crate::db::connect() else { return Vec::new(); };
     let Ok(mut stmt) = conn.prepare(
         "SELECT checkpoint_id,
+                COALESCE(commit_sha, ''),
+                COALESCE(repo_dir, ''),
                 COALESCE(commit_message, ''),
                 last_turn_ts,
                 COALESCE(author_name, ''),
@@ -306,13 +311,15 @@ fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
             row.get::<_, String>(6)?,
             row.get::<_, String>(7)?,
             row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
         ))
     });
     let Ok(rows) = rows else { return Vec::new(); };
 
     let mut out = Vec::new();
     for (seq, r) in rows.flatten().enumerate() {
-        let (checkpoint_id, commit_message, last_turn_ts,
+        let (checkpoint_id, commit_sha, repo_dir, commit_message, last_turn_ts,
              author_name, author_email, files_json, token_json, attr_json, model) = r;
         let number = (seq + 1) as u32;
 
@@ -344,6 +351,8 @@ fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
         out.push(CheckpointData {
             number: number as u32,
             checkpoint_id,
+            commit_sha,
+            repo_dir,
             commit_message,
             last_turn_ts,
             author_name,
@@ -846,22 +855,12 @@ fn render_checkpoint_collapsed(cp: &CheckpointData, term_w: usize) -> Vec<String
     vec![render_checkpoint_header(cp, false, term_w), String::new()]
 }
 
-fn render_checkpoint_expanded(cp: &CheckpointData, term_w: usize) -> Vec<String> {
+/// Stats block (tokens/attribution/author) shown inside an expanded checkpoint,
+/// before the per-file rows. Does NOT include the green header bar or "Files" label.
+fn render_checkpoint_stats(cp: &CheckpointData) -> Vec<String> {
     let t = crate::theme::get();
     let mut lines = Vec::new();
-    lines.push(render_checkpoint_header(cp, true, term_w));
-    lines.push(String::new());
 
-    // Files touched
-    if !cp.files_touched.is_empty() {
-        lines.push(format!("  \x1b[{lb}mFiles\x1b[0m", lb = t.label));
-        for f in &cp.files_touched {
-            lines.push(format!("    \x1b[{dm}m{f}\x1b[0m", dm = t.text_dim));
-        }
-        lines.push(String::new());
-    }
-
-    // Token usage
     if let Some(tu) = &cp.token_usage {
         lines.push(format!("  \x1b[{lb}mTokens\x1b[0m", lb = t.label));
         lines.push(format!(
@@ -879,7 +878,6 @@ fn render_checkpoint_expanded(cp: &CheckpointData, term_w: usize) -> Vec<String>
         lines.push(String::new());
     }
 
-    // Attribution
     if let Some(ia) = &cp.initial_attribution {
         lines.push(format!("  \x1b[{lb}mLines\x1b[0m", lb = t.label));
         let pct = format!("{:.0}%", ia.agent_percentage);
@@ -892,25 +890,86 @@ fn render_checkpoint_expanded(cp: &CheckpointData, term_w: usize) -> Vec<String>
         lines.push(String::new());
     }
 
-    // Author / model
-    let author = if !cp.author_name.is_empty() {
-        cp.author_name.clone()
-    } else if !cp.author_email.is_empty() {
-        cp.author_email.clone()
-    } else {
-        String::new()
-    };
+    let author = if !cp.author_name.is_empty() { &cp.author_name }
+                 else if !cp.author_email.is_empty() { &cp.author_email }
+                 else { "" };
     if !author.is_empty() || !cp.model.is_empty() {
-        let model_part = if !cp.model.is_empty() {
-            format!("  \x1b[{dm}m{}\x1b[0m", cp.model, dm = t.text_dim)
-        } else { String::new() };
         let author_part = if !author.is_empty() {
             format!("\x1b[{dm}m{author}\x1b[0m", dm = t.text_dim)
+        } else { String::new() };
+        let model_part = if !cp.model.is_empty() {
+            format!("  \x1b[{dm}m{}\x1b[0m", cp.model, dm = t.text_dim)
         } else { String::new() };
         lines.push(format!("  {author_part}{model_part}"));
         lines.push(String::new());
     }
 
+    lines
+}
+
+/// Find the git repo directory that contains `commit_sha`, trying `preferred`
+/// first, then falling back to all registered gossamer repos.
+fn resolve_repo_for_commit(commit_sha: &str, preferred: &str) -> Option<String> {
+    use std::process::Command;
+    let has_commit = |dir: &str| {
+        Command::new("git").args(["cat-file", "-t", commit_sha])
+            .current_dir(dir).output()
+            .map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !preferred.is_empty() && std::path::Path::new(preferred).exists() && has_commit(preferred) {
+        return Some(preferred.to_string());
+    }
+    let Ok(conn) = crate::db::connect() else { return None; };
+    let Ok(mut stmt) = conn.prepare("SELECT directory FROM repositories") else { return None; };
+    let dirs: Vec<String> = stmt.query_map([], |r| r.get(0))
+        .map(|rs| rs.flatten().collect()).unwrap_or_default();
+    for dir in dirs {
+        if has_commit(&dir) { return Some(dir); }
+    }
+    None
+}
+
+/// Fetch the diff for `file` in `commit_sha`, colorised with ANSI SGR.
+fn fetch_file_diff(commit_sha: &str, repo_dir: &str, file: &str) -> Vec<String> {
+    use std::process::Command;
+    let t = crate::theme::get();
+    if commit_sha.is_empty() {
+        return vec![format!("      \x1b[{ft}m(no commit SHA available)\x1b[0m", ft = t.text_faint)];
+    }
+    let Some(actual_dir) = resolve_repo_for_commit(commit_sha, repo_dir) else {
+        return vec![format!("      \x1b[{ft}m(commit not found in any registered repo)\x1b[0m", ft = t.text_faint)];
+    };
+    let out = Command::new("git")
+        .args(["show", commit_sha, "--", file])
+        .current_dir(&actual_dir)
+        .output();
+    let Ok(out) = out else {
+        return vec![format!("      \x1b[{ft}m(could not run git show)\x1b[0m", ft = t.text_faint)];
+    };
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut lines: Vec<String> = Vec::new();
+    let mut in_hunk = false;
+    for line in raw.lines() {
+        if line.starts_with("@@") { in_hunk = true; }
+        if !in_hunk { continue; }
+        let colored = if line.starts_with('+') && !line.starts_with("+++") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.fresh)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.error)
+        } else if line.starts_with("@@") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.label)
+        } else {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.text_dim)
+        };
+        lines.push(colored);
+        if lines.len() >= 300 {
+            lines.push(format!("      \x1b[{ft}m… truncated\x1b[0m", ft = t.text_faint));
+            break;
+        }
+    }
+    if lines.is_empty() {
+        lines.push(format!("      \x1b[{ft}m(empty diff)\x1b[0m", ft = t.text_faint));
+    }
     lines
 }
 
@@ -1302,13 +1361,14 @@ fn build_flat(
     cards: &[Card],
     term_w: usize,
     collapsed: &std::collections::HashSet<usize>,
+    expanded_files: &std::collections::HashSet<(usize, usize)>,
+    diff_cache: &std::collections::HashMap<(usize, usize), Vec<String>>,
 ) -> (Vec<(usize, String)>, Vec<Selectable>, Vec<usize>) {
     let w = term_w.saturating_sub(2);
     let mut flat: Vec<(usize, String)> = Vec::new();
     let mut selectables: Vec<Selectable> = Vec::new();
     let mut starts: Vec<usize> = Vec::new();
 
-    // Pull the agent name from the Header card so render_card can use it.
     let agent: &str = cards.iter().find_map(|c| {
         if let Card::Header { agent, .. } = c { Some(agent.as_str()) } else { None }
     }).unwrap_or("");
@@ -1321,12 +1381,10 @@ fn build_flat(
                 selectables.push(Selectable::Card(card_idx));
                 for l in render_tool_summary(parts) { flat.push((si, l)); }
             } else {
-                // Header row (collapses the round when space is pressed)
                 let si = selectables.len();
                 starts.push(flat.len());
                 selectables.push(Selectable::ToolHeader(card_idx));
                 for l in render_tool_header(parts) { flat.push((si, l)); }
-                // One selectable per individual tool call
                 for (tool_idx, part) in parts.iter().enumerate() {
                     let si = selectables.len();
                     starts.push(flat.len());
@@ -1341,11 +1399,36 @@ fn build_flat(
                 selectables.push(Selectable::Card(card_idx));
                 for l in render_checkpoint_collapsed(cp, term_w) { flat.push((si, l)); }
             } else {
-                // Header row is its own selectable; body lines belong to it too.
+                let t = crate::theme::get();
+                // CheckpointHeader owns: green bar + blank + stats + (if files) "Files" label
                 let si = selectables.len();
                 starts.push(flat.len());
                 selectables.push(Selectable::CheckpointHeader(card_idx));
-                for l in render_checkpoint_expanded(cp, term_w) { flat.push((si, l)); }
+                flat.push((si, render_checkpoint_header(cp, true, term_w)));
+                flat.push((si, String::new()));
+                for l in render_checkpoint_stats(cp) { flat.push((si, l)); }
+                if !cp.files_touched.is_empty() {
+                    flat.push((si, format!("  \x1b[{lb}mFiles\x1b[0m", lb = t.label)));
+                }
+
+                // One selectable per file
+                let n = cp.files_touched.len();
+                for (file_idx, f) in cp.files_touched.iter().enumerate() {
+                    let fsi = selectables.len();
+                    starts.push(flat.len());
+                    selectables.push(Selectable::CheckpointFile(card_idx, file_idx));
+                    let is_open = expanded_files.contains(&(card_idx, file_idx));
+                    let arrow = if is_open { "▾" } else { "▸" };
+                    flat.push((fsi, format!("    {arrow} \x1b[{dm}m{f}\x1b[0m", dm = t.text_dim)));
+                    if is_open {
+                        if let Some(diff) = diff_cache.get(&(card_idx, file_idx)) {
+                            for dl in diff { flat.push((fsi, dl.clone())); }
+                        }
+                    }
+                    if file_idx + 1 == n {
+                        flat.push((fsi, String::new())); // blank after last file
+                    }
+                }
             }
         } else {
             let si = selectables.len();
@@ -1371,7 +1454,10 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
         .filter_map(|(i, c)| if matches!(c, Card::ToolRound { .. } | Card::Checkpoint(_)) { Some(i) } else { None })
         .collect();
 
-    let (mut flat, mut selectables, mut starts) = build_flat(&cards, w, &collapsed);
+    let mut expanded_files: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut diff_cache: std::collections::HashMap<(usize, usize), Vec<String>> = std::collections::HashMap::new();
+
+    let (mut flat, mut selectables, mut starts) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
 
     let mut stdout = io::stdout();
 
@@ -1484,6 +1570,11 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                                     parts.get(*ti).map_or(String::new(), tool_call_text)
                                 } else { String::new() }
                             }
+                            Selectable::CheckpointFile(ci, fi) => {
+                                if let Card::Checkpoint(cp) = &cards[*ci] {
+                                    cp.files_touched.get(*fi).cloned().unwrap_or_default()
+                                } else { String::new() }
+                            }
                         };
                         copy_to_clipboard(&text);
                         flash = Some("  ✓ copied to clipboard  ");
@@ -1504,7 +1595,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                         };
                         if let Some((expand, card_idx, is_checkpoint)) = expand_action {
                             if expand { collapsed.remove(&card_idx); } else { collapsed.insert(card_idx); }
-                            let (nf, ns, nst) = build_flat(cards, w, &collapsed);
+                            let (nf, ns, nst) = build_flat(cards, w, &collapsed, &expanded_files, &diff_cache);
                             flat   = nf;
                             starts = nst;
                             sel = if expand {
@@ -1516,6 +1607,26 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                             } else {
                                 ns.iter().position(|s| *s == Selectable::Card(card_idx))
                             }.unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
+                            selectables = ns;
+                        } else if let Selectable::CheckpointFile(ci, fi) = &selectables[sel] {
+                            let key = (*ci, *fi);
+                            if expanded_files.contains(&key) {
+                                expanded_files.remove(&key);
+                            } else {
+                                if !diff_cache.contains_key(&key) {
+                                    if let Card::Checkpoint(cp) = &cards[*ci] {
+                                        if let Some(f) = cp.files_touched.get(*fi) {
+                                            diff_cache.insert(key, fetch_file_diff(&cp.commit_sha, &cp.repo_dir, f));
+                                        }
+                                    }
+                                }
+                                expanded_files.insert(key);
+                            }
+                            let target = Selectable::CheckpointFile(*ci, *fi);
+                            let (nf, ns, nst) = build_flat(cards, w, &collapsed, &expanded_files, &diff_cache);
+                            flat = nf; starts = nst;
+                            sel = ns.iter().position(|s| *s == target)
+                                .unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
                         } else if let Selectable::Card(ci) = &selectables[sel] {
                             match &cards[*ci] {
@@ -1551,7 +1662,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
             Ok(Event::Resize(new_w, new_h)) => {
                 w = new_w as usize;
                 h = (new_h as usize).saturating_sub(1);
-                let (nf, ns, nst) = build_flat(&cards, w, &collapsed);
+                let (nf, ns, nst) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
                 flat = nf; selectables = ns; starts = nst;
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }

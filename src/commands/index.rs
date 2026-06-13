@@ -829,7 +829,15 @@ pub(crate) fn upsert_checkpoint(
             author_email        = excluded.author_email,
             last_turn_ts        = excluded.last_turn_ts,
             jsonl_path          = excluded.jsonl_path,
-            repo_dir            = excluded.repo_dir,
+            repo_dir            = CASE
+                                       -- same non-empty sha: first indexer found it, don't overwrite
+                                       WHEN excluded.commit_sha != '' AND excluded.commit_sha = checkpoints.commit_sha
+                                            THEN checkpoints.repo_dir
+                                       -- existing row has a sha but new indexer doesn't: keep the one that knows
+                                       WHEN checkpoints.commit_sha != '' AND excluded.commit_sha = ''
+                                            THEN checkpoints.repo_dir
+                                       ELSE excluded.repo_dir
+                                  END,
             os_user             = excluded.os_user,
             commit_message      = excluded.commit_message,
             turn_id             = excluded.turn_id,
