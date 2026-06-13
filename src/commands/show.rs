@@ -694,6 +694,7 @@ fn card_text(card: &Card) -> String {
         }
         Card::Checkpoint(cp) => {
             out.push_str(&format!("[Checkpoint #{}]\n", cp.number));
+            if !cp.checkpoint_id.is_empty() { out.push_str(&format!("{}\n", cp.checkpoint_id)); }
             if !cp.commit_message.is_empty() { out.push_str(&cp.commit_message); out.push('\n'); }
             if !cp.files_touched.is_empty() {
                 out.push_str("Files:\n");
@@ -1603,7 +1604,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
