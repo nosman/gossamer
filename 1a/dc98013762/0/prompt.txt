@@ -1,0 +1,17 @@
+Next, let's flesh out the checkpoint panel a bit more. In the files section, we want to make each file expandable to show a diff view for that commit's changes. it should open and close with the right arrow key, same as all the other types of rows. You can use git show to get the changeset of the files
+
+---
+
+We're seeing just empty diffs for each file, something is wrong
+
+---
+
+Why were we using the wrong directory?
+
+---
+
+That's insane and really bad! We have already gone over and solved this issue before. Why did you reintroduce this bug?
+
+---
+
+Will this work when i'm looking at a session from a different user? If i have the repo on my machine, i should be able to see their checkpoints
