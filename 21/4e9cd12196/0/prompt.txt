@@ -1,0 +1,13 @@
+If i run the 'clear' command in claude code, is there a way from the project json files to tell that we are in a new session?
+
+---
+
+This very session has been renamed
+
+---
+
+Add a table header to the repo details sessions page, as well as the top-level sessions page
+
+---
+
+looks good but the padding is not quite right: [Image #5] the id and updated headers don't line up with their rows
