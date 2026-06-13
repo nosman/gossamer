@@ -334,7 +334,7 @@ fn draw(
     // when not invoked from inside a tracked repo).
     let any_local = sessions.iter().any(|s| local_sessions.contains(&s.session_id));
 
-    let content_h = h.saturating_sub(1);
+    let content_h = h.saturating_sub(2); // 1 header + 1 status bar
     let scroll = if sel >= content_h { sel + 1 - content_h } else { 0 };
 
     // Pre-compute column widths
@@ -343,12 +343,30 @@ fn draw(
     let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
     let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
     let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
-    let tokens_w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
+    let tokens_w = {
+        let w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
+        if w > 0 { w.max(6) } else { 0 }
+    };
 
+    // ── Header row ────────────────────────────────────────────────────────────
     execute!(stdout, cursor::MoveTo(0, 0))?;
+    {
+        let dm = t.text_dim;
+        let star_gap = if any_local { "  " } else { "" };
+        let mut hdr = format!("{star_gap}  {:<name_w$}", "session");
+        if cwd_w   > 0 { hdr.push_str(&format!("  {:<cwd_w$}",    "directory")); }
+        if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
+        if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
+        if agent_w  > 0 { hdr.push_str(&format!("  {:<agent_w$}",  "agent")); }
+        if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
+        hdr.push_str("  id        updated");
+        let display: String = hdr.chars().take(w).collect();
+        write!(stdout, "\x1b[{dm}m{display}\x1b[0m")?;
+        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+    }
 
     for row in 0..content_h {
-        execute!(stdout, cursor::MoveTo(0, row as u16))?;
+        execute!(stdout, cursor::MoveTo(0, (row + 1) as u16))?;
         let idx = scroll + row;
         if idx >= sessions.len() {
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;

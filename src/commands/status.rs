@@ -521,7 +521,24 @@ fn draw_sessions(
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
         let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
         let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
-        let tokens_w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
+        let tokens_w = {
+            let w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
+            if w > 0 { w.max(6) } else { 0 }
+        };
+
+        if row < content_h {
+            let dm = t.text_dim;
+            let mut hdr = format!("  {:<name_w$}", "session");
+            if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
+            if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
+            if agent_w  > 0 { hdr.push_str(&format!("  {:<agent_w$}",  "agent")); }
+            if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
+            hdr.push_str("  id        updated");
+            let display: String = hdr.chars().take(w).collect();
+            queue!(buf, cursor::MoveTo(0, row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+            write!(buf, "\x1b[{dm}m{display}\x1b[0m")?;
+            row += 1;
+        }
 
         for (i, s) in sessions.iter().enumerate().skip(scroll) {
             if row >= content_h { break; }
