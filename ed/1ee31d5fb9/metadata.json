@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.5.3",
+  "checkpoint_id": "ed1ee31d5fb9",
+  "strategy": "manual-commit",
+  "branch": "gossamer-cleanup",
+  "checkpoints_count": 11,
+  "files_touched": [
+    "src/commands/index.rs",
+    "src/commands/init.rs",
+    "src/commands/mod.rs",
+    "src/commands/new_session.rs",
+    "src/commands/refresh.rs",
+    "src/commands/session_list.rs",
+    "src/commands/sessions.rs",
+    "src/commands/status.rs",
+    "src/main.rs",
+    "src/parsers/claude_code.rs",
+    "src/parsers/codex.rs",
+    "src/parsers/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ed/1ee31d5fb9/0/metadata.json",
+      "transcript": "/ed/1ee31d5fb9/0/full.jsonl",
+      "content_hash": "/ed/1ee31d5fb9/0/content_hash.txt",
+      "prompt": "/ed/1ee31d5fb9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 114,
+    "cache_creation_tokens": 397194,
+    "cache_read_tokens": 8651500,
+    "output_tokens": 50054,
+    "api_call_count": 92
+  }
+}

@@ -1,0 +1,47 @@
+Let's show token usage for each session, anywhere there is a sessions table
+
+---
+
+will reindexing the existing sessions make the tokens show up?
+
+---
+
+so currently, only future sessions will start to populate tokens_used?
+
+---
+
+Ok we 100% need to handle the checkpoints the same way!!!! especially becuase the checkpoint metadata should already contain token use per session, so no need to recompute
+
+---
+
+How are you reading the checkpoint metadata in the entire/checkpoints/v1 branch?
+
+---
+
+That's not what i meant. In each checkpoint, there is a metadata.json file. This json file has a key called "token_usage". Are you using that object????
+
+---
+
+Fuckig read it yourself! Here is an example:   "token_usage": {
+    "input_tokens": 1200,
+    "cache_creation_tokens": 67967,
+    "cache_read_tokens": 1974445,
+    "output_tokens": 18195,
+    "api_call_count": 45
+  }
+
+---
+
+show token usages in a different color
+
+---
+
+There are still some sessions where i select it and it doesn't go anywhere, for example the one session here: [Image #4]
+
+---
+
+Look through the whole project and get rid of any mention of using multiple agents with gossamer. we're realistically just using claude code with this, so no need to mention any other agents. Get rid of agent selection in the wizard
+
+---
+
+Why does codex_parser still exist?
