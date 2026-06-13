@@ -28,6 +28,13 @@ pub fn connect() -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN jsonl_path TEXT", []);
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN repo_dir TEXT", []);
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN os_user TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN commit_message TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN turn_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN checkpoint_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN files_touched TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN token_usage TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN initial_attribution TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN model TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN branch TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN repo_id INTEGER", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN name_is_explicit INTEGER NOT NULL DEFAULT 0", []);

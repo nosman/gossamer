@@ -22,14 +22,17 @@ const BRIGHT_CYAN:    &str = "96";
 const BRIGHT_WHITE:   &str = "97";
 
 // Background
+const BG_DARK_GREEN:   &str = "48;5;22";  // 256-color very dark green (#005f00)
+const BG_BRIGHT_GREEN: &str = "102";      // bright/intense green background
 const BG_BRIGHT_BLACK: &str = "100"; // dark gray bg — visible selection on both dark and light
 
 // Bold + color composites (bold attribute + standard color in one SGR string)
-const BOLD_YELLOW: &str = "1;33";
-const BOLD_BLUE:   &str = "1;34";
-const BOLD_RED:    &str = "1;31";
-const BOLD_WHITE:  &str = "1;97";
-const BOLD_BLACK:  &str = "1;30";
+const BOLD_YELLOW:       &str = "1;33";
+const BOLD_BLUE:         &str = "1;34";
+const BOLD_RED:          &str = "1;31";
+const BOLD_WHITE:        &str = "1;97";
+const BOLD_BLACK:        &str = "1;30";
+const BOLD_BRIGHT_GREEN: &str = "1;92";
 
 // ── Theme struct ──────────────────────────────────────────────────────────────
 
@@ -80,6 +83,16 @@ pub struct Theme {
     /// Bold tidy panel warning title — red
     pub tidy_warn: &'static str,
 
+    // ── Checkpoint row ────────────────────────────────────────────────────────
+    /// Full-width background for checkpoint rows
+    pub checkpoint_bg:    &'static str,
+    /// "checkpoint" label text (bold, reads as light green on the bg)
+    pub checkpoint_label: &'static str,
+    /// Commit message and checkpoint number
+    pub checkpoint_text:  &'static str,
+    /// Dimmed metadata: short ID, timestamp
+    pub checkpoint_dim:   &'static str,
+
     // ── Markdown skin (crossterm Color, passed directly to MadSkin) ──────────
     pub md_code: crossterm::style::Color,
     pub md_text: crossterm::style::Color,
@@ -113,8 +126,12 @@ pub fn dark() -> Theme {
         backed_meta:    BRIGHT_BLACK,     // gray — id, timestamp
         unbacked_name:  WHITE,            // color-7 — dimmer, not backed up
         unbacked_meta:  BRIGHT_BLACK,     // gray
-        tool_ok:        MAGENTA,          // magenta — non-error tool result
-        tidy_warn:      "1;91",           // bold bright red — destructive action warning
+        tool_ok:          MAGENTA,          // magenta — non-error tool result
+        tidy_warn:        "1;91",           // bold bright red — destructive action warning
+        checkpoint_bg:    BG_DARK_GREEN,     // very dark green (#005f00) — explicit 256-color
+        checkpoint_label: BOLD_BRIGHT_GREEN, // bold bright green — "light green on dark green"
+        checkpoint_text:  BRIGHT_WHITE,      // near-white — commit message, number
+        checkpoint_dim:   WHITE,             // color-7 — short ID, timestamp
         md_code:        Color::Cyan,
         md_text:        Color::Grey,
         md_h1:          Color::Yellow,
@@ -146,8 +163,12 @@ pub fn light() -> Theme {
         backed_meta:    BRIGHT_BLACK,     // dark gray
         unbacked_name:  BRIGHT_BLACK,     // dark gray
         unbacked_meta:  BRIGHT_BLACK,
-        tool_ok:        MAGENTA,          // same
-        tidy_warn:      BOLD_RED,         // bold red
+        tool_ok:          MAGENTA,          // same
+        tidy_warn:        BOLD_RED,         // bold red
+        checkpoint_bg:    BG_BRIGHT_GREEN,   // bright green background for light terminals
+        checkpoint_label: BOLD_BLACK,       // bold black — best contrast on bright green bg
+        checkpoint_text:  BLACK,            // black — best contrast on bright green bg
+        checkpoint_dim:   BRIGHT_BLACK,     // dark gray — dimmed metadata on bright green bg
         md_code:        Color::DarkCyan,
         md_text:        Color::Black,
         md_h1:          Color::DarkBlue,
