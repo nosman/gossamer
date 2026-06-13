@@ -520,7 +520,6 @@ fn draw_sessions(
         let name_w   = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
         let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
-        let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
         let tokens_w = {
             let w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
             if w > 0 { w.max(6) } else { 0 }
@@ -531,7 +530,6 @@ fn draw_sessions(
             let mut hdr = format!("  {:<name_w$}", "session");
             if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
             if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
-            if agent_w  > 0 { hdr.push_str(&format!("  {:<agent_w$}",  "agent")); }
             if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
             hdr.push_str("  id        updated");
             let display: String = hdr.chars().take(w).collect();
@@ -581,17 +579,6 @@ fn draw_sessions(
                 let a: String = s.author.chars().take(author_w).collect();
                 let pad = " ".repeat(author_w - a.chars().count());
                 line.push_str(&format!("  \x1b[{dm}m{a}{pad}\x1b[0m", dm = t.text_dim));
-            }
-
-            if agent_w > 0 {
-                let a: String = s.agent_name.chars().take(agent_w).collect();
-                let pad = " ".repeat(agent_w - a.chars().count());
-                if s.backed_up {
-                    let col = agent_color(&s.agent_name);
-                    line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
-                } else {
-                    line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
-                }
             }
 
             if tokens_w > 0 {
@@ -680,16 +667,19 @@ fn fetch_worktrees(repo_dir: &str) -> Vec<RepoWorktree> {
 
 /// A 3-step panel drawn over the bottom of the screen. Each completed step
 /// stays visible with its confirmed value while the user fills the next one.
+/// The prompt field (step 2) wraps across PROMPT_ROWS lines.
 pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usize, h: usize) -> Option<NewSessionConfig> {
     const LABEL_W: usize = 24;
-    // Panel rows: title, blank, branch, name, prompt, blank  (6 rows + 1 status bar)
-    const PANEL_H: usize = 6;
+    const PROMPT_ROWS: usize = 3;
+    // Panel: title + blank + branch + name + PROMPT_ROWS + blank
+    const PANEL_H: usize = 4 + PROMPT_ROWS + 1;
 
     let t = crate::theme::get();
     let panel_top = h.saturating_sub(PANEL_H + 1);
+    let input_w = w.saturating_sub(LABEL_W).max(1);
 
     let mut step = 0usize; // 0=branch 1=name 2=prompt
-    let mut inputs = [String::new(), String::new(), String::new()]; // branch, name, prompt
+    let mut inputs = [String::new(), String::new(), String::new()];
 
     execute!(stdout, cursor::Show).ok();
 
@@ -706,9 +696,39 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
         let step_labels = ["  Worktree branch", "  Session name", "  Prompt"];
 
         for (i, (&row, &label)) in step_rows.iter().zip(step_labels.iter()).enumerate() {
-            execute!(stdout, cursor::MoveTo(0, row as u16)).ok();
             let lpart = format!("{label:<LABEL_W$}");
 
+            if i == 2 {
+                // Multi-row prompt area: show the tail end that fits in PROMPT_ROWS lines.
+                let max_visible = PROMPT_ROWS * input_w;
+                let chars: Vec<char> = inputs[i].chars().collect();
+                let display_start = chars.len().saturating_sub(max_visible);
+                let display_chars: Vec<char> = chars[display_start..].to_vec();
+
+                for pr in 0..PROMPT_ROWS {
+                    execute!(stdout, cursor::MoveTo(0, (row + pr) as u16)).ok();
+                    let chunk: String = display_chars.iter().skip(pr * input_w).take(input_w).collect();
+                    let indent = if pr == 0 { lpart.clone() } else { " ".repeat(LABEL_W) };
+
+                    if i < step {
+                        if pr == 0 && inputs[i].is_empty() {
+                            write!(stdout, "\x1b[{dm}m{indent}\x1b[{ft}m(skip)\x1b[0m",
+                                dm = t.text_dim, ft = t.text_faint).ok();
+                        } else {
+                            write!(stdout, "\x1b[{dm}m{indent}\x1b[{pm}m{chunk}\x1b[0m",
+                                dm = t.text_dim, pm = t.text_primary).ok();
+                        }
+                    } else if i == step {
+                        write!(stdout, "\x1b[{pm}m{indent}{chunk}\x1b[0m", pm = t.text_primary).ok();
+                    } else if pr == 0 {
+                        write!(stdout, "\x1b[{ft}m{indent}\x1b[0m", ft = t.text_faint).ok();
+                    }
+                    execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
+                }
+                continue;
+            }
+
+            execute!(stdout, cursor::MoveTo(0, row as u16)).ok();
             if i < step {
                 let v = inputs[i].trim();
                 let val = if v.is_empty() {
@@ -726,7 +746,7 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
         }
 
-        let blank2 = panel_top + 5;
+        let blank2 = panel_top + 4 + PROMPT_ROWS;
         if blank2 < h.saturating_sub(1) {
             execute!(stdout, cursor::MoveTo(0, blank2 as u16)).ok();
             execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
@@ -734,9 +754,23 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
 
         super::draw_statusbar(stdout, "  type to enter   enter: next   esc: cancel  ", w, h).ok();
 
-        let row = step_rows[step];
-        let col = (LABEL_W + inputs[step].len()).min(w.saturating_sub(1));
-        execute!(stdout, cursor::MoveTo(col as u16, row as u16)).ok();
+        // ── Position cursor ───────────────────────────────────────────────────
+        if step == 2 {
+            let max_visible = PROMPT_ROWS * input_w;
+            let display_len = inputs[step].chars().count().min(max_visible);
+            let (row_off, col) = if display_len / input_w >= PROMPT_ROWS {
+                (PROMPT_ROWS - 1, LABEL_W + input_w)
+            } else {
+                (display_len / input_w, LABEL_W + display_len % input_w)
+            };
+            execute!(stdout, cursor::MoveTo(
+                col.min(w.saturating_sub(1)) as u16,
+                (step_rows[2] + row_off) as u16,
+            )).ok();
+        } else {
+            let col = (LABEL_W + inputs[step].len()).min(w.saturating_sub(1));
+            execute!(stdout, cursor::MoveTo(col as u16, step_rows[step] as u16)).ok();
+        }
         stdout.flush().ok();
 
         // ── Handle input ──────────────────────────────────────────────────────
@@ -842,7 +876,6 @@ pub(super) fn create_worktree(repo_dir: &str, branch: &str) -> String {
     }
 }
 
-use super::agent_color;
 
 // Find which tracked repo the current directory belongs to — handles both the
 // main worktree (starts_with match) and linked worktrees (git-common-dir match).

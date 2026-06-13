@@ -342,7 +342,6 @@ fn draw(
     let cwd_w  = sessions.iter().map(|s| short_cwd(&s.cwd).chars().count()).max().unwrap_or(0);
     let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
     let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
-    let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
     let tokens_w = {
         let w = sessions.iter().map(|s| session_list::fmt_tokens(s.tokens_used).chars().count()).max().unwrap_or(0);
         if w > 0 { w.max(6) } else { 0 }
@@ -357,7 +356,6 @@ fn draw(
         if cwd_w   > 0 { hdr.push_str(&format!("  {:<cwd_w$}",    "directory")); }
         if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
         if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
-        if agent_w  > 0 { hdr.push_str(&format!("  {:<agent_w$}",  "agent")); }
         if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
         hdr.push_str("  id        updated");
         let display: String = hdr.chars().take(w).collect();
@@ -436,17 +434,6 @@ fn draw(
             line.push_str(&format!("  \x1b[{dm}m{a}{pad}\x1b[0m", dm = t.text_dim));
         }
 
-        if agent_w > 0 {
-            let a: String = s.agent_name.chars().take(agent_w).collect();
-            let pad = " ".repeat(agent_w - a.chars().count());
-            if s.backed_up {
-                let col = agent_color(&s.agent_name);
-                line.push_str(&format!("  \x1b[38;5;{col}m{a}{pad}\x1b[0m"));
-            } else {
-                line.push_str(&format!("  \x1b[{st}m{a}{pad}\x1b[0m", st = t.stale));
-            }
-        }
-
         if tokens_w > 0 {
             let tok = session_list::fmt_tokens(s.tokens_used);
             let pad = " ".repeat(tokens_w - tok.chars().count());
@@ -484,7 +471,6 @@ fn draw(
     stdout.flush()
 }
 
-use super::agent_color;
 
 fn relative_time(dt: DateTime<Utc>) -> String {
     let secs = (Utc::now() - dt).num_seconds().max(0);
