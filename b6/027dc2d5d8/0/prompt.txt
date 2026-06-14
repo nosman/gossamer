@@ -1,0 +1,17 @@
+Next issue: the active indicators on the sessions views have regressed back into dots. they used to be stars and should stay like that
+
+---
+
+hmm no wait this just means we erroneously think these sessions are *not* backed up. but they are, since we're seeing entireio checkpoints on them. Why the discrepancy?
+
+---
+
+In the sessions tables, where we show token usages, do it as a gradient where higher token counts are brighter. but make sure to respect the terminal's settings
+
+---
+
+What's the logic behind this active indicator in the repos view? [Image #1]
+
+---
+
+ahh right cool. yeah i like that better, let's use stars
