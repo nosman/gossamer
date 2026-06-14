@@ -383,7 +383,7 @@ fn draw(
             _              => t.text_dim,
         };
         let (meta_col, dot_char) = if s.backed_up {
-            (t.backed_meta, "*")
+            (t.backed_meta, "★")
         } else {
             (t.unbacked_meta, "·")
         };
@@ -437,7 +437,8 @@ fn draw(
         if tokens_w > 0 {
             let tok = session_list::fmt_tokens(s.tokens_used);
             let pad = " ".repeat(tokens_w - tok.chars().count());
-            line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim, tk = t.tool_ok));
+            let tk = session_list::token_color(s.tokens_used);
+            line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim));
         }
 
         line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));

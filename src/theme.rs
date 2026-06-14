@@ -93,6 +93,10 @@ pub struct Theme {
     /// Dimmed metadata: short ID, timestamp
     pub checkpoint_dim:   &'static str,
 
+    /// True for dark terminals, false for light. Used by callers that need to
+    /// pick gradient steps that match the terminal's brightness direction.
+    pub is_dark: bool,
+
     // ── Markdown skin (crossterm Color, passed directly to MadSkin) ──────────
     pub md_code: crossterm::style::Color,
     pub md_text: crossterm::style::Color,
@@ -132,6 +136,7 @@ pub fn dark() -> Theme {
         checkpoint_label: BOLD_BRIGHT_GREEN, // bold bright green — "light green on dark green"
         checkpoint_text:  BRIGHT_WHITE,      // near-white — commit message, number
         checkpoint_dim:   WHITE,             // color-7 — short ID, timestamp
+        is_dark: true,
         md_code:        Color::Cyan,
         md_text:        Color::Grey,
         md_h1:          Color::Yellow,
@@ -169,6 +174,7 @@ pub fn light() -> Theme {
         checkpoint_label: BOLD_BLACK,       // bold black — best contrast on bright green bg
         checkpoint_text:  BLACK,            // black — best contrast on bright green bg
         checkpoint_dim:   BRIGHT_BLACK,     // dark gray — dimmed metadata on bright green bg
+        is_dark: false,
         md_code:        Color::DarkCyan,
         md_text:        Color::Black,
         md_h1:          Color::DarkBlue,
