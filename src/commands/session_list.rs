@@ -32,6 +32,31 @@ pub struct DisplaySession {
     pub tokens_used: i64,
 }
 
+/// SGR color for a token count — a graduated sequence using standard 16-color
+/// ANSI so the terminal's own palette controls the actual RGB values.
+///
+/// Dark theme: dim → progressively brighter (more tokens = more visible).
+/// Light theme: muted → progressively darker/more saturated.
+pub fn token_color(tokens: i64) -> &'static str {
+    if crate::theme::get().is_dark {
+        match tokens {
+            t if t < 5_000   => "90",   // dim gray   — trace usage
+            t if t < 20_000  => "37",   // white      — light
+            t if t < 100_000 => "33",   // yellow     — moderate
+            t if t < 500_000 => "93",   // bright yellow — heavy
+            _                => "1;31", // bold red   — very heavy
+        }
+    } else {
+        match tokens {
+            t if t < 5_000   => "90",   // light gray — trace usage
+            t if t < 20_000  => "36",   // cyan       — light
+            t if t < 100_000 => "34",   // blue       — moderate
+            t if t < 500_000 => "35",   // magenta    — heavy
+            _                => "1;31", // bold red   — very heavy
+        }
+    }
+}
+
 /// Format a token count compactly for display (empty string for zero).
 pub fn fmt_tokens(n: i64) -> String {
     if n <= 0 { return String::new(); }
@@ -128,8 +153,8 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
     let join = "
         LEFT JOIN checkpoints c
           ON c.session_id = s.session_id
-         AND c.checkpoint_number = (
-               SELECT MIN(checkpoint_number) FROM checkpoints WHERE session_id = s.session_id
+         AND c.last_turn_ts = (
+               SELECT MIN(last_turn_ts) FROM checkpoints WHERE session_id = s.session_id
              )
     ";
     match scope {

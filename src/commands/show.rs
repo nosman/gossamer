@@ -15,12 +15,45 @@ use std::sync::OnceLock;
 // ── Data model ────────────────────────────────────────────────────────────────
 
 enum Card {
-    RepoLink  { name: String, dir: String, branch: String },
-    Header    { title: Option<String>, cwd: String, branch: String, ts: String, agent: String },
-    UserMsg   { ts: String, parts: Vec<UserPart>, author: Option<String> },
-    AsstMsg   { ts: String, parts: Vec<AsstPart> },
-    ToolRound { parts: Vec<AsstPart> },
-    System    { ts: String, subtype: String, content: String },
+    RepoLink   { name: String, dir: String, branch: String },
+    Header     { title: Option<String>, cwd: String, branch: String, ts: String, agent: String },
+    UserMsg    { ts: String, parts: Vec<UserPart>, author: Option<String> },
+    AsstMsg    { ts: String, parts: Vec<AsstPart> },
+    ToolRound  { parts: Vec<AsstPart> },
+    System     { ts: String, subtype: String, content: String },
+    Checkpoint(CheckpointData),
+}
+
+struct CheckpointData {
+    number:              u32,
+    checkpoint_id:       String,
+    commit_sha:          String,
+    repo_dir:            String,
+    commit_message:      String,
+    last_turn_ts:        String,
+    author_name:         String,
+    author_email:        String,
+    files_touched:       Vec<String>,
+    token_usage:         Option<TokenUsage>,
+    initial_attribution: Option<InitialAttribution>,
+    model:               String,
+}
+
+struct TokenUsage {
+    input_tokens:           i64,
+    cache_creation_tokens:  i64,
+    cache_read_tokens:      i64,
+    output_tokens:          i64,
+    api_call_count:         i64,
+}
+
+struct InitialAttribution {
+    human_added:         i64,
+    human_modified:      i64,
+    human_removed:       i64,
+    total_committed:     i64,
+    total_lines_changed: i64,
+    agent_percentage:    f64,
 }
 
 /// One entry per checkpoint commit, ordered oldest first. A turn with
@@ -44,7 +77,9 @@ enum AsstPart {
 enum Selectable {
     Card(usize),
     ToolHeader(usize),
-    ToolCall(usize, usize), // (card_idx, tool_idx)
+    ToolCall(usize, usize),        // (card_idx, tool_idx)
+    CheckpointHeader(usize),
+    CheckpointFile(usize, usize),  // (card_idx, file_idx)
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -77,6 +112,11 @@ pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<bool> {
     if cards.is_empty() {
         println!("No messages found.");
         return Ok(false);
+    }
+
+    let checkpoints = fetch_checkpoints(uuid);
+    if !checkpoints.is_empty() {
+        insert_checkpoints(&mut cards, checkpoints);
     }
 
     // Title fallback chain: JSONL custom-title (already set by parse) →
@@ -239,6 +279,119 @@ fn git_config_user(cwd: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn fetch_checkpoints(session_id: &str) -> Vec<CheckpointData> {
+    let Ok(conn) = crate::db::connect() else { return Vec::new(); };
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT checkpoint_id,
+                COALESCE(commit_sha, ''),
+                COALESCE(repo_dir, ''),
+                COALESCE(commit_message, ''),
+                last_turn_ts,
+                COALESCE(author_name, ''),
+                COALESCE(author_email, ''),
+                COALESCE(files_touched, '[]'),
+                COALESCE(token_usage, ''),
+                COALESCE(initial_attribution, ''),
+                COALESCE(model, '')
+           FROM checkpoints
+          WHERE session_id = ?1
+       ORDER BY last_turn_ts ASC"
+    ) else { return Vec::new(); };
+
+    let rows = stmt.query_map([session_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
+        ))
+    });
+    let Ok(rows) = rows else { return Vec::new(); };
+
+    let mut out = Vec::new();
+    for (seq, r) in rows.flatten().enumerate() {
+        let (checkpoint_id, commit_sha, repo_dir, commit_message, last_turn_ts,
+             author_name, author_email, files_json, token_json, attr_json, model) = r;
+        let number = (seq + 1) as u32;
+
+        let files_touched: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+
+        let token_usage = serde_json::from_str::<serde_json::Value>(&token_json).ok()
+            .and_then(|v| {
+                Some(TokenUsage {
+                    input_tokens:          v["input_tokens"].as_i64().unwrap_or(0),
+                    cache_creation_tokens: v["cache_creation_tokens"].as_i64().unwrap_or(0),
+                    cache_read_tokens:     v["cache_read_tokens"].as_i64().unwrap_or(0),
+                    output_tokens:         v["output_tokens"].as_i64().unwrap_or(0),
+                    api_call_count:        v["api_call_count"].as_i64().unwrap_or(0),
+                })
+            });
+
+        let initial_attribution = serde_json::from_str::<serde_json::Value>(&attr_json).ok()
+            .and_then(|v| {
+                Some(InitialAttribution {
+                    human_added:         v["human_added"].as_i64().unwrap_or(0),
+                    human_modified:      v["human_modified"].as_i64().unwrap_or(0),
+                    human_removed:       v["human_removed"].as_i64().unwrap_or(0),
+                    total_committed:     v["total_committed"].as_i64().unwrap_or(0),
+                    total_lines_changed: v["total_lines_changed"].as_i64().unwrap_or(0),
+                    agent_percentage:    v["agent_percentage"].as_f64().unwrap_or(0.0),
+                })
+            });
+
+        out.push(CheckpointData {
+            number: number as u32,
+            checkpoint_id,
+            commit_sha,
+            repo_dir,
+            commit_message,
+            last_turn_ts,
+            author_name,
+            author_email,
+            files_touched,
+            token_usage,
+            initial_attribution,
+            model,
+        });
+    }
+    out
+}
+
+fn card_ts(card: &Card) -> Option<&str> {
+    match card {
+        Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => Some(ts),
+        _ => None,
+    }
+}
+
+fn insert_checkpoints(cards: &mut Vec<Card>, checkpoints: Vec<CheckpointData>) {
+    // Process in reverse so earlier insertions don't shift later positions.
+    for cp in checkpoints.into_iter().rev() {
+        // Find the last card whose timestamp is ≤ this checkpoint's last turn.
+        let pos = cards.iter().rposition(|c| {
+            card_ts(c).map_or(false, |ts| ts <= cp.last_turn_ts.as_str())
+        });
+        let mut insert_at = pos.map(|i| i + 1).unwrap_or(cards.len());
+        // Advance past ToolRound cards and any AsstMsg cards (away summary) that
+        // belong to the same turn — they have no timestamp or a ts ≤ last_turn_ts.
+        while insert_at < cards.len() {
+            match &cards[insert_at] {
+                Card::ToolRound { .. } => { insert_at += 1; }
+                Card::AsstMsg { ts, .. } if ts.as_str() <= cp.last_turn_ts.as_str() => { insert_at += 1; }
+                _ => break,
+            }
+        }
+        cards.insert(insert_at, Card::Checkpoint(cp));
+    }
 }
 
 fn find_session(id: &str) -> Option<PathBuf> {
@@ -556,6 +709,15 @@ fn card_text(card: &Card) -> String {
                 }
             }
         }
+        Card::Checkpoint(cp) => {
+            out.push_str(&format!("[Checkpoint #{}]\n", cp.number));
+            if !cp.checkpoint_id.is_empty() { out.push_str(&format!("{}\n", cp.checkpoint_id)); }
+            if !cp.commit_message.is_empty() { out.push_str(&cp.commit_message); out.push('\n'); }
+            if !cp.files_touched.is_empty() {
+                out.push_str("Files:\n");
+                for f in &cp.files_touched { out.push_str(&format!("  {f}\n")); }
+            }
+        }
     }
     out
 }
@@ -627,6 +789,190 @@ fn render_md(text: &str, width: usize) -> Vec<String> {
 
 use super::agent_color;
 
+fn visible_width(s: &str) -> usize {
+    let mut w = 0usize;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for nc in chars.by_ref() {
+                if nc.is_ascii_alphabetic() { break; }
+            }
+        } else {
+            w += 1;
+        }
+    }
+    w
+}
+
+fn fmt_num(n: i64) -> String {
+    let s = n.abs().to_string();
+    let mut out = String::new();
+    for (i, ch) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 { out.push(','); }
+        out.push(ch);
+    }
+    if n < 0 { out.push('-'); }
+    out.chars().rev().collect()
+}
+
+fn render_checkpoint_header(cp: &CheckpointData, expanded: bool, term_w: usize) -> String {
+    let t = crate::theme::get();
+    let arrow = if expanded { "▾" } else { "▸" };
+    let short_id = if cp.checkpoint_id.len() >= 8 {
+        &cp.checkpoint_id[..8]
+    } else {
+        cp.checkpoint_id.as_str()
+    };
+    let msg = if cp.commit_message.is_empty() {
+        String::new()
+    } else {
+        format!("  {}", cp.commit_message)
+    };
+    let ts_part = if !cp.last_turn_ts.is_empty() {
+        format!("  \x1b[{cd}m{}\x1b[0m\x1b[{bg}m", rel_time(&cp.last_turn_ts),
+            cd = t.checkpoint_dim, bg = t.checkpoint_bg)
+    } else {
+        String::new()
+    };
+    let id_part = if short_id.is_empty() {
+        String::new()
+    } else {
+        format!("  \x1b[{cd}m{short_id}\x1b[0m\x1b[{bg}m",
+            cd = t.checkpoint_dim, bg = t.checkpoint_bg)
+    };
+
+    let content = format!(
+        "  {arrow} \x1b[{cl}mcheckpoint\x1b[0m\x1b[{bg}m #{}{id_part}\x1b[{ct}m{msg}\x1b[0m\x1b[{bg}m{ts_part}",
+        cp.number,
+        cl = t.checkpoint_label, bg = t.checkpoint_bg, ct = t.checkpoint_text,
+    );
+    let vis = visible_width(&content);
+    let pad = term_w.saturating_sub(vis);
+    format!("\x1b[{bg}m{content}{}\x1b[0m", " ".repeat(pad), bg = t.checkpoint_bg)
+}
+
+fn render_checkpoint_collapsed(cp: &CheckpointData, term_w: usize) -> Vec<String> {
+    vec![render_checkpoint_header(cp, false, term_w), String::new()]
+}
+
+/// Stats block (tokens/attribution/author) shown inside an expanded checkpoint,
+/// before the per-file rows. Does NOT include the green header bar or "Files" label.
+fn render_checkpoint_stats(cp: &CheckpointData) -> Vec<String> {
+    let t = crate::theme::get();
+    let mut lines = Vec::new();
+
+    if let Some(tu) = &cp.token_usage {
+        lines.push(format!("  \x1b[{lb}mTokens\x1b[0m", lb = t.label));
+        lines.push(format!(
+            "    \x1b[{pr}m{} in  \x1b[0m\x1b[{dm}m·\x1b[0m  \x1b[{pr}m{} out  \x1b[0m\x1b[{dm}m·\x1b[0m  \x1b[{pr}m{} calls\x1b[0m",
+            fmt_num(tu.input_tokens), fmt_num(tu.output_tokens), fmt_num(tu.api_call_count),
+            pr = t.text_primary, dm = t.text_dim,
+        ));
+        if tu.cache_creation_tokens > 0 || tu.cache_read_tokens > 0 {
+            lines.push(format!(
+                "    \x1b[{dm}m{} cache-new  ·  {} cache-read\x1b[0m",
+                fmt_num(tu.cache_creation_tokens), fmt_num(tu.cache_read_tokens),
+                dm = t.text_dim,
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if let Some(ia) = &cp.initial_attribution {
+        lines.push(format!("  \x1b[{lb}mLines\x1b[0m", lb = t.label));
+        let pct = format!("{:.0}%", ia.agent_percentage);
+        let human_total = ia.human_added + ia.human_modified + ia.human_removed;
+        lines.push(format!(
+            "    \x1b[{pr}magent {pct}  ({} committed)\x1b[0m  \x1b[{dm}m{} total changed  ·  {} human\x1b[0m",
+            fmt_num(ia.total_committed), fmt_num(ia.total_lines_changed), fmt_num(human_total),
+            pr = t.text_primary, dm = t.text_dim,
+        ));
+        lines.push(String::new());
+    }
+
+    let author = if !cp.author_name.is_empty() { &cp.author_name }
+                 else if !cp.author_email.is_empty() { &cp.author_email }
+                 else { "" };
+    if !author.is_empty() || !cp.model.is_empty() {
+        let author_part = if !author.is_empty() {
+            format!("\x1b[{dm}m{author}\x1b[0m", dm = t.text_dim)
+        } else { String::new() };
+        let model_part = if !cp.model.is_empty() {
+            format!("  \x1b[{dm}m{}\x1b[0m", cp.model, dm = t.text_dim)
+        } else { String::new() };
+        lines.push(format!("  {author_part}{model_part}"));
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Find the git repo directory that contains `commit_sha`, trying `preferred`
+/// first, then falling back to all registered gossamer repos.
+fn resolve_repo_for_commit(commit_sha: &str, preferred: &str) -> Option<String> {
+    use std::process::Command;
+    let has_commit = |dir: &str| {
+        Command::new("git").args(["cat-file", "-t", commit_sha])
+            .current_dir(dir).output()
+            .map(|o| o.status.success()).unwrap_or(false)
+    };
+    if !preferred.is_empty() && std::path::Path::new(preferred).exists() && has_commit(preferred) {
+        return Some(preferred.to_string());
+    }
+    let Ok(conn) = crate::db::connect() else { return None; };
+    let Ok(mut stmt) = conn.prepare("SELECT directory FROM repositories") else { return None; };
+    let dirs: Vec<String> = stmt.query_map([], |r| r.get(0))
+        .map(|rs| rs.flatten().collect()).unwrap_or_default();
+    for dir in dirs {
+        if has_commit(&dir) { return Some(dir); }
+    }
+    None
+}
+
+/// Fetch the diff for `file` in `commit_sha`, colorised with ANSI SGR.
+fn fetch_file_diff(commit_sha: &str, repo_dir: &str, file: &str) -> Vec<String> {
+    use std::process::Command;
+    let t = crate::theme::get();
+    if commit_sha.is_empty() {
+        return vec![format!("      \x1b[{ft}m(no commit SHA available)\x1b[0m", ft = t.text_faint)];
+    }
+    let Some(actual_dir) = resolve_repo_for_commit(commit_sha, repo_dir) else {
+        return vec![format!("      \x1b[{ft}m(commit not found in any registered repo)\x1b[0m", ft = t.text_faint)];
+    };
+    let out = Command::new("git")
+        .args(["show", commit_sha, "--", file])
+        .current_dir(&actual_dir)
+        .output();
+    let Ok(out) = out else {
+        return vec![format!("      \x1b[{ft}m(could not run git show)\x1b[0m", ft = t.text_faint)];
+    };
+    let raw = String::from_utf8_lossy(&out.stdout);
+    let mut lines: Vec<String> = Vec::new();
+    let mut in_hunk = false;
+    for line in raw.lines() {
+        if line.starts_with("@@") { in_hunk = true; }
+        if !in_hunk { continue; }
+        let colored = if line.starts_with('+') && !line.starts_with("+++") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.fresh)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.error)
+        } else if line.starts_with("@@") {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.label)
+        } else {
+            format!("      \x1b[{c}m{line}\x1b[0m", c = t.text_dim)
+        };
+        lines.push(colored);
+        if lines.len() >= 300 {
+            lines.push(format!("      \x1b[{ft}m… truncated\x1b[0m", ft = t.text_faint));
+            break;
+        }
+    }
+    if lines.is_empty() {
+        lines.push(format!("      \x1b[{ft}m(empty diff)\x1b[0m", ft = t.text_faint));
+    }
+    lines
+}
+
 fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
     let th = crate::theme::get();
     let mut lines: Vec<String> = Vec::new();
@@ -666,9 +1012,10 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
         }
         Card::UserMsg { ts, parts, author } => {
             let label = author.as_deref().unwrap_or("user");
+            let user_col = super::author_color(label);
             lines.push(format!(
-                "\x1b[1;{fr}m── {label}  \x1b[0m\x1b[{dm}m{}\x1b[0m",
-                rel_time(ts), fr = th.fresh, dm = th.text_dim,
+                "\x1b[1;38;5;{user_col}m── {label}  \x1b[0m\x1b[{dm}m{}\x1b[0m",
+                rel_time(ts), dm = th.text_dim,
             ));
             for part in parts {
                 match part {
@@ -730,7 +1077,7 @@ fn render_card(card: &Card, width: usize, agent: &str) -> Vec<String> {
                 }
             }
         }
-        Card::ToolRound { .. } => {} // handled in build_flat
+        Card::ToolRound { .. } | Card::Checkpoint(_) => {} // handled in build_flat
     }
 
     lines.push(String::new());
@@ -1014,13 +1361,14 @@ fn build_flat(
     cards: &[Card],
     term_w: usize,
     collapsed: &std::collections::HashSet<usize>,
+    expanded_files: &std::collections::HashSet<(usize, usize)>,
+    diff_cache: &std::collections::HashMap<(usize, usize), Vec<String>>,
 ) -> (Vec<(usize, String)>, Vec<Selectable>, Vec<usize>) {
     let w = term_w.saturating_sub(2);
     let mut flat: Vec<(usize, String)> = Vec::new();
     let mut selectables: Vec<Selectable> = Vec::new();
     let mut starts: Vec<usize> = Vec::new();
 
-    // Pull the agent name from the Header card so render_card can use it.
     let agent: &str = cards.iter().find_map(|c| {
         if let Card::Header { agent, .. } = c { Some(agent.as_str()) } else { None }
     }).unwrap_or("");
@@ -1033,17 +1381,53 @@ fn build_flat(
                 selectables.push(Selectable::Card(card_idx));
                 for l in render_tool_summary(parts) { flat.push((si, l)); }
             } else {
-                // Header row (collapses the round when space is pressed)
                 let si = selectables.len();
                 starts.push(flat.len());
                 selectables.push(Selectable::ToolHeader(card_idx));
                 for l in render_tool_header(parts) { flat.push((si, l)); }
-                // One selectable per individual tool call
                 for (tool_idx, part) in parts.iter().enumerate() {
                     let si = selectables.len();
                     starts.push(flat.len());
                     selectables.push(Selectable::ToolCall(card_idx, tool_idx));
                     for l in render_one_tool_call(part, w) { flat.push((si, l)); }
+                }
+            }
+        } else if let Card::Checkpoint(cp) = card {
+            if collapsed.contains(&card_idx) {
+                let si = selectables.len();
+                starts.push(flat.len());
+                selectables.push(Selectable::Card(card_idx));
+                for l in render_checkpoint_collapsed(cp, term_w) { flat.push((si, l)); }
+            } else {
+                let t = crate::theme::get();
+                // CheckpointHeader owns: green bar + blank + stats + (if files) "Files" label
+                let si = selectables.len();
+                starts.push(flat.len());
+                selectables.push(Selectable::CheckpointHeader(card_idx));
+                flat.push((si, render_checkpoint_header(cp, true, term_w)));
+                flat.push((si, String::new()));
+                for l in render_checkpoint_stats(cp) { flat.push((si, l)); }
+                if !cp.files_touched.is_empty() {
+                    flat.push((si, format!("  \x1b[{lb}mFiles\x1b[0m", lb = t.label)));
+                }
+
+                // One selectable per file
+                let n = cp.files_touched.len();
+                for (file_idx, f) in cp.files_touched.iter().enumerate() {
+                    let fsi = selectables.len();
+                    starts.push(flat.len());
+                    selectables.push(Selectable::CheckpointFile(card_idx, file_idx));
+                    let is_open = expanded_files.contains(&(card_idx, file_idx));
+                    let arrow = if is_open { "▾" } else { "▸" };
+                    flat.push((fsi, format!("    {arrow} \x1b[{dm}m{f}\x1b[0m", dm = t.text_dim)));
+                    if is_open {
+                        if let Some(diff) = diff_cache.get(&(card_idx, file_idx)) {
+                            for dl in diff { flat.push((fsi, dl.clone())); }
+                        }
+                    }
+                    if file_idx + 1 == n {
+                        flat.push((fsi, String::new())); // blank after last file
+                    }
                 }
             }
         } else {
@@ -1067,10 +1451,13 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
     let mut h = (term_h as usize).saturating_sub(1);
 
     let mut collapsed: std::collections::HashSet<usize> = cards.iter().enumerate()
-        .filter_map(|(i, c)| if matches!(c, Card::ToolRound { .. }) { Some(i) } else { None })
+        .filter_map(|(i, c)| if matches!(c, Card::ToolRound { .. } | Card::Checkpoint(_)) { Some(i) } else { None })
         .collect();
 
-    let (mut flat, mut selectables, mut starts) = build_flat(&cards, w, &collapsed);
+    let mut expanded_files: std::collections::HashSet<(usize, usize)> = std::collections::HashSet::new();
+    let mut diff_cache: std::collections::HashMap<(usize, usize), Vec<String>> = std::collections::HashMap::new();
+
+    let (mut flat, mut selectables, mut starts) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
 
     let mut stdout = io::stdout();
 
@@ -1142,6 +1529,28 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                     }
                     (KeyCode::Char('g'), _) => { sel = 0; }
                     (KeyCode::Char('G'), _) => { sel = selectables.len().saturating_sub(1); }
+
+                    (KeyCode::Char(']'), _) => {
+                        let is_cp = |s: &Selectable| match s {
+                            Selectable::Card(ci) => matches!(&cards[*ci], Card::Checkpoint(_)),
+                            Selectable::CheckpointHeader(..) => true,
+                            _ => false,
+                        };
+                        if let Some(i) = selectables.iter().enumerate().skip(sel + 1).find(|(_, s)| is_cp(s)).map(|(i, _)| i) {
+                            sel = i;
+                        }
+                    }
+                    (KeyCode::Char('['), _) => {
+                        let is_cp = |s: &Selectable| match s {
+                            Selectable::Card(ci) => matches!(&cards[*ci], Card::Checkpoint(_)),
+                            Selectable::CheckpointHeader(..) => true,
+                            _ => false,
+                        };
+                        if let Some(i) = selectables.iter().enumerate().take(sel).rfind(|(_, s)| is_cp(s)).map(|(i, _)| i) {
+                            sel = i;
+                        }
+                    }
+
                     (KeyCode::Char('u'), _) | (KeyCode::PageUp, _) => {
                         scroll = scroll.saturating_sub(h / 2);
                         sel = flat[scroll].0;
@@ -1153,11 +1562,17 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
 
                     (KeyCode::Char('y'), _) | (KeyCode::Char('c'), _) => {
                         let text = match &selectables[sel] {
-                            Selectable::Card(ci)         => card_text(&cards[*ci]),
-                            Selectable::ToolHeader(ci)   => card_text(&cards[*ci]),
+                            Selectable::Card(ci)             => card_text(&cards[*ci]),
+                            Selectable::ToolHeader(ci)       => card_text(&cards[*ci]),
+                            Selectable::CheckpointHeader(ci) => card_text(&cards[*ci]),
                             Selectable::ToolCall(ci, ti) => {
                                 if let Card::ToolRound { parts } = &cards[*ci] {
                                     parts.get(*ti).map_or(String::new(), tool_call_text)
+                                } else { String::new() }
+                            }
+                            Selectable::CheckpointFile(ci, fi) => {
+                                if let Card::Checkpoint(cp) = &cards[*ci] {
+                                    cp.files_touched.get(*fi).cloned().unwrap_or_default()
                                 } else { String::new() }
                             }
                         };
@@ -1165,25 +1580,53 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                         flash = Some("  ✓ copied to clipboard  ");
                     }
 
-                    // Space/Right/Enter: expand ToolRound, collapse via header, or navigate
+                    // Space/Right/Enter: expand ToolRound/Checkpoint, collapse via header, or navigate
                     (KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter, _) => {
                         let expand_action = match &selectables[sel] {
                             Selectable::Card(ci) if matches!(&cards[*ci], Card::ToolRound { .. }) => {
-                                Some((true, *ci))
+                                Some((true, *ci, false))
                             }
-                            Selectable::ToolHeader(ci) => Some((false, *ci)),
+                            Selectable::Card(ci) if matches!(&cards[*ci], Card::Checkpoint(_)) => {
+                                Some((true, *ci, true))
+                            }
+                            Selectable::ToolHeader(ci) => Some((false, *ci, false)),
+                            Selectable::CheckpointHeader(ci) => Some((false, *ci, true)),
                             _ => None,
                         };
-                        if let Some((expand, card_idx)) = expand_action {
+                        if let Some((expand, card_idx, is_checkpoint)) = expand_action {
                             if expand { collapsed.remove(&card_idx); } else { collapsed.insert(card_idx); }
-                            let (nf, ns, nst) = build_flat(cards, w, &collapsed);
+                            let (nf, ns, nst) = build_flat(cards, w, &collapsed, &expanded_files, &diff_cache);
                             flat   = nf;
                             starts = nst;
                             sel = if expand {
-                                ns.iter().position(|s| *s == Selectable::ToolHeader(card_idx))
+                                if is_checkpoint {
+                                    ns.iter().position(|s| *s == Selectable::CheckpointHeader(card_idx))
+                                } else {
+                                    ns.iter().position(|s| *s == Selectable::ToolHeader(card_idx))
+                                }
                             } else {
                                 ns.iter().position(|s| *s == Selectable::Card(card_idx))
                             }.unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
+                            selectables = ns;
+                        } else if let Selectable::CheckpointFile(ci, fi) = &selectables[sel] {
+                            let key = (*ci, *fi);
+                            if expanded_files.contains(&key) {
+                                expanded_files.remove(&key);
+                            } else {
+                                if !diff_cache.contains_key(&key) {
+                                    if let Card::Checkpoint(cp) = &cards[*ci] {
+                                        if let Some(f) = cp.files_touched.get(*fi) {
+                                            diff_cache.insert(key, fetch_file_diff(&cp.commit_sha, &cp.repo_dir, f));
+                                        }
+                                    }
+                                }
+                                expanded_files.insert(key);
+                            }
+                            let target = Selectable::CheckpointFile(*ci, *fi);
+                            let (nf, ns, nst) = build_flat(cards, w, &collapsed, &expanded_files, &diff_cache);
+                            flat = nf; starts = nst;
+                            sel = ns.iter().position(|s| *s == target)
+                                .unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
                         } else if let Selectable::Card(ci) = &selectables[sel] {
                             match &cards[*ci] {
@@ -1219,7 +1662,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
             Ok(Event::Resize(new_w, new_h)) => {
                 w = new_w as usize;
                 h = (new_h as usize).saturating_sub(1);
-                let (nf, ns, nst) = build_flat(&cards, w, &collapsed);
+                let (nf, ns, nst) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
                 flat = nf; selectables = ns; starts = nst;
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
@@ -1280,7 +1723,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {

@@ -28,6 +28,18 @@ pub fn connect() -> Result<Connection> {
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN jsonl_path TEXT", []);
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN repo_dir TEXT", []);
     let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN os_user TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN commit_message TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN turn_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN checkpoint_id TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN files_touched TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN token_usage TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN initial_attribution TEXT", []);
+    let _ = conn.execute("ALTER TABLE checkpoints ADD COLUMN model TEXT", []);
+
+    // Migrate checkpoints PK from (session_id, checkpoint_number) → (session_id, checkpoint_id).
+    // The old per-directory sequence number (always 0 for one-commit-per-checkpoint repos)
+    // caused collisions when a session had multiple checkpoint commits.
+    migrate_checkpoints_pk(&conn);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN branch TEXT", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN repo_id INTEGER", []);
     let _ = conn.execute("ALTER TABLE sessions ADD COLUMN name_is_explicit INTEGER NOT NULL DEFAULT 0", []);
@@ -57,15 +69,22 @@ pub fn connect() -> Result<Connection> {
             data       TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS checkpoints (
-            session_id        TEXT NOT NULL,
-            checkpoint_number INTEGER NOT NULL,
-            commit_sha        TEXT NOT NULL,
-            author_name       TEXT NOT NULL,
-            author_email      TEXT NOT NULL,
-            last_turn_ts      TEXT NOT NULL,
-            jsonl_path        TEXT,
-            repo_dir          TEXT,
-            PRIMARY KEY (session_id, checkpoint_number)
+            session_id          TEXT NOT NULL,
+            checkpoint_id       TEXT NOT NULL DEFAULT '',
+            commit_sha          TEXT NOT NULL DEFAULT '',
+            author_name         TEXT NOT NULL DEFAULT '',
+            author_email        TEXT NOT NULL DEFAULT '',
+            last_turn_ts        TEXT NOT NULL DEFAULT '',
+            jsonl_path          TEXT,
+            repo_dir            TEXT,
+            os_user             TEXT,
+            commit_message      TEXT,
+            turn_id             TEXT,
+            files_touched       TEXT,
+            token_usage         TEXT,
+            initial_attribution TEXT,
+            model               TEXT,
+            PRIMARY KEY (session_id, checkpoint_id)
         );
         CREATE INDEX IF NOT EXISTS checkpoints_session_idx
             ON checkpoints (session_id, last_turn_ts);
@@ -81,6 +100,57 @@ pub fn connect() -> Result<Connection> {
 /// `/Users/stsoucas/cosmos/cosmos-graphql` clone). Mirrors steps 1 and 1b of
 /// `index::RepoResolver` but skips the git-remote subprocess — the migration
 /// runs on every connect and must stay cheap.
+fn migrate_checkpoints_pk(conn: &Connection) {
+    // Only run if the table still uses the old (session_id, checkpoint_number) primary key.
+    let schema: String = conn.query_row(
+        "SELECT COALESCE(sql,'') FROM sqlite_master WHERE type='table' AND name='checkpoints'",
+        [], |r| r.get(0),
+    ).unwrap_or_default();
+
+    // New schema has checkpoint_id as NOT NULL in the PK; old one has checkpoint_number as PK.
+    if !schema.contains("PRIMARY KEY (session_id, checkpoint_number)") { return; }
+
+    let _ = conn.execute_batch("
+        CREATE TABLE IF NOT EXISTS checkpoints_new (
+            session_id          TEXT NOT NULL,
+            checkpoint_id       TEXT NOT NULL DEFAULT '',
+            commit_sha          TEXT NOT NULL DEFAULT '',
+            author_name         TEXT NOT NULL DEFAULT '',
+            author_email        TEXT NOT NULL DEFAULT '',
+            last_turn_ts        TEXT NOT NULL DEFAULT '',
+            jsonl_path          TEXT,
+            repo_dir            TEXT,
+            os_user             TEXT,
+            commit_message      TEXT,
+            turn_id             TEXT,
+            files_touched       TEXT,
+            token_usage         TEXT,
+            initial_attribution TEXT,
+            model               TEXT,
+            PRIMARY KEY (session_id, checkpoint_id)
+        );
+        INSERT OR IGNORE INTO checkpoints_new
+            SELECT
+                session_id,
+                CASE WHEN checkpoint_id IS NOT NULL AND checkpoint_id != ''
+                     THEN checkpoint_id
+                     ELSE 'legacy-' || CAST(checkpoint_number AS TEXT)
+                END,
+                COALESCE(commit_sha,   ''),
+                COALESCE(author_name,  ''),
+                COALESCE(author_email, ''),
+                COALESCE(last_turn_ts, ''),
+                jsonl_path, repo_dir, os_user,
+                commit_message, turn_id, files_touched, token_usage,
+                initial_attribution, model
+            FROM checkpoints;
+        DROP TABLE checkpoints;
+        ALTER TABLE checkpoints_new RENAME TO checkpoints;
+        CREATE INDEX IF NOT EXISTS checkpoints_session_idx
+            ON checkpoints (session_id, last_turn_ts);
+    ");
+}
+
 fn correct_session_repo_attribution(conn: &Connection) {
     let repos: Vec<(i64, String)> = match conn.prepare("SELECT id, directory FROM repositories") {
         Ok(mut stmt) => stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))

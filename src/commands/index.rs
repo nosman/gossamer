@@ -211,6 +211,14 @@ struct PendingCheckpoint {
     last_turn_ts: String,
     os_user: Option<String>,
     direct: Option<CommitAuthor>,
+    // fields from metadata.json
+    branch: String,
+    turn_id: String,
+    checkpoint_id: String,
+    files_touched_json: String,
+    token_usage_json: String,
+    initial_attribution_json: String,
+    model: String,
 }
 
 /// Walk ~/.claude/projects/**/*.jsonl and upsert any session whose UUID
@@ -419,6 +427,26 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             os_user_authors.entry(u.clone()).or_insert_with(|| a.clone());
         }
 
+        #[derive(serde::Deserialize, Default)]
+        struct MetadataExtra {
+            turn_id: Option<String>,
+            checkpoint_id: Option<String>,
+            files_touched: Option<Vec<String>>,
+            token_usage: Option<serde_json::Value>,
+            initial_attribution: Option<serde_json::Value>,
+            model: Option<String>,
+        }
+        let extra: MetadataExtra = serde_json::from_slice(&meta_bytes).unwrap_or_default();
+        let files_touched_json = extra.files_touched.as_deref()
+            .map(|v| serde_json::to_string(v).unwrap_or_default())
+            .unwrap_or_default();
+        let token_usage_json = extra.token_usage
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+        let initial_attribution_json = extra.initial_attribution
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
         pending.push(PendingCheckpoint {
             session_id: parsed.session_id,
             checkpoint_number,
@@ -426,10 +454,29 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             last_turn_ts: parsed.updated_at,
             os_user,
             direct,
+            branch: parsed.branch,
+            turn_id: extra.turn_id.unwrap_or_default(),
+            checkpoint_id: extra.checkpoint_id.unwrap_or_default(),
+            files_touched_json,
+            token_usage_json,
+            initial_attribution_json,
+            model: extra.model.unwrap_or_default(),
         });
     }
 
     let mut count = pending.len();
+
+    // Build checkpoint_id → (commit_sha, commit_message) by walking each unique
+    // branch once. A single git-log call per branch covers all checkpoints on it.
+    let mut cp_commit_map: HashMap<String, (String, String)> = HashMap::new();
+    {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for p in &pending {
+            if !p.branch.is_empty() && seen.insert(p.branch.clone()) {
+                cp_commit_map.extend(build_branch_checkpoint_map(repo_dir, &p.branch));
+            }
+        }
+    }
 
     // Pass 2: resolve authors and persist. A merge-only session inherits
     // the author we learned from another session sharing its os_user.
@@ -438,9 +485,24 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
             p.os_user.as_ref().and_then(|u| os_user_authors.get(u).cloned())
         });
         let os_user_str = p.os_user.unwrap_or_default();
-        upsert_checkpoint(conn, &p.session_id, p.checkpoint_number,
-                          author.as_ref(), &p.last_turn_ts,
-                          &p.jsonl_path, repo_dir, &os_user_str)?;
+
+        // Prefer the working-branch commit SHA; fall back to checkpoint-branch SHA.
+        let (branch_sha, commit_message) = cp_commit_map
+            .get(&p.checkpoint_id)
+            .map(|(s, m)| (s.as_str(), m.as_str()))
+            .unwrap_or(("", ""));
+        let effective_sha = if !branch_sha.is_empty() {
+            branch_sha
+        } else {
+            author.as_ref().map(|a| a.sha.as_str()).unwrap_or("")
+        };
+
+        upsert_checkpoint(conn, &p.session_id,
+                          effective_sha, author.as_ref(), &p.last_turn_ts,
+                          &p.jsonl_path, repo_dir, &os_user_str,
+                          commit_message, &p.turn_id, &p.checkpoint_id,
+                          &p.files_touched_json, &p.token_usage_json,
+                          &p.initial_attribution_json, &p.model)?;
     }
 
     // Save commit watermark so `gossamer refresh` knows where to start next time.
@@ -652,8 +714,8 @@ pub(crate) fn build_commit_authors(repo_dir: &str) -> Result<HashMap<String, Com
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("__COMMIT__\t") {
             let mut parts = rest.splitn(3, '\t');
-            let sha = parts.next().unwrap_or("").to_string();
-            let name = parts.next().unwrap_or("").to_string();
+            let sha   = parts.next().unwrap_or("").to_string();
+            let name  = parts.next().unwrap_or("").to_string();
             let email = parts.next().unwrap_or("").to_string();
             current = Some(CommitAuthor { sha, name, email });
             continue;
@@ -672,42 +734,133 @@ pub(crate) fn checkpoint_number_from_path(meta_path: &str) -> Option<u32> {
     meta_path.split('/').nth(2)?.parse().ok()
 }
 
+/// Walk every commit on `branch` once, extract commits that have an
+/// `Entire-Checkpoint: <id>` trailer line, and return a map from
+/// checkpoint_id → (commit_sha, commit_message) where commit_message is the
+/// full commit body with the trailer line stripped.
+fn build_branch_checkpoint_map(repo_dir: &str, branch: &str) -> HashMap<String, (String, String)> {
+    let out = Command::new("git")
+        .args(["log", branch, "--format=--GOSSAMER--%n%H%n%B"])
+        .current_dir(repo_dir)
+        .output();
+    let Ok(out) = out else { return HashMap::new(); };
+    if !out.status.success() { return HashMap::new(); }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut map = HashMap::new();
+    let mut sha = String::new();
+    let mut body: Vec<&str> = Vec::new();
+    let mut phase = 0u8; // 0=pre, 1=sha, 2=body
+
+    for line in text.lines() {
+        if line == "--GOSSAMER--" {
+            if phase == 2 && !sha.is_empty() {
+                if let Some((id, msg)) = extract_checkpoint_commit(&body) {
+                    map.insert(id, (sha.clone(), msg));
+                }
+            }
+            sha.clear();
+            body.clear();
+            phase = 1;
+        } else if phase == 1 {
+            sha = line.to_string();
+            phase = 2;
+        } else if phase == 2 {
+            body.push(line);
+        }
+    }
+    if phase == 2 && !sha.is_empty() {
+        if let Some((id, msg)) = extract_checkpoint_commit(&body) {
+            map.insert(id, (sha, msg));
+        }
+    }
+    map
+}
+
+/// Given the lines of a commit body, extract the `Entire-Checkpoint: <id>`
+/// trailer and return `(checkpoint_id, message_without_trailer)`.
+fn extract_checkpoint_commit(body: &[&str]) -> Option<(String, String)> {
+    let trailer_idx = body.iter().position(|l| l.starts_with("Entire-Checkpoint: "))?;
+    let cp_id = body[trailer_idx]["Entire-Checkpoint: ".len()..].trim().to_string();
+    if cp_id.is_empty() { return None; }
+
+    // Message = every line except the trailer, trailing blanks removed.
+    let lines: Vec<&str> = body.iter().enumerate()
+        .filter(|&(i, _)| i != trailer_idx)
+        .map(|(_, l)| *l)
+        .collect();
+    let end = lines.iter().rposition(|l| !l.trim().is_empty())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let msg = lines[..end].join("\n");
+    Some((cp_id, msg))
+}
+
 pub(crate) fn upsert_checkpoint(
     conn: &rusqlite::Connection,
     session_id: &str,
-    checkpoint_number: u32,
+    commit_sha: &str,
     author: Option<&CommitAuthor>,
     last_turn_ts: &str,
     jsonl_path: &str,
     repo_dir: &str,
     os_user: &str,
+    commit_message: &str,
+    turn_id: &str,
+    checkpoint_id: &str,
+    files_touched: &str,
+    token_usage: &str,
+    initial_attribution: &str,
+    model: &str,
 ) -> Result<()> {
-    let (sha, name, email) = author
-        .map(|a| (a.sha.as_str(), a.name.as_str(), a.email.as_str()))
-        .unwrap_or(("", "", ""));
+    let (name, email) = author
+        .map(|a| (a.name.as_str(), a.email.as_str()))
+        .unwrap_or(("", ""));
     conn.execute(
         "INSERT INTO checkpoints
-            (session_id, checkpoint_number, commit_sha, author_name, author_email,
-             last_turn_ts, jsonl_path, repo_dir, os_user)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(session_id, checkpoint_number) DO UPDATE SET
-            commit_sha   = excluded.commit_sha,
-            author_name  = excluded.author_name,
-            author_email = excluded.author_email,
-            last_turn_ts = excluded.last_turn_ts,
-            jsonl_path   = excluded.jsonl_path,
-            repo_dir     = excluded.repo_dir,
-            os_user      = excluded.os_user",
+            (session_id, checkpoint_id, commit_sha, author_name, author_email,
+             last_turn_ts, jsonl_path, repo_dir, os_user,
+             commit_message, turn_id, files_touched, token_usage,
+             initial_attribution, model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT(session_id, checkpoint_id) DO UPDATE SET
+            commit_sha          = excluded.commit_sha,
+            author_name         = excluded.author_name,
+            author_email        = excluded.author_email,
+            last_turn_ts        = excluded.last_turn_ts,
+            jsonl_path          = excluded.jsonl_path,
+            repo_dir            = CASE
+                                       -- same non-empty sha: first indexer found it, don't overwrite
+                                       WHEN excluded.commit_sha != '' AND excluded.commit_sha = checkpoints.commit_sha
+                                            THEN checkpoints.repo_dir
+                                       -- existing row has a sha but new indexer doesn't: keep the one that knows
+                                       WHEN checkpoints.commit_sha != '' AND excluded.commit_sha = ''
+                                            THEN checkpoints.repo_dir
+                                       ELSE excluded.repo_dir
+                                  END,
+            os_user             = excluded.os_user,
+            commit_message      = excluded.commit_message,
+            turn_id             = excluded.turn_id,
+            files_touched       = excluded.files_touched,
+            token_usage         = excluded.token_usage,
+            initial_attribution = excluded.initial_attribution,
+            model               = excluded.model",
         rusqlite::params![
             session_id,
-            checkpoint_number as i64,
-            sha,
+            checkpoint_id,
+            commit_sha,
             name,
             email,
             last_turn_ts,
             jsonl_path,
             repo_dir,
             os_user,
+            commit_message,
+            turn_id,
+            files_touched,
+            token_usage,
+            initial_attribution,
+            model,
         ],
     )?;
     Ok(())

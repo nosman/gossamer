@@ -426,12 +426,16 @@ fn draw_repos(
 
         let is_sel = i == sel;
         let is_cur = current_repo_dir == Some(repo.directory.as_str());
-        let dot_col = if is_cur { t.fresh } else { t.text_dim };
+        let star = if is_cur {
+            format!("\x1b[{}m★\x1b[0m", t.fresh)
+        } else {
+            " ".to_string()
+        };
 
         let name_padded = format!("{:<name_w$}", repo.name);
         let dir_padded  = format!("{:<dir_w$}",  repo.directory);
         let line = format!(
-            "\x1b[{dot_col}m*\x1b[0m \x1b[{pm}m{name_padded}\x1b[0m  \x1b[{dm}m{dir_padded}  {}\x1b[0m",
+            "{star} \x1b[{pm}m{name_padded}\x1b[0m  \x1b[{dm}m{dir_padded}  {}\x1b[0m",
             repo.remote, pm = t.text_primary, dm = t.text_dim,
         );
 
@@ -553,7 +557,7 @@ fn draw_sessions(
             };
 
             let (meta_col, dot_char) = if s.backed_up {
-                (t.backed_meta, "*")
+                (t.backed_meta, "★")
             } else {
                 (t.unbacked_meta, "·")
             };
@@ -584,7 +588,8 @@ fn draw_sessions(
             if tokens_w > 0 {
                 let tok = session_list::fmt_tokens(s.tokens_used);
                 let pad = " ".repeat(tokens_w - tok.chars().count());
-                line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim, tk = t.tool_ok));
+                let tk = session_list::token_color(s.tokens_used);
+                line.push_str(&format!("  \x1b[{dm}m{pad}\x1b[{tk}m{tok}\x1b[0m", dm = t.text_dim));
             }
 
             line.push_str(&format!("  \x1b[{meta_col}m{id_short}  {ts}\x1b[0m"));
