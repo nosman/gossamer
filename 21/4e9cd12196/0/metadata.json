@@ -23,6 +23,63 @@
   "session_metrics": {
     "turn_count": 2
   },
+  "summary": {
+    "intent": "Add token usage display to all session list TUI views in the Gossamer CLI tool, remove all multi-agent support (hardcode Claude Code), and add table headers to both session list views.",
+    "outcome": "Token counts are now displayed in magenta in both TUI views, populated from metadata.json's token_usage field for checkpointed sessions and from JSONL summation for shadow sessions; reindexing now backfills the DB. All multi-agent code was removed, codex parser deleted, and table headers with correct column alignment were added to both session views.",
+    "learnings": {
+      "repo": [
+        "Gossamer reads checkpoint data via `git show entire/checkpoints/v1:<path>` — no working tree checkout, reads straight from git object store",
+        "Each checkpoint has a metadata.json with token_usage: { input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, api_call_count } — use this instead of summing JSONL lines",
+        "Shadow branches (entire/<hash>-<id>) have no metadata.json, only JSONL — token counting must sum output_tokens from assistant turns in the JSONL",
+        "upsert_session uses MAX(existing, new) for tokens_used on conflict, so later checkpoints with more turns always win",
+        "The two-tier token display: DB for checkpointed sessions (via reindex), live JSONL parsing for local sessions at display time in augment_with_jsonls",
+        "/clear command in Claude Code does NOT create a new session or marker in the JSONL — the session continues with the same file and session ID, making it invisible to Gossamer",
+        "show::run returning Err was previously swallowed by unwrap_or(false), causing silent no-op when transcript not found",
+        "TUI column widths are computed dynamically from data max widths — header labels must be accounted for in the minimum width calculation (e.g., tokens_w must be at least 6 for the 'tokens' label)"
+      ],
+      "code": [
+        {
+          "path": "src/parsers/claude_code.rs",
+          "finding": "parse_session reads tokens from meta.token_usage.output_tokens directly; parse_shadow_session sums output_tokens from assistant-role JSONL lines"
+        },
+        {
+          "path": "src/commands/session_list.rs",
+          "finding": "fmt_tokens() formats i64 as compact strings ('45k', '1.2M', blank for 0); tokens_used at SQL column index 10 via COALESCE(s.tokens_used, 0)"
+        },
+        {
+          "path": "src/commands/sessions.rs",
+          "finding": "tokens_w must be max(data_max_width, 6) when shown so header label 'tokens' doesn't overflow and misalign id/updated columns"
+        },
+        {
+          "path": "src/commands/status.rs",
+          "finding": "Same tokens_w minimum-width fix required; header row inserted before session loop in draw_sessions() else branch"
+        },
+        {
+          "path": "src/commands/mod.rs",
+          "finding": "agent_color simplified to always return 214 (Claude orange) since multi-agent support removed"
+        },
+        {
+          "path": "src/commands/index.rs",
+          "finding": "upsert_session has 3 call sites within the file plus one in refresh.rs — all needed tokens_used parameter added"
+        }
+      ],
+      "workflow": [
+        "When a header label is wider than the data column width, compute column width as max(data_width, label_width) to prevent header overflow misaligning subsequent columns",
+        "Right-align header labels for right-aligned data columns to maintain visual consistency",
+        "Reading existing metadata fields (like token_usage in metadata.json) is always preferable to recomputing from raw data when the pre-aggregated value is available"
+      ]
+    },
+    "friction": [
+      "User had to explicitly correct the token counting approach — initial implementation wastefully summed JSONL lines in parse_session instead of reading the already-aggregated token_usage field from metadata.json",
+      "Removing import lines while deleting agent picker code accidentally removed Write and terminal imports that were still needed by other functions in init.rs, causing 6 compile errors",
+      "Column alignment bug in table headers: tokens_w was computed from data values only, not accounting for header label width, causing id/updated headers to not line up with data rows — required a second fix pass"
+    ],
+    "open_items": [
+      "Sessions whose JSONL is gone (deleted or never synced) and were never indexed will still show blank tokens until gossamer index is run",
+      "The codex/multi-agent removal was thorough but agent_name field still exists in ParsedSession and DB schema — could be cleaned up if Claude Code is truly the only supported agent going forward",
+      "tokens_used in the DB only stores output_tokens; the full token_usage object (input, cache_creation, cache_read, api_call_count) is not persisted — may want to store/display more token breakdown detail later"
+    ]
+  },
   "initial_attribution": {
     "calculated_at": "2026-06-13T04:44:56.263717Z",
     "agent_lines": 39,
