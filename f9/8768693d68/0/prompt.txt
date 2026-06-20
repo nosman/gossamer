@@ -1,0 +1,25 @@
+Checkpoints search hits don't work, when we select them we jump to the session start. we want to also jump to the specific checkpoint
+
+---
+
+We're not showing repo names correctly: [Image #5]. We are only showing gossamer-vscode for some reason. but there are also hits for gossamer-cli.
+
+---
+
+I'm confused then- what is this? [Image #6] this is the only turn that doesn't have the repo name
+
+---
+
+So gossamer-vscode is a session name?
+
+---
+
+Ok so then where does the repo name appear at all?
+
+---
+
+Yes add the repo name. If we're grouping by repo it only makes sense
+
+---
+
+The repo name should be above all of its search results, since we're grouping by repo name!!!
