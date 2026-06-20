@@ -1,0 +1,100 @@
+Deleting a session seems to call "entire clean" with no --session argument. please fix that
+
+---
+
+is there a gossamer handoff command still? we used to have it, but i want to make sure it's gone
+
+---
+
+When you go from the repo details view into the session details view, where does it get the transcript data from?
+
+---
+
+I think we've regressed again because i only see dot indicators next to sessions. They should be stars
+
+---
+
+What entireio command does the gossamer cli call when it does "resume"?
+
+---
+
+i just upgraded entire- i think entire resume is now entire session resume, can you confirm?
+
+---
+
+Check all the other entire commands and see if they need to be updated as well
+
+---
+
+What is the command that scans existing sessions to guess which repos should be initialized with gossamer?
+
+---
+
+Does gossamer search index checkpoints? Specifically the commit messages?
+
+---
+
+Ok let's also index checkpoint commit messages. They will need to be updated on reindex.
+
+---
+
+how will this render in the search results screen?
+
+---
+
+Yes, add that.
+
+---
+
+This is a very strange experience: [Image #2]. it seems like there are many results all smushed up in a single selection. each individual result should be selectable on its own. It should also be visually distinct from the neighboring results. Right now they all look like a single block
+
+---
+
+Ok so the hits will still be grouped by repo tho right?
+
+---
+
+Yes, we should be doing that. Also, when i select a search hit then press right arrow to go to the session details page, it just jumps to the end of the session. it should jump to the appropriate message that's been highlighted. use the turn_id to know where it is.
+
+---
+
+Yes, we should be doing that. Also, when i select a search hit then press right arrow to go to the session details page, it just jumps to the end of the session. it should jump to the appropriate message that's been highlighted. use the turn_id to know where it is.
+
+---
+
+i see zero changes
+
+---
+
+when i run gossamer index i get: 'gossamer-cli': error — table checkpoints has no column named checkpoint_number
+'gossamer': error — table checkpoints has no column named checkpoint_number
+'git-distiller': error — table checkpoints has no column named checkpoint_number
+Backfilled 1 local session(s) from ~/.claude/projects.
+
+---
+
+I think *you* are installing the wrong version- something is not playing well with worktrees. Also, i still don't see any changes.
+
+---
+
+i still see this when running gossamer search: [Image #3]. Also when i select any of these search hits, it always puts me at the end of the session. it doesn't automatically load to the search hit.
+
+---
+
+Congrats! you've make it jump to the beginning of the session as opposed to the end! Piece of shit. Just jump to the actual message pleas!
+
+---
+
+Find all the entries in the database with cwd including cosmos
+
+---
+
+No, those are my sessions. see the stsoucas in the path. use gossamer to remove those 3 sessions
+
+---
+
+Why are there many of the same session entry in this repo? [Image #4]
+
+---
+
+Why does the session list need to join with checkpoints at all?
