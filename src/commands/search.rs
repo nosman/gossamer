@@ -16,6 +16,7 @@ enum HitKind {
     Checkpoint,
     Session,
     Repo,
+    RepoHeader, // non-selectable separator injected between repo groups
 }
 
 impl HitKind {
@@ -25,6 +26,7 @@ impl HitKind {
             HitKind::Checkpoint => "cp",
             HitKind::Session    => "ses",
             HitKind::Repo       => "rep",
+            HitKind::RepoHeader => "",
         }
     }
 }
@@ -36,14 +38,16 @@ struct SearchHit {
     excerpt_lines: Vec<String>, // context lines: prev turn, matched turn, next turn
     session_id: Option<String>,
     repo_dir: Option<String>,
-    turn_id: Option<String>,    // JSONL message uuid — used for precise navigation
-    hit_ts: Option<String>,     // timestamp of the matched turn (for display)
+    turn_id: Option<String>,       // JSONL message uuid — used for precise navigation
+    hit_ts: Option<String>,        // timestamp of the matched turn (for display)
+    checkpoint_id: Option<String>, // for HitKind::Checkpoint — navigate to the specific checkpoint card
     branch: String,
     // enriched from gossamer DB after search
     agent: String,
     backed_up: bool,
     updated_at: String,
     remote: String,
+    repo_name: String,
     author: String, // session author (first-checkpoint commit author), name > email > os_user
 }
 
@@ -56,6 +60,7 @@ struct Group {
     backed_up: bool,
     updated_at: String,
     remote: String,
+    repo_name: String,
     session_id: Option<String>,
     repo_dir: Option<String>,
     kind: HitKind,
@@ -66,6 +71,7 @@ struct Group {
 struct GroupRow {
     hit_ts: Option<String>,
     turn_id: Option<String>,
+    checkpoint_id: Option<String>,
     lines: Vec<String>,
     is_checkpoint: bool,
 }
@@ -101,6 +107,10 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<bool> {
     let raw = witchcraft::search(&db, &embedder, &mut cache, query, FLOOR, top_k * 4, true, None)?;
     let ms = t0.elapsed().as_millis();
 
+    // Collect all above-threshold witchcraft hits (up to top_k*4), then cap
+    // at 2 per session so one long session can't crowd out the rest.
+    const MAX_HITS_PER_SESSION: usize = 2;
+    let mut session_hit_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut hits: Vec<SearchHit> = raw
         .iter()
         .filter_map(|(score, meta, bodies, sub_idx, _date)| {
@@ -108,9 +118,16 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<bool> {
             let threshold = match hit.kind {
                 HitKind::Log | HitKind::Checkpoint => LOG_THRESHOLD,
                 HitKind::Session                   => SES_THRESHOLD,
-                HitKind::Repo                      => REP_THRESHOLD,
+                HitKind::Repo | HitKind::RepoHeader => REP_THRESHOLD,
             };
             if *score >= threshold { Some(hit) } else { None }
+        })
+        .filter(|hit| {
+            // Session/Repo hits (no turn content) are not subject to the cap.
+            let Some(sid) = &hit.session_id else { return true; };
+            if matches!(hit.kind, HitKind::Session | HitKind::Repo) { return true; }
+            let count = session_hit_counts.entry(sid.clone()).or_insert(0);
+            if *count < MAX_HITS_PER_SESSION { *count += 1; true } else { false }
         })
         .take(top_k)
         .collect();
@@ -133,7 +150,7 @@ pub fn run(query: &str, top_k: usize, json: bool) -> Result<bool> {
     let groups = build_groups(hits);
 
     if json || !io::stdout().is_terminal() {
-        let arr: Vec<serde_json::Value> = groups.iter().map(|g| {
+        let arr: Vec<serde_json::Value> = groups.iter().filter(|g| !matches!(g.kind, HitKind::RepoHeader)).map(|g| {
             let hits_json: Vec<serde_json::Value> = g.rows.iter().map(|r| serde_json::json!({
                 "timestamp": r.hit_ts,
                 "excerpt": r.lines.join(" "),
@@ -207,9 +224,9 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 excerpt_lines: vec![],
                 session_id: meta["session_id"].as_str().map(str::to_string),
                 repo_dir: None,
-                turn_id: None, hit_ts: None, branch: String::new(),
+                turn_id: None, hit_ts: None, checkpoint_id: None, branch: String::new(),
                 agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
-                remote: String::new(),
+                remote: String::new(), repo_name: String::new(),
             }
         }
         "repo" => {
@@ -222,9 +239,9 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 excerpt_lines: vec![],
                 session_id: None,
                 repo_dir: Some(dir),
-                turn_id: None, hit_ts: None, branch: String::new(),
+                turn_id: None, hit_ts: None, checkpoint_id: None, branch: String::new(),
                 agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
-                remote: String::new(),
+                remote: String::new(), repo_name: String::new(),
             }
         }
         "checkpoint" => {
@@ -243,9 +260,10 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 repo_dir: None,
                 turn_id: None,
                 hit_ts: None,
+                checkpoint_id: meta["checkpoint_id"].as_str().map(str::to_string),
                 branch: String::new(),
                 agent: String::new(), backed_up: false, updated_at: String::new(),
-                author: String::new(), remote: String::new(),
+                author: String::new(), remote: String::new(), repo_name: String::new(),
             }
         }
         _ => {
@@ -260,10 +278,10 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                     excerpt_lines: vec![],
                     session_id: meta["session_id"].as_str().map(str::to_string),
                     repo_dir: None,
-                    turn_id: None, hit_ts: None,
+                    turn_id: None, hit_ts: None, checkpoint_id: None,
                     branch: meta["branch"].as_str().unwrap_or("").to_string(),
                     agent: String::new(), backed_up: false, updated_at: String::new(),
-                    author: String::new(), remote: String::new(),
+                    author: String::new(), remote: String::new(), repo_name: String::new(),
                 };
             }
 
@@ -303,9 +321,10 @@ fn parse_hit(metadata_json: &str, bodies: &[String], sub_idx: u32) -> SearchHit 
                 repo_dir: None,
                 turn_id,
                 hit_ts,
+                checkpoint_id: None,
                 branch,
                 agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
-                remote: String::new(),
+                remote: String::new(), repo_name: String::new(),
             }
         }
     }
@@ -331,6 +350,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     backed_up: hit.backed_up,
                     updated_at: hit.updated_at,
                     remote: hit.remote,
+                    repo_name: hit.repo_name,
                     session_id: hit.session_id,
                     repo_dir: None,
                     kind: if is_cp { HitKind::Checkpoint } else { HitKind::Log },
@@ -338,6 +358,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     rows: vec![GroupRow {
                         hit_ts: hit.hit_ts,
                         turn_id: hit.turn_id,
+                        checkpoint_id: hit.checkpoint_id,
                         lines: hit.excerpt_lines,
                         is_checkpoint: is_cp,
                     }],
@@ -352,6 +373,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     backed_up: hit.backed_up,
                     updated_at: hit.updated_at,
                     remote: hit.remote,
+                    repo_name: hit.repo_name,
                     session_id: hit.session_id,
                     repo_dir: None,
                     kind: HitKind::Session,
@@ -368,6 +390,7 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     backed_up: false,
                     updated_at: String::new(),
                     remote: hit.remote,
+                    repo_name: hit.repo_name,
                     session_id: None,
                     repo_dir: hit.repo_dir,
                     kind: HitKind::Repo,
@@ -375,20 +398,42 @@ fn build_groups(hits: Vec<SearchHit>) -> Vec<Group> {
                     rows: vec![],
                 });
             }
+            HitKind::RepoHeader => {} // never produced by parse_hit
         }
     }
 
-    // Stable sort by dir so hits from the same repo cluster together while
-    // preserving the original relevance ordering within each repo.
-    groups.sort_by(|a, b| a.dir.cmp(&b.dir));
+    // Stable sort by repo_name (falling back to dir) so hits from the same
+    // repo cluster together while preserving relevance ordering within each repo.
+    groups.sort_by(|a, b| {
+        let ka = if !a.repo_name.is_empty() { &a.repo_name } else { &a.dir };
+        let kb = if !b.repo_name.is_empty() { &b.repo_name } else { &b.dir };
+        ka.cmp(kb)
+    });
 
-    groups
+    // Inject a non-selectable RepoHeader sentinel before each new repo.
+    let mut with_headers: Vec<Group> = Vec::with_capacity(groups.len() + 4);
+    let mut current_key = String::new();
+    for g in groups {
+        let key = if !g.repo_name.is_empty() { g.repo_name.clone() } else { g.dir.clone() };
+        if key != current_key {
+            current_key = key.clone();
+            with_headers.push(Group {
+                title: key,
+                dir: String::new(), branch: String::new(), agent: String::new(),
+                backed_up: false, updated_at: String::new(), remote: String::new(),
+                repo_name: String::new(), session_id: None, repo_dir: None,
+                kind: HitKind::RepoHeader, rows: vec![], author: String::new(),
+            });
+        }
+        with_headers.push(g);
+    }
+    with_headers
 }
 
 // ── TUI ───────────────────────────────────────────────────────────────────────
 
 fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) -> Result<bool> {
-    let mut sel    = 0usize;
+    let mut sel    = first_selectable(groups);
     let mut scroll = 0usize;
     let mut quit_app = false;
 
@@ -414,10 +459,10 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
                     terminal::disable_raw_mode().ok();
                     std::process::exit(0);
                 }
-                KeyCode::Up   | KeyCode::Char('k') => { if sel > 0 { sel -= 1; } }
-                KeyCode::Down | KeyCode::Char('j') => { if sel + 1 < groups.len() { sel += 1; } }
-                KeyCode::Char('g') => { sel = 0; scroll = 0; }
-                KeyCode::Char('G') => { sel = groups.len().saturating_sub(1); }
+                KeyCode::Up   | KeyCode::Char('k') => { sel = prev_selectable(groups, sel); }
+                KeyCode::Down | KeyCode::Char('j') => { sel = next_selectable(groups, sel); }
+                KeyCode::Char('g') => { sel = first_selectable(groups); scroll = 0; }
+                KeyCode::Char('G') => { sel = last_selectable(groups); }
                 KeyCode::Char(' ') | KeyCode::Right | KeyCode::Enter => {
                     if let Some(group) = groups.get(sel) {
                         execute!(stdout, LeaveAlternateScreen, cursor::Show).ok();
@@ -426,9 +471,10 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
                         let nested_quit = match group.kind {
                             HitKind::Log | HitKind::Checkpoint | HitKind::Session => {
                                 if let Some(id) = &group.session_id {
-                                    let tid = group.rows.first().and_then(|r| r.turn_id.as_deref());
-                                    let hts = group.rows.first().and_then(|r| r.hit_ts.as_deref());
-                                    super::show::run_at(id, tid, hts).unwrap_or(false)
+                                    let tid  = group.rows.first().and_then(|r| r.turn_id.as_deref());
+                                    let hts  = group.rows.first().and_then(|r| r.hit_ts.as_deref());
+                                    let cpid = group.rows.first().and_then(|r| r.checkpoint_id.as_deref());
+                                    super::show::run_at(id, tid, hts, cpid).unwrap_or(false)
                                 } else { false }
                             }
                             HitKind::Repo => {
@@ -437,6 +483,7 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
                                 }
                                 false
                             }
+                            HitKind::RepoHeader => false,
                         };
 
                         if nested_quit { quit_app = true; break; }
@@ -459,7 +506,28 @@ fn tui_loop(stdout: &mut impl Write, groups: &[Group], query: &str, ms: u128) ->
 }
 
 fn rows_for_group(g: &Group) -> usize {
+    if matches!(g.kind, HitKind::RepoHeader) { return 1; }
     1 + g.rows.iter().map(|r| r.lines.len().max(1)).sum::<usize>() + 1 // +1 for blank separator
+}
+
+fn is_selectable(g: &Group) -> bool {
+    !matches!(g.kind, HitKind::RepoHeader)
+}
+
+fn next_selectable(groups: &[Group], from: usize) -> usize {
+    (from + 1..groups.len()).find(|&i| is_selectable(&groups[i])).unwrap_or(from)
+}
+
+fn prev_selectable(groups: &[Group], from: usize) -> usize {
+    (0..from).rev().find(|&i| is_selectable(&groups[i])).unwrap_or(from)
+}
+
+fn first_selectable(groups: &[Group]) -> usize {
+    groups.iter().position(is_selectable).unwrap_or(0)
+}
+
+fn last_selectable(groups: &[Group]) -> usize {
+    groups.iter().rposition(is_selectable).unwrap_or(0)
 }
 
 fn group_start_of(groups: &[Group], idx: usize) -> usize {
@@ -487,7 +555,8 @@ fn draw(
 
     // Title bar
     queue!(buf, cursor::MoveTo(0, 0), terminal::Clear(ClearType::UntilNewLine))?;
-    let hdr = format!("  search: \"{}\"  {} result(s)  {}ms", query, groups.len(), ms);
+    let result_count = groups.iter().filter(|g| is_selectable(g)).count();
+    let hdr = format!("  search: \"{}\"  {} result(s)  {}ms", query, result_count, ms);
     write!(buf, "\x1b[1m{}\x1b[0m", hdr.chars().take(w).collect::<String>())?;
 
     // Pre-compute column widths across all groups for tabular alignment.
@@ -514,6 +583,21 @@ fn draw(
     for (gi, group) in groups.iter().enumerate() {
         if screen_row > content_h { break; }
         let selected = gi == sel;
+
+        // ── Repo section header (non-selectable) ─────────────────────────
+        if matches!(group.kind, HitKind::RepoHeader) {
+            if abs_row >= scroll && screen_row <= content_h {
+                queue!(buf, cursor::MoveTo(0, screen_row as u16), terminal::Clear(ClearType::UntilNewLine))?;
+                let label = &group.title;
+                let dash_w = w.saturating_sub(label.chars().count() + 5);
+                let dashes: String = "─".repeat(dash_w.min(w));
+                write!(buf, "  \x1b[{lk}m{label}\x1b[0m \x1b[{dm}m{dashes}\x1b[0m",
+                    lk = t.link, dm = t.text_dim)?;
+                screen_row += 1;
+            }
+            abs_row += 1;
+            continue;
+        }
 
         // ── Session header ────────────────────────────────────────────────
         if abs_row >= scroll && screen_row <= content_h {
@@ -640,11 +724,11 @@ fn enrich_hits(hits: &mut Vec<SearchHit>) {
     let Ok(conn) = crate::db::connect() else { return };
     for hit in hits.iter_mut() {
         if let Some(sid) = &hit.session_id {
-            // Pull agent + remote, plus the first checkpoint's author (matching
-            // the resolution session_list::query_db uses: name > email > os_user).
-            if let Ok((agent, updated_at, remote, author_name, author_email, author_os_user)) =
+            // Pull agent + remote + repo_name, plus the first checkpoint's author.
+            if let Ok((agent, updated_at, remote, repo_name, author_name, author_email, author_os_user)) =
                 conn.query_row(
                     "SELECT s.agent_name, s.updated_at, COALESCE(r.remote, ''),
+                            COALESCE(r.name, ''),
                             COALESCE(c.author_name, ''), COALESCE(c.author_email, ''),
                             COALESCE(c.os_user, '')
                      FROM sessions s
@@ -652,9 +736,10 @@ fn enrich_hits(hits: &mut Vec<SearchHit>) {
                        ON (s.cwd = r.directory OR s.cwd LIKE r.directory || '/%')
                      LEFT JOIN checkpoints c
                        ON c.session_id = s.session_id
-                      AND c.last_turn_ts = (
-                            SELECT MIN(last_turn_ts) FROM checkpoints
+                      AND c.checkpoint_id = (
+                            SELECT checkpoint_id FROM checkpoints
                             WHERE session_id = s.session_id
+                            ORDER BY last_turn_ts ASC LIMIT 1
                           )
                      WHERE s.session_id = ?1",
                     [sid.as_str()],
@@ -665,6 +750,7 @@ fn enrich_hits(hits: &mut Vec<SearchHit>) {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
                     )),
                 )
             {
@@ -672,17 +758,19 @@ fn enrich_hits(hits: &mut Vec<SearchHit>) {
                 hit.updated_at = updated_at;
                 hit.backed_up  = true;
                 hit.remote     = remote;
+                hit.repo_name  = repo_name;
                 hit.author     = if !author_name.trim().is_empty() { author_name }
                                  else if !author_email.trim().is_empty() { author_email }
                                  else { author_os_user };
             }
         } else if let Some(dir) = &hit.repo_dir.clone() {
-            if let Ok(remote) = conn.query_row(
-                "SELECT COALESCE(remote, '') FROM repositories WHERE directory = ?1",
+            if let Ok((remote, repo_name)) = conn.query_row(
+                "SELECT COALESCE(remote, ''), COALESCE(name, '') FROM repositories WHERE directory = ?1",
                 [dir.as_str()],
-                |row| row.get::<_, String>(0),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
             ) {
-                hit.remote = remote;
+                hit.remote    = remote;
+                hit.repo_name = repo_name;
             }
         }
     }
@@ -714,9 +802,9 @@ fn search_sessions_by_name(query: &str) -> Vec<SearchHit> {
                     excerpt_lines: vec![],
                     session_id: Some(session_id),
                     repo_dir: None,
-                    turn_id: None, hit_ts: None, branch: String::new(),
+                    turn_id: None, hit_ts: None, checkpoint_id: None, branch: String::new(),
                     agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
-                    remote: String::new(),
+                    remote: String::new(), repo_name: String::new(),
                 })
             } else {
                 None
@@ -744,14 +832,14 @@ fn search_repos_by_name(query: &str) -> Vec<SearchHit> {
             if words.iter().all(|w| normalized.contains(w.as_str())) {
                 Some(SearchHit {
                     kind: HitKind::Repo,
-                    title: name,
+                    title: name.clone(),
                     dir: super::short_path(&directory),
                     excerpt_lines: vec![],
                     session_id: None,
                     repo_dir: Some(directory),
-                    turn_id: None, hit_ts: None, branch: String::new(),
+                    turn_id: None, hit_ts: None, checkpoint_id: None, branch: String::new(),
                     agent: String::new(), backed_up: false, updated_at: String::new(), author: String::new(),
-                    remote,
+                    remote, repo_name: name,
                 })
             } else {
                 None

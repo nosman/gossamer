@@ -88,13 +88,14 @@ enum Selectable {
 /// parent TUI loop should treat that as a full-app exit. `Ok(false)` means
 /// the user backed out normally (Esc/Left) and the parent should keep going.
 pub fn run(session_id: &str) -> Result<bool> {
-    run_at(session_id, None, None)
+    run_at(session_id, None, None, None)
 }
 
-/// Open a session and jump to a specific turn.
+/// Open a session and jump to a specific turn or checkpoint.
 /// `turn_id` is the JSONL message uuid (preferred — stable across file versions).
 /// `hit_ts` is the raw timestamp string (fallback for index entries without uuid).
-pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>) -> Result<bool> {
+/// `checkpoint_id` navigates directly to the matching Checkpoint card.
+pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>, checkpoint_id: Option<&str>) -> Result<bool> {
     let path = find_session(session_id)
         .with_context(|| format!("no session file found for '{session_id}'"))?;
 
@@ -205,7 +206,7 @@ pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>) -> 
 
     let mut quit_app = false;
     loop {
-        match pager(&cards, start_ts)? {
+        match pager(&cards, start_ts, checkpoint_id)? {
             PagerOutcome::Resume => {
                 do_resume(&agent, session_id, &session_branch, &session_cwd);
                 break;
@@ -1460,7 +1461,7 @@ fn build_flat(
 // the CLI). `Quit` propagates a full-app exit so q from anywhere quits.
 enum PagerOutcome { Back, Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
-fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
+fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
     let mut h = (term_h as usize).saturating_sub(1);
@@ -1487,21 +1488,28 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
     terminal::enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
-    // If a target timestamp was given, jump to the first card whose ts matches.
-    // Fall back to the first selectable (beginning of session) if not found.
-    let initial_sel = start_ts.and_then(|ts| {
+    // Jump to the target: checkpoint_id wins, then timestamp, then start.
+    let initial_sel = if let Some(cpid) = checkpoint_id {
         cards.iter().enumerate().find_map(|(ci, card)| {
-            let card_ts = match card {
-                Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => ts.as_str(),
-                _ => return None,
-            };
-            if card_ts == ts {
-                selectables.iter().position(|s| *s == Selectable::Card(ci))
-            } else {
-                None
-            }
-        })
-    }).unwrap_or(0);
+            if let Card::Checkpoint(cp) = card {
+                if cp.checkpoint_id == cpid {
+                    selectables.iter().position(|s| *s == Selectable::Card(ci))
+                } else { None }
+            } else { None }
+        }).unwrap_or(0)
+    } else {
+        start_ts.and_then(|ts| {
+            cards.iter().enumerate().find_map(|(ci, card)| {
+                let card_ts = match card {
+                    Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => ts.as_str(),
+                    _ => return None,
+                };
+                if card_ts == ts {
+                    selectables.iter().position(|s| *s == Selectable::Card(ci))
+                } else { None }
+            })
+        }).unwrap_or(0)
+    };
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
