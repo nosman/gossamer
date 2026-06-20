@@ -153,8 +153,11 @@ fn query_db(scope: &Scope) -> Vec<DisplaySession> {
     let join = "
         LEFT JOIN checkpoints c
           ON c.session_id = s.session_id
-         AND c.last_turn_ts = (
-               SELECT MIN(last_turn_ts) FROM checkpoints WHERE session_id = s.session_id
+         AND c.checkpoint_id = (
+               SELECT checkpoint_id FROM checkpoints
+               WHERE session_id = s.session_id
+               ORDER BY last_turn_ts ASC
+               LIMIT 1
              )
     ";
     match scope {

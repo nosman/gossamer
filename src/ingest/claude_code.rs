@@ -22,6 +22,7 @@ struct SessionEntry {
     #[serde(rename = "type")]
     entry_type: String,
     timestamp: Option<String>,
+    uuid: Option<String>,
     message: Option<Message>,
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
@@ -55,6 +56,7 @@ struct Chunk {
     role: String,
     text: String,
     timestamp: String,
+    msg_uuid: Option<String>,
     ts_ms: i64,
     byte_offset: u64,
     byte_len: u64,
@@ -234,6 +236,7 @@ fn parse_session_content(content: &str) -> (SessionInfo, Vec<Chunk>) {
             role,
             text,
             timestamp,
+            msg_uuid: entry.uuid,
             ts_ms,
             byte_offset: line_offset,
             byte_len: line.len() as u64,
@@ -294,6 +297,7 @@ fn ingest_session(
             turns_meta.push(serde_json::json!({
                 "role": chunk.role,
                 "timestamp": chunk.timestamp,
+                "uuid": chunk.msg_uuid,
                 "off": chunk.byte_offset,
                 "len": chunk.byte_len,
             }));
@@ -366,6 +370,67 @@ pub fn ingest_claude_code(db: &mut DB) -> Result<usize> {
     Ok(total)
 }
 
+/// Index commit messages from the `checkpoints` table for all sessions
+/// belonging to `repo_dir`. Called unconditionally on every ingest so that
+/// commit messages stay current even when the checkpoint-branch HEAD hasn't
+/// moved. `add_doc` is an upsert keyed on a stable UUID, so re-running is safe.
+fn index_checkpoint_commits(
+    db: &mut DB,
+    conn: &rusqlite::Connection,
+    repo_dir: &str,
+) -> Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT c.checkpoint_id, c.commit_message, c.last_turn_ts,
+                s.session_id, COALESCE(s.session_name,''), COALESCE(s.cwd,'')
+         FROM checkpoints c
+         JOIN sessions s ON s.session_id = c.session_id
+         WHERE (
+             s.repo_id = (SELECT id FROM repositories WHERE directory = ?1)
+             OR (s.repo_id IS NULL AND s.cwd LIKE ?2)
+         )
+         AND c.commit_message IS NOT NULL
+         AND c.commit_message != ''"
+    )?;
+
+    let pattern = format!("{}%", repo_dir);
+    let rows: Vec<(String, String, String, String, String, String)> = stmt
+        .query_map(rusqlite::params![repo_dir, pattern], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (checkpoint_id, message, ts, session_id, session_name, cwd) in &rows {
+        let project_name = if cwd.is_empty() {
+            session_id.chars().take(8).collect::<String>()
+        } else {
+            cwd.trim_start_matches('/').to_string()
+        };
+        let body = format!("[{project_name}] {session_name}\n[Checkpoint] {message}\n");
+        let uuid = Uuid::new_v5(
+            &CLAUDE_CODE_NAMESPACE,
+            format!("{session_id}:cp:{checkpoint_id}").as_bytes(),
+        );
+        let metadata = serde_json::json!({
+            "source": "checkpoint",
+            "project": project_name,
+            "session_id": session_id,
+            "session_name": session_name,
+            "checkpoint_id": checkpoint_id,
+        }).to_string();
+        let date = iso8601_timestamp::Timestamp::parse(ts);
+        db.add_doc(&uuid, date, &metadata, &body, None)?;
+    }
+    Ok(())
+}
+
 fn ingest_repo(
     db: &mut DB,
     conn: &rusqlite::Connection,
@@ -386,6 +451,11 @@ fn ingest_repo(
         [repo_dir],
         |row| row.get(0),
     ).ok().flatten();
+
+    // Always refresh commit messages regardless of JSONL watermark state.
+    if let Err(e) = index_checkpoint_commits(db, conn, repo_dir) {
+        eprintln!("  warning: failed to index checkpoint commits for {repo_dir}: {e}");
+    }
 
     if stored_head.as_deref() == Some(current_head.as_str()) {
         return Ok(0);

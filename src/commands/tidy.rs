@@ -162,7 +162,7 @@ fn clean_sessions_for_worktree(wt_path: &str) -> Vec<String> {
 
     let mut removed = Vec::new();
     for id in &ids {
-        let _ = std::process::Command::new("entire").arg("clean").arg(id).status();
+        let _ = std::process::Command::new("entire").args(["clean", "--session", id, "--force"]).status();
         let _ = conn.execute("DELETE FROM event_log WHERE session_id = ?1", rusqlite::params![id]);
         if conn.execute("DELETE FROM sessions WHERE session_id = ?1", rusqlite::params![id]).is_ok() {
             removed.push(id.clone());

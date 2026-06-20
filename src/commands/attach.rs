@@ -5,7 +5,7 @@ use crate::{ingest, watermark};
 
 pub fn run(session_id: &str, agent: &str, force: bool, json: bool) -> Result<()> {
     let mut cmd = Command::new("entire");
-    cmd.arg("attach").arg(session_id);
+    cmd.args(["session", "attach"]).arg(session_id);
     if !agent.is_empty() && agent != "claude-code" {
         cmd.args(["--agent", agent]);
     }

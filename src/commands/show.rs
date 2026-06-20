@@ -88,15 +88,30 @@ enum Selectable {
 /// parent TUI loop should treat that as a full-app exit. `Ok(false)` means
 /// the user backed out normally (Esc/Left) and the parent should keep going.
 pub fn run(session_id: &str) -> Result<bool> {
-    run_at(session_id, None)
+    run_at(session_id, None, None)
 }
 
-pub fn run_at(session_id: &str, start_ts: Option<&str>) -> Result<bool> {
+/// Open a session and jump to a specific turn.
+/// `turn_id` is the JSONL message uuid (preferred — stable across file versions).
+/// `hit_ts` is the raw timestamp string (fallback for index entries without uuid).
+pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>) -> Result<bool> {
     let path = find_session(session_id)
         .with_context(|| format!("no session file found for '{session_id}'"))?;
 
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
+
+    // Try uuid lookup first, then fall back to the raw timestamp string.
+    let resolved_ts: Option<String> = turn_id.and_then(|tid| {
+        for line in raw.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+            if v["uuid"].as_str() == Some(tid) {
+                return v["timestamp"].as_str().map(str::to_string);
+            }
+        }
+        None
+    }).or_else(|| hit_ts.map(str::to_string));
+    let start_ts: Option<&str> = resolved_ts.as_deref();
 
     // Look up agent name and DB-stored session_name from the gossamer DB.
     let uuid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
@@ -217,7 +232,7 @@ fn fetch_authors(session_id: &str) -> Vec<CheckpointAuthor> {
         "SELECT last_turn_ts, author_name, author_email, COALESCE(os_user, '')
            FROM checkpoints
           WHERE session_id = ?1
-       ORDER BY checkpoint_number ASC"
+       ORDER BY last_turn_ts ASC"
     ) else { return Vec::new(); };
 
     let rows = stmt.query_map([session_id], |row| {
@@ -418,7 +433,7 @@ fn extract_from_checkpoint(session_id: &str) -> Option<PathBuf> {
         "SELECT jsonl_path FROM checkpoints
          WHERE session_id = ?1
            AND jsonl_path IS NOT NULL
-         ORDER BY checkpoint_number DESC
+         ORDER BY last_turn_ts DESC
          LIMIT 1",
         [session_id],
         |row| row.get(0),
@@ -433,7 +448,7 @@ fn extract_from_checkpoint(session_id: &str) -> Option<PathBuf> {
     let preferred: Option<String> = conn.query_row(
         "SELECT repo_dir FROM checkpoints
          WHERE session_id = ?1 AND repo_dir IS NOT NULL
-         ORDER BY checkpoint_number DESC LIMIT 1",
+         ORDER BY last_turn_ts DESC LIMIT 1",
         [session_id], |row| row.get(0),
     ).ok();
 
@@ -1273,10 +1288,10 @@ fn resume_via_entire(dir: &str, branch: &str) {
     };
 
     let mut entire = std::process::Command::new("entire");
-    entire.arg("resume").current_dir(&launch_dir);
+    entire.args(["session", "resume"]).current_dir(&launch_dir);
     if !branch.is_empty() { entire.arg(branch); }
 
-    let Ok(out) = entire.output() else { eprintln!("entire resume failed"); return; };
+    let Ok(out) = entire.output() else { eprintln!("entire session resume failed"); return; };
 
     let cmd_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if cmd_str.is_empty() { eprintln!("entire resume returned no command"); return; }
@@ -1473,7 +1488,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
     execute!(stdout, EnterAlternateScreen, cursor::Hide)?;
 
     // If a target timestamp was given, jump to the first card whose ts matches.
-    // Otherwise land on the first non-navigation card (skip RepoLink and Header).
+    // Fall back to the first selectable (beginning of session) if not found.
     let initial_sel = start_ts.and_then(|ts| {
         cards.iter().enumerate().find_map(|(ci, card)| {
             let card_ts = match card {
@@ -1486,7 +1501,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>) -> Result<PagerOutcome> {
                 None
             }
         })
-    }).unwrap_or_else(|| selectables.len().saturating_sub(1));
+    }).unwrap_or(0);
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;

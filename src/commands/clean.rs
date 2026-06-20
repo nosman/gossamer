@@ -54,9 +54,11 @@ fn find_jsonl_by_title(title: &str) -> Option<String> {
 }
 
 /// Delete a session from the DB and search index without printing anything.
-/// Runs `entire clean` silently. Returns the number of DB rows deleted.
+/// Runs `entire clean --session <id>` silently. Returns the number of DB rows deleted.
 /// Safe to call from inside a TUI (no stdout writes).
 pub(crate) fn remove_session(session_id: &str) -> Result<usize> {
+    let _ = Command::new("entire").args(["clean", "--session", session_id, "--force"]).status();
+
     let conn = db::connect()?;
     let rows = conn.execute(
         "DELETE FROM sessions WHERE session_id = ?1",
@@ -87,7 +89,7 @@ pub fn run(session_id_or_name: &str, json: bool) -> Result<()> {
     let session_id = resolve_session_id(&conn, session_id_or_name);
 
     // entire clean — non-fatal (session may already be gone from entireio).
-    match Command::new("entire").arg("clean").arg(&session_id).status() {
+    match Command::new("entire").args(["clean", "--session", &session_id]).status() {
         Ok(s) if s.success() => {}
         Ok(s)  => eprintln!("warning: `entire clean` exited with {s}"),
         Err(e) => eprintln!("warning: could not run `entire clean`: {e}"),
