@@ -1,0 +1,5 @@
+Gossamer is an ai session manage built on top of entireio. Debug in the search results page why hits from worktrees don't show up in the appropriate repo. A hit from a worktree should be grouped under the repo it comes from. [Image #4] This checkpoints-visualization hit should be shown under the results from the gossamer-cli repo
+
+---
+
+1 more debug thing: [Image #5] the selected turn doesn't jump correctly in the session details page- why?
