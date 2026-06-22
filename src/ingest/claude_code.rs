@@ -136,8 +136,10 @@ fn strip_code(text: &str) -> String {
     let s = re.replace_all(text, " ").to_string();
     let re = Regex::new(r"```[\s\S]*$").unwrap();
     let s = re.replace_all(&s, " ").to_string();
-    let re = Regex::new(r"`[^`]*`").unwrap();
-    re.replace_all(&s, " ").to_string()
+    // Strip the backticks but keep the inner text so words like `index` stay
+    // readable in search excerpts rather than turning into blank spaces.
+    let re = Regex::new(r"`([^`]*)`").unwrap();
+    re.replace_all(&s, "$1").to_string()
 }
 
 fn strip_tables(text: &str) -> String {
@@ -212,6 +214,13 @@ fn parse_session_content(content: &str) -> (SessionInfo, Vec<Chunk>) {
 
         let text = sanitize(&raw_text);
         if text.is_empty() {
+            continue;
+        }
+
+        // "[Image: source: /path]" is a synthetic label Claude Code emits for
+        // image attachments — it's not searchable content and produces spurious
+        // vector-search hits. Skip the whole chunk if that's all it is.
+        if text.trim_start().starts_with("[Image:") || text.trim_start().starts_with("[image:") {
             continue;
         }
 

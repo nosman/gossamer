@@ -88,30 +88,47 @@ enum Selectable {
 /// parent TUI loop should treat that as a full-app exit. `Ok(false)` means
 /// the user backed out normally (Esc/Left) and the parent should keep going.
 pub fn run(session_id: &str) -> Result<bool> {
-    run_at(session_id, None, None, None)
+    run_at(session_id, None, None, None, None)
 }
 
 /// Open a session and jump to a specific turn or checkpoint.
-/// `turn_id` is the JSONL message uuid (preferred — stable across file versions).
-/// `hit_ts` is the raw timestamp string (fallback for index entries without uuid).
-/// `checkpoint_id` navigates directly to the matching Checkpoint card.
-pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>, checkpoint_id: Option<&str>) -> Result<bool> {
+/// `turn_id`      — JSONL message uuid (stable across file versions).
+/// `hit_ts`       — raw timestamp string fallback.
+/// `hit_off`      — byte offset of the matched JSONL line (most reliable; bypasses string matching).
+/// `checkpoint_id`— navigate directly to the matching Checkpoint card.
+pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>, hit_off: Option<u64>, checkpoint_id: Option<&str>) -> Result<bool> {
     let path = find_session(session_id)
         .with_context(|| format!("no session file found for '{session_id}'"))?;
 
     let raw = std::fs::read_to_string(&path)
         .with_context(|| format!("cannot read {}", path.display()))?;
 
-    // Try uuid lookup first, then fall back to the raw timestamp string.
-    let resolved_ts: Option<String> = turn_id.and_then(|tid| {
-        for line in raw.lines() {
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-            if v["uuid"].as_str() == Some(tid) {
-                return v["timestamp"].as_str().map(str::to_string);
+
+    // Resolve to a timestamp for pager navigation.
+    // Priority: raw hit_ts (directly from witchcraft metadata, same source as
+    // the JSONL timestamp field) → uuid scan of local file → byte-offset scan
+    // (hit_off is relative to the shadow-branch copy, so only use as a last
+    // resort when the other two come up empty).
+    let resolved_ts: Option<String> = hit_ts.map(str::to_string)
+        .or_else(|| turn_id.and_then(|tid| {
+            for line in raw.lines() {
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+                if v["uuid"].as_str() == Some(tid) {
+                    return v["timestamp"].as_str().map(str::to_string);
+                }
             }
-        }
-        None
-    }).or_else(|| hit_ts.map(str::to_string));
+            None
+        }))
+        .or_else(|| hit_off.and_then(|off| {
+            let bytes = raw.as_bytes();
+            if (off as usize) < bytes.len() {
+                let slice = &bytes[off as usize..];
+                let end = slice.iter().position(|&b| b == b'\n').unwrap_or(slice.len());
+                std::str::from_utf8(&slice[..end]).ok()
+                    .and_then(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .and_then(|v| v["timestamp"].as_str().map(str::to_string))
+            } else { None }
+        }));
     let start_ts: Option<&str> = resolved_ts.as_deref();
 
     // Look up agent name and DB-stored session_name from the gossamer DB.
@@ -206,7 +223,7 @@ pub fn run_at(session_id: &str, turn_id: Option<&str>, hit_ts: Option<&str>, che
 
     let mut quit_app = false;
     loop {
-        match pager(&cards, start_ts, checkpoint_id)? {
+        match pager(&cards, start_ts, checkpoint_id, hit_off)? {
             PagerOutcome::Resume => {
                 do_resume(&agent, session_id, &session_branch, &session_cwd);
                 break;
@@ -1461,7 +1478,7 @@ fn build_flat(
 // the CLI). `Quit` propagates a full-app exit so q from anywhere quits.
 enum PagerOutcome { Back, Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
-fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>) -> Result<PagerOutcome> {
+fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _hit_off: Option<u64>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
     let mut h = (term_h as usize).saturating_sub(1);
@@ -1499,7 +1516,8 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>) ->
         }).unwrap_or(0)
     } else {
         start_ts.and_then(|ts| {
-            cards.iter().enumerate().find_map(|(ci, card)| {
+            // 1. Exact string match.
+            let exact = cards.iter().enumerate().find_map(|(ci, card)| {
                 let card_ts = match card {
                     Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => ts.as_str(),
                     _ => return None,
@@ -1507,7 +1525,36 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>) ->
                 if card_ts == ts {
                     selectables.iter().position(|s| *s == Selectable::Card(ci))
                 } else { None }
-            })
+            });
+            if exact.is_some() { return exact; }
+
+            // 2. Last-card-before fallback: find the card with the latest timestamp
+            //    that is still ≤ hit_ts.  AsstMsg cards carry only their first
+            //    merged turn's timestamp; consecutive assistant turns (separated
+            //    only by tool-result user turns) are merged into one card with
+            //    the first turn's ts.  Searching for "last card started at or
+            //    before hit_ts" reliably lands on that merged card regardless of
+            //    how many seconds elapsed between turns.
+            let target_dt = DateTime::parse_from_rfc3339(ts).ok()?;
+            let target_ms = target_dt.timestamp_millis();
+            let mut best_before: Option<(i64, usize)> = None; // (card_ts_ms, ci)
+            for (ci, card) in cards.iter().enumerate() {
+                let card_ts = match card {
+                    Card::UserMsg { ts, .. } | Card::AsstMsg { ts, .. } | Card::System { ts, .. } => ts.as_str(),
+                    _ => continue,
+                };
+                if let Ok(dt) = DateTime::parse_from_rfc3339(card_ts) {
+                    let dt_ms = dt.timestamp_millis();
+                    if dt_ms <= target_ms {
+                        match best_before {
+                            None => { best_before = Some((dt_ms, ci)); }
+                            Some((prev_ms, _)) if dt_ms > prev_ms => { best_before = Some((dt_ms, ci)); }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            best_before.and_then(|(_, ci)| selectables.iter().position(|s| *s == Selectable::Card(ci)))
         }).unwrap_or(0)
     };
 
