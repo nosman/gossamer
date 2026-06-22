@@ -1,0 +1,84 @@
+Great. next problem, these worktree-based sessions don't correctly jump to the right search result, they only jump to the beginning of the session: [Image #7]
+
+---
+
+None of that is working. Why not string match on something else if you can?
+
+---
+
+you're showing multiple surrounding lines. Are actually looking at the right message or the earliest line from the snippet?
+
+---
+
+So in this example: [Image #1] it takes me here when i select [Image #2]. But the real search hit is a few down. why?
+
+---
+
+here: --- run_at ---
+session_id=cd8368ba-3c02-4c95-8f36-cf0771330d33
+hit_ts=Some("2026-06-20T18:52:01.929Z")
+turn_id=Some("3505d094-4c74-4ab6-96ad-3a97a38b2d4f")
+hit_off=Some(4626184)
+checkpoint_id=None
+path=/Users/stephanostsoucas/.claude/projects/-Users-stephanostsoucas-p-gossamer-checkpoints-visualization/cd8368ba-3c02-4c95-8f36-cf0771330d33.jsonl
+resolved_ts=Some("2026-06-20T18:52:01.929Z")
+initial_sel=170
+selectables.len()=245
+initial card_idx=170
+initial card ts=2026-06-20T18:51:50.451Z
+--- run_at ---
+session_id=cd8368ba-3c02-4c95-8f36-cf0771330d33
+hit_ts=Some("2026-06-20T21:10:19.789Z")
+turn_id=Some("dbbc768a-8f81-401a-86af-d83208edfef8")
+hit_off=Some(6967593)
+checkpoint_id=None
+path=/Users/stephanostsoucas/.claude/projects/-Users-stephanostsoucas-p-gossamer-checkpoints-visualization/cd8368ba-3c02-4c95-8f36-cf0771330d33.jsonl
+resolved_ts=Some("2026-06-20T21:10:19.789Z")
+initial_sel=206
+selectables.len()=245
+initial card_idx=206
+initial card ts=2026-06-20T21:10:19.789Z
+--- run_at ---
+session_id=ede0cb33-fc0d-4ad8-80ef-860c9374e4b3
+hit_ts=Some("2026-06-10T23:21:55.443Z")
+turn_id=None
+hit_off=Some(6143540)
+checkpoint_id=None
+path=/Users/stephanostsoucas/.claude/projects/-Users-stephanostsoucas-p-gossamer-gossamer-cleanup/ede0cb33-fc0d-4ad8-80ef-860c9374e4b3.jsonl
+resolved_ts=Some("2026-06-10T23:21:55.443Z")
+initial_sel=112
+selectables.len()=137
+initial card_idx=112
+initial card ts=2026-06-10T23:21:41.667Z
+
+---
+
+the idea is correct but i think you fucked up again: [Image #3]. do i have to reindex or something?
+
+---
+
+ok progress but now the issue is that the stuff that's markdown formatted disappears: [Image #1] It should say: Let me check what index and refresh already cover vs. what's missing:
+
+---
+
+Still getting the issue: [Claude] Let me check what and already cover vs. what's missing:
+
+---
+
+Nope you stupid fuck. The issue is still there- why?
+
+---
+
+debug this search: [Image #2]. why is there no text on any of these?
+
+---
+
+How come there are so many of the same rows?
+
+---
+
+So you're saying it's basically just returning all hits bc the search matches the session name?
+
+---
+
+hm i built your fix but i'm still getting [Image #3]
