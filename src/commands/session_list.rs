@@ -97,20 +97,15 @@ pub enum Scope<'a> {
 }
 
 /// Load sessions, optionally scoped to one repo. With `include_old = false`,
-/// only sessions updated within the last 3 days are returned. Result is sorted
-/// most-recent-first; callers are free to re-sort.
+/// returns the 10 most-recent sessions. Result is sorted most-recent-first;
+/// callers are free to re-sort.
 pub fn fetch(scope: Scope, include_old: bool) -> Vec<DisplaySession> {
-    let cutoff = Utc::now() - chrono::Duration::days(3);
     let mut sessions = query_db(&scope);
-    // Augment first, then cutoff-filter on the final updated_at. Otherwise a
-    // DB row with a stale updated_at but an actively-touched local JSONL gets
-    // dropped here, then re-added as unbacked when augment can't find it —
-    // diverging from the repo view where include_old=true skips this filter.
-    augment_with_jsonls(&mut sessions, &scope, include_old, cutoff);
-    if !include_old {
-        sessions.retain(|s| s.updated_at >= cutoff);
-    }
+    augment_with_jsonls(&mut sessions, &scope);
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    if !include_old {
+        sessions.truncate(10);
+    }
     sessions
 }
 
@@ -200,8 +195,6 @@ fn resolve_author_label(name: &str, email: &str, os_user: &str) -> String {
 fn augment_with_jsonls(
     sessions: &mut Vec<DisplaySession>,
     scope: &Scope,
-    include_old: bool,
-    cutoff: DateTime<Utc>,
 ) {
     let Ok(home) = std::env::var("HOME") else { return; };
     let projects = PathBuf::from(&home).join(".claude/projects");
@@ -221,7 +214,6 @@ fn augment_with_jsonls(
                 .and_then(|m| m.modified().ok())
                 .map(DateTime::<Utc>::from)
                 .unwrap_or_else(Utc::now);
-            if !include_old && file_mtime < cutoff { continue }
 
             let parsed = parse_jsonl(&path);
 
