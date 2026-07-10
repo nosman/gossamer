@@ -1,0 +1,29 @@
+why does gossamer sessions in this directory only print out a single session?
+
+---
+
+gossamer sessions --all
+
+---
+
+can you change the behavior to show 10 sessions by default then the --all flag would still show more
+
+---
+
+Do we call entire session attach in the gossamer codebase?
+
+---
+
+Sometimes when i navigate to a checkpoint using the [] keys, the green checkpoint row shows up garbled and big. scrolling more restores it
+
+---
+
+When you say "a checkpoint taller than the terminal", what exactly does that mean? the green bars should only be 1 row regardless.
+
+---
+
+this problem manifests itself without the green bar being expanded tho, does that matter?
+
+---
+
+[Image #1] here is an example of where it gets garbled, does this confirm the fix you had in mind?
