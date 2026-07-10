@@ -848,18 +848,13 @@ fn fmt_num(n: i64) -> String {
     out.chars().rev().collect()
 }
 
-fn render_checkpoint_header(cp: &CheckpointData, expanded: bool, term_w: usize) -> String {
+fn render_checkpoint_header(cp: &CheckpointData, expanded: bool, w: usize) -> String {
     let t = crate::theme::get();
     let arrow = if expanded { "▾" } else { "▸" };
     let short_id = if cp.checkpoint_id.len() >= 8 {
         &cp.checkpoint_id[..8]
     } else {
         cp.checkpoint_id.as_str()
-    };
-    let msg = if cp.commit_message.is_empty() {
-        String::new()
-    } else {
-        format!("  {}", cp.commit_message)
     };
     let ts_part = if !cp.last_turn_ts.is_empty() {
         format!("  \x1b[{cd}m{}\x1b[0m\x1b[{bg}m", rel_time(&cp.last_turn_ts),
@@ -874,18 +869,41 @@ fn render_checkpoint_header(cp: &CheckpointData, expanded: bool, term_w: usize) 
             cd = t.checkpoint_dim, bg = t.checkpoint_bg)
     };
 
+    // Measure fixed parts (everything except the commit message) to know how
+    // much space is left for the message without overflowing the terminal.
+    let fixed = format!(
+        "  {arrow} \x1b[{cl}mcheckpoint\x1b[0m\x1b[{bg}m #{}{id_part}\x1b[{ct}m\x1b[0m\x1b[{bg}m{ts_part}",
+        cp.number,
+        cl = t.checkpoint_label, bg = t.checkpoint_bg, ct = t.checkpoint_text,
+    );
+    let fixed_vis = visible_width(&fixed);
+    let msg = if !cp.commit_message.is_empty() {
+        let avail = w.saturating_sub(fixed_vis).saturating_sub(2); // 2 for the "  " prefix
+        if avail > 0 {
+            // Use only the subject line — the full body contains newlines which
+            // break terminal row layout and corrupt everything below.
+            let subject = cp.commit_message.lines().next().unwrap_or("").trim();
+            let text: String = subject.chars().take(avail).collect();
+            if !text.is_empty() { format!("  {text}") } else { String::new() }
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
     let content = format!(
         "  {arrow} \x1b[{cl}mcheckpoint\x1b[0m\x1b[{bg}m #{}{id_part}\x1b[{ct}m{msg}\x1b[0m\x1b[{bg}m{ts_part}",
         cp.number,
         cl = t.checkpoint_label, bg = t.checkpoint_bg, ct = t.checkpoint_text,
     );
     let vis = visible_width(&content);
-    let pad = term_w.saturating_sub(vis);
+    let pad = w.saturating_sub(vis);
     format!("\x1b[{bg}m{content}{}\x1b[0m", " ".repeat(pad), bg = t.checkpoint_bg)
 }
 
-fn render_checkpoint_collapsed(cp: &CheckpointData, term_w: usize) -> Vec<String> {
-    vec![render_checkpoint_header(cp, false, term_w), String::new()]
+fn render_checkpoint_collapsed(cp: &CheckpointData, w: usize) -> Vec<String> {
+    vec![render_checkpoint_header(cp, false, w), String::new()]
 }
 
 /// Stats block (tokens/attribution/author) shown inside an expanded checkpoint,
@@ -1430,14 +1448,14 @@ fn build_flat(
                 let si = selectables.len();
                 starts.push(flat.len());
                 selectables.push(Selectable::Card(card_idx));
-                for l in render_checkpoint_collapsed(cp, term_w) { flat.push((si, l)); }
+                for l in render_checkpoint_collapsed(cp, w) { flat.push((si, l)); }
             } else {
                 let t = crate::theme::get();
                 // CheckpointHeader owns: green bar + blank + stats + (if files) "Files" label
                 let si = selectables.len();
                 starts.push(flat.len());
                 selectables.push(Selectable::CheckpointHeader(card_idx));
-                flat.push((si, render_checkpoint_header(cp, true, term_w)));
+                flat.push((si, render_checkpoint_header(cp, true, w)));
                 flat.push((si, String::new()));
                 for l in render_checkpoint_stats(cp) { flat.push((si, l)); }
                 if !cp.files_touched.is_empty() {
@@ -1566,8 +1584,14 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
     let result: Result<PagerOutcome> = loop {
         let s = starts[sel];
         let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
-        if s < scroll          { scroll = s; }
-        else if e > scroll + h { scroll = e.saturating_sub(h); }
+        if s < scroll {
+            scroll = s;
+        } else if e > scroll + h {
+            scroll = e.saturating_sub(h);
+            // For items taller than the screen, prefer showing the start so the
+            // header is always visible rather than scrolling into the body.
+            if scroll > s { scroll = s; }
+        }
 
         if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, selectables.len(), flash) {
             break Err(anyhow::anyhow!(err));
