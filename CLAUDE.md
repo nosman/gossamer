@@ -219,7 +219,7 @@ In addition to the checkpoint branch, entireio also keeps **shadow branches** of
 | `regex` | Text sanitization in the ingest pipeline |
 | `comfy-table` | (imported but currently unused in active code paths) |
 
-**witchcraft** is a private Dropbox library loaded via SSH (`git@github.com:dropbox/witchcraft.git`). It provides:
+**witchcraft** is a public Dropbox library (`github.com/dropbox/witchcraft`), loaded via an SSH git URL (`git@github.com:dropbox/witchcraft.git`) in `Cargo.toml`. It provides:
 - `witchcraft::DB` — a SQLite-backed vector store
 - `witchcraft::Embedder` — loads a quantized T5 model from a local assets directory
 - `witchcraft::embed_chunks` / `witchcraft::index_chunks` — batch embedding pipeline
