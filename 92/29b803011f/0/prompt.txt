@@ -1,0 +1,21 @@
+Create a readme for this repo. Give a paragraph about what the general use case is (managing claude code sessions and providing a local search for entire.io checkpoints). enumerate over all the commands and give instructions for each
+
+---
+
+Is that how to install gossamer even with the witchcraft dependency?
+
+---
+
+Why did you say witchcraft is a private repo?
+
+---
+
+Claude.md (which claude wrote) is wrong lmao. https://github.com/dropbox/witchcraft is public
+
+---
+
+Does it explain that --json can be added so that the command runs outside of interactive mode?
+
+---
+
+Great. Add an overview section where i can add some screenshots of the 3 main screens
