@@ -1,0 +1,17 @@
+Ok lets make it into an entire plugin!
+
+---
+
+Great so now what do i do to install gossamer into entire?
+
+---
+
+Should the readme/--help menu also say that running the command on its own will open it in TUI mode?
+
+---
+
+You write a good description of what gossamer was earlier in the session, can you find it?
+
+---
+
+No that's good. Remove the "agent-agnostic" part tho, since right now gossamer only works with claude
