@@ -15,7 +15,7 @@ const REPO_NAMESPACE: Uuid = Uuid::from_bytes([
 
 pub fn embed_and_index(wc_db: &witchcraft::DB) -> Result<()> {
     let Some(assets) = crate::config::resolve_warp_assets() else {
-        println!("Run `gossamer config <path>` pointing at the witchcraft assets directory to enable semantic search.");
+        println!("Run `entire gossamer assets <path>` pointing at the witchcraft assets directory to enable semantic search.");
         return Ok(());
     };
     let device = witchcraft::make_device();

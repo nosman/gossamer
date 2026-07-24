@@ -41,7 +41,7 @@ pub fn show() {
         Some(p) => println!("assets: {}", p.display()),
         None => println!(
             "assets: (not set)\n\
-             Run `gossamer config <path>` or set $WARP_ASSETS to the witchcraft assets directory."
+             Run `entire gossamer assets <path>` or set $WARP_ASSETS to the witchcraft assets directory."
         ),
     }
 }

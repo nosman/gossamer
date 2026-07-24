@@ -19,7 +19,7 @@ pub fn run(json: bool) -> Result<()> {
         if json {
             println!("{}", serde_json::json!({"sessions_indexed": 0}));
         } else {
-            println!("No repositories tracked. Run `gossamer init` first.");
+            println!("No repositories tracked. Run `entire gossamer init` first.");
         }
         return Ok(());
     }

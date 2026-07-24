@@ -3,6 +3,10 @@ name = "gossamer"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "entire-gossamer"
+path = "src/main.rs"
+
 [dependencies]
 witchcraft = { git = "ssh://git@github.com/dropbox/witchcraft.git", rev = "85e400c", features = ["t5-quantized"] }
 regex = "1"

@@ -11,7 +11,10 @@ mod theme;
 mod watermark;
 
 #[derive(Parser)]
-#[command(name = "gossamer", about = "Manage AI sessions with entireio")]
+#[command(
+    name = "entire-gossamer",
+    about = "Manage AI sessions with entireio. Run with no subcommand to open the interactive repo browser."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -25,7 +28,7 @@ struct Cli {
 enum Commands {
     /// Initialize gossamer in the current git repository
     Init,
-    /// Print all repositories tracked by gossamer
+    /// Open the interactive repo browser (also the default when no subcommand is given)
     Repo,
     /// Print sessions from the past 3 days
     Sessions {
@@ -33,10 +36,12 @@ enum Commands {
         #[arg(long)]
         all: bool,
     },
-    /// Scan checkpoint logs and index sessions into the database
-    Index,
-    /// Incrementally index only new checkpoint commits since the last index/refresh
-    Refresh,
+    /// Scan checkpoint logs and Claude JSONL files and ingest sessions into the database
+    Ingest {
+        /// Only ingest checkpoint commits since the last ingest (skips unchanged repos)
+        #[arg(long)]
+        incremental: bool,
+    },
     /// Browse a session's messages interactively (arrow keys to navigate)
     Show {
         /// Session ID or path to a JSONL file
@@ -51,8 +56,8 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "10")]
         top_k: usize,
     },
-    /// Start a new Claude Code session, optionally in a fresh git worktree
-    NewSession {
+    /// Launch a new Claude Code session, optionally in a fresh git worktree
+    Launch {
         /// Create a new git worktree on this branch before launching
         #[arg(long, short = 'b')]
         branch: Option<String>,
@@ -110,8 +115,8 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
-    /// Show or set gossamer configuration
-    Config {
+    /// Show or set the witchcraft (semantic search) assets directory
+    Assets {
         /// Path to the witchcraft assets directory (enables semantic search)
         assets: Option<String>,
     },
@@ -136,11 +141,11 @@ fn main() -> Result<()> {
         Commands::Init => commands::init::run(json)?,
         Commands::Repo => { commands::status::run(json)?; }
         Commands::Sessions { all } => { commands::sessions::run(all, json)?; }
-        Commands::Index => commands::index::run(json)?,
-        Commands::Refresh => commands::refresh::run(json)?,
+        Commands::Ingest { incremental: false } => commands::index::run(json)?,
+        Commands::Ingest { incremental: true } => commands::refresh::run(json)?,
         Commands::Show { session } => { commands::show::run(&session)?; }
         Commands::Search { query, top_k } => { commands::search::run(&query.join(" "), top_k, json)?; }
-        Commands::NewSession { branch, name, prompt } => {
+        Commands::Launch { branch, name, prompt } => {
             commands::new_session::run(branch, name, prompt)?
         }
         Commands::Resume { session_id } => commands::resume::run(&session_id)?,
@@ -149,8 +154,8 @@ fn main() -> Result<()> {
         Commands::Discover { dry_run } => commands::discover::run(dry_run, json)?,
         Commands::Tidy { dry_run, days, force, sessions } => commands::tidy::run(days, dry_run, force, sessions, json)?,
         Commands::Attach { session_id, agent, force } => commands::attach::run(&session_id, &agent, force, json)?,
-        Commands::Config { assets: Some(path) } => config::set_warp_assets(&path)?,
-        Commands::Config { assets: None }       => config::show(),
+        Commands::Assets { assets: Some(path) } => config::set_warp_assets(&path)?,
+        Commands::Assets { assets: None }       => config::show(),
         Commands::SessionStart => commands::session_start::run()?,
         Commands::SessionStop  => commands::session_stop::run()?,
     }

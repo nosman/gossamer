@@ -3,7 +3,7 @@
 // Each test gets an isolated HOME in a tempdir so the gossamer DB, claude hooks,
 // and shell rc files don't touch the real user's environment.
 //
-// The tests invoke the compiled binary directly via CARGO_BIN_EXE_gossamer.
+// The tests invoke the compiled binary directly via CARGO_BIN_EXE_entire-gossamer.
 
 use std::fs;
 use std::io::Write as _;
@@ -12,7 +12,7 @@ use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 fn bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_gossamer"))
+    PathBuf::from(env!("CARGO_BIN_EXE_entire-gossamer"))
 }
 
 // ── Test environment ──────────────────────────────────────────────────────────
@@ -242,13 +242,13 @@ fn test_init_registers_claude_hooks() {
     let has_session_start = start_hooks.as_array().unwrap().iter().any(|entry| {
         entry["hooks"]
             .as_array()
-            .map_or(false, |cmds| cmds.iter().any(|c| c["command"] == "gossamer session-start"))
+            .map_or(false, |cmds| cmds.iter().any(|c| c["command"] == "entire gossamer session-start"))
     });
     let has_stop = stop_hooks.as_array().unwrap().iter().any(|entry| {
         entry["hooks"]
             .as_array()
             .map_or(false, |cmds| cmds.iter().any(|c| {
-                c["command"].as_str().map_or(false, |s| s.contains("gossamer session-stop"))
+                c["command"].as_str().map_or(false, |s| s.contains("entire gossamer session-stop"))
             }))
     });
     assert!(has_session_start, "SessionStart hook not registered");
@@ -449,8 +449,8 @@ fn test_index_reports_zero_without_checkpoint_branch() {
     let env = TestEnv::new();
     env.init();
 
-    let out = env.gossamer(&["index", "--json"]).output().unwrap();
-    assert!(out.status.success(), "index failed: {}", String::from_utf8_lossy(&out.stderr));
+    let out = env.gossamer(&["ingest", "--json"]).output().unwrap();
+    assert!(out.status.success(), "ingest failed: {}", String::from_utf8_lossy(&out.stderr));
     let json = extract_json(&out.stdout);
     assert_eq!(
         json["sessions_indexed"].as_u64(),
@@ -468,10 +468,10 @@ fn test_index_with_checkpoint_branch() {
     let cwd = env.repo.path().to_string_lossy().to_string();
     create_checkpoint_branch(env.repo.path(), session_id, &cwd);
 
-    let out = env.gossamer(&["index", "--json"]).output().unwrap();
+    let out = env.gossamer(&["ingest", "--json"]).output().unwrap();
     assert!(
         out.status.success(),
-        "index failed\nstdout: {}\nstderr: {}",
+        "ingest failed\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );

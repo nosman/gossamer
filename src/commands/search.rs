@@ -89,7 +89,7 @@ struct GroupRow {
 pub fn run(query: &str, top_k: usize, json: bool) -> Result<bool> {
     let assets = crate::config::resolve_warp_assets()
         .ok_or_else(|| anyhow::anyhow!(
-            "Witchcraft assets not configured.\nRun: gossamer config <path-to-witchcraft-assets>"
+            "Witchcraft assets not configured.\nRun: entire gossamer assets <path-to-witchcraft-assets>"
         ))?;
 
     let db_path = dirs::home_dir()

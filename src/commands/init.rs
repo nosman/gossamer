@@ -7,9 +7,9 @@ use crate::db;
 
 const HOOK_MARKER: &str = "# gossamer:";
 const HOOK_SNIPPET: &str = r#"
-# gossamer: re-index sessions after entireio checkpoints
+# gossamer: re-ingest sessions after entireio checkpoints
 if git log -1 --format="%B" | grep -q "Entire-Checkpoint:"; then
-    gossamer index >/dev/null 2>&1 || true
+    entire gossamer ingest >/dev/null 2>&1 || true
 fi"#;
 
 const SHELL_MARKER: &str = "# gossamer-shell-init";
@@ -18,7 +18,7 @@ const SHELL_SNIPPET: &str = r#"
 gr() {
   local tmp
   tmp=$(mktemp)
-  GOSSAMER_CDPATH="$tmp" gossamer repo
+  GOSSAMER_CDPATH="$tmp" entire gossamer repo
   local dest
   dest=$(cat "$tmp" 2>/dev/null)
   rm -f "$tmp"
@@ -192,7 +192,7 @@ fn install_post_commit_hook(repo_dir: &str) -> Result<()> {
     if hook_path.exists() {
         let content = fs::read_to_string(&hook_path)?;
         if content.contains(HOOK_MARKER) {
-            println!("post-commit hook already contains gossamer indexing, skipping.");
+            println!("post-commit hook already contains gossamer ingestion, skipping.");
             return Ok(());
         }
         let mut file = fs::OpenOptions::new().append(true).open(&hook_path)?;
@@ -276,24 +276,7 @@ fn install_claude_hook() -> Result<()> {
             .as_array_mut()
             .context("SessionStart is not an array")?;
 
-        let already = start_hooks.iter().any(|e| {
-            e.get("hooks")
-                .and_then(Value::as_array)
-                .map_or(false, |cmds| {
-                    cmds.iter().any(|c| {
-                        c.get("command").and_then(Value::as_str) == Some("gossamer session-start")
-                    })
-                })
-        });
-        if !already {
-            start_hooks.push(json!({
-                "matcher": "",
-                "hooks": [{ "type": "command", "command": "gossamer session-start" }]
-            }));
-            println!("Registered Claude Code SessionStart hook.");
-        } else {
-            println!("Claude Code SessionStart hook already registered, skipping.");
-        }
+        upsert_hook_command(start_hooks, "gossamer session-start", "entire gossamer session-start", "SessionStart");
     }
 
     // Stop
@@ -304,25 +287,12 @@ fn install_claude_hook() -> Result<()> {
             .as_array_mut()
             .context("Stop is not an array")?;
 
-        let already = stop_hooks.iter().any(|e| {
-            e.get("hooks")
-                .and_then(Value::as_array)
-                .map_or(false, |cmds| {
-                    cmds.iter().any(|c| {
-                        c.get("command").and_then(Value::as_str)
-                            == Some("gossamer session-stop >/dev/null 2>&1")
-                    })
-                })
-        });
-        if !already {
-            stop_hooks.push(json!({
-                "matcher": "",
-                "hooks": [{ "type": "command", "command": "gossamer session-stop >/dev/null 2>&1" }]
-            }));
-            println!("Registered Claude Code Stop hook.");
-        } else {
-            println!("Claude Code Stop hook already registered, skipping.");
-        }
+        upsert_hook_command(
+            stop_hooks,
+            "gossamer session-stop >/dev/null 2>&1",
+            "entire gossamer session-stop >/dev/null 2>&1",
+            "Stop",
+        );
     }
 
     if let Some(parent) = settings_path.parent() {
@@ -331,6 +301,35 @@ fn install_claude_hook() -> Result<()> {
     fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
     println!("Claude Code hooks saved to {}.", settings_path.display());
     Ok(())
+}
+
+/// Registers `new_cmd` as a hook command in `entries`, migrating an existing
+/// entry that still points at `old_cmd` (pre-`entire-gossamer` rename) in
+/// place rather than leaving a stale duplicate alongside the new one.
+fn upsert_hook_command(entries: &mut Vec<Value>, old_cmd: &str, new_cmd: &str, event_name: &str) {
+    for entry in entries.iter_mut() {
+        let Some(cmds) = entry.get_mut("hooks").and_then(Value::as_array_mut) else { continue };
+        for c in cmds.iter_mut() {
+            match c.get("command").and_then(Value::as_str) {
+                Some(cmd) if cmd == new_cmd => {
+                    println!("Claude Code {event_name} hook already registered, skipping.");
+                    return;
+                }
+                Some(cmd) if cmd == old_cmd => {
+                    c["command"] = json!(new_cmd);
+                    println!("Migrated Claude Code {event_name} hook to `entire gossamer`.");
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    entries.push(json!({
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": new_cmd }]
+    }));
+    println!("Registered Claude Code {event_name} hook.");
 }
 
 fn install_shell_function() -> Result<()> {

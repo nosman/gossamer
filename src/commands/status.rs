@@ -69,7 +69,7 @@ pub fn run(json: bool) -> Result<bool> {
     }
 
     if repos.is_empty() {
-        println!("No repositories tracked. Run `gossamer init` in a git repo to get started.");
+        println!("No repositories tracked. Run `entire gossamer init` in a git repo to get started.");
         return Ok(false);
     }
 
@@ -310,7 +310,7 @@ fn tui_loop(stdout: &mut impl Write, repos: &mut Vec<Repository>, has_cd: bool, 
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
                 match result {
                     Ok(true) => return Ok(Some(TuiOutcome::Quit)),
-                    Err(_) => { flash = Some("  Transcript not found — run `gossamer index` to backfill  "); }
+                    Err(_) => { flash = Some("  Transcript not found — run `entire gossamer ingest` to backfill  "); }
                     Ok(false) => {}
                 }
             }
@@ -450,7 +450,7 @@ fn draw_repos(
 
     let cd_hint = if has_cd { "   c: cd" } else { "" };
     let bar = format!(
-        "  {} repos   ↑↓/jk navigate   space: sessions   s: new session   d: discover   / search{}   q: quit  ",
+        "  {} repos   ↑↓/jk navigate   space: sessions   s: launch   d: discover   / search{}   q: quit  ",
         repos.len(), cd_hint
     );
     super::draw_statusbar(&mut buf, &bar, w, h)?;
@@ -605,7 +605,7 @@ fn draw_sessions(
     }
 
     let base = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: new session   n: new worktree   t: tidy   / search   ←/h: back   q: quit  ",
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: launch   n: new worktree   t: tidy   / search   ←/h: back   q: quit  ",
         sessions.len()
     );
     let bar = if let Some(msg) = flash {
@@ -691,7 +691,7 @@ pub(super) fn new_session_wizard(stdout: &mut impl Write, repo_dir: &str, w: usi
     loop {
         // ── Draw panel ────────────────────────────────────────────────────────
         execute!(stdout, cursor::MoveTo(0, panel_top as u16)).ok();
-        write!(stdout, "\x1b[{hd}m  New Session\x1b[0m", hd = t.header).ok();
+        write!(stdout, "\x1b[{hd}m  Launch\x1b[0m", hd = t.header).ok();
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine)).ok();
 
         execute!(stdout, cursor::MoveTo(0, (panel_top + 1) as u16)).ok();

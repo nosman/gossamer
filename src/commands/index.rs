@@ -302,7 +302,7 @@ pub fn run(json: bool) -> Result<()> {
         if json {
             println!("{}", serde_json::json!({"sessions_indexed": 0, "log_turns": 0}));
         } else {
-            println!("No repositories tracked. Run `gossamer init` first.");
+            println!("No repositories tracked. Run `entire gossamer init` first.");
         }
         return Ok(());
     }
@@ -508,7 +508,7 @@ fn index_repo(conn: &rusqlite::Connection, repo_id: i64, repo_dir: &str, _repo_n
                           &p.initial_attribution_json, &p.model)?;
     }
 
-    // Save commit watermark so `gossamer refresh` knows where to start next time.
+    // Save commit watermark so `entire gossamer ingest --incremental` knows where to start next time.
     if let Ok(out) = Command::new("git").args(["rev-parse", BRANCH]).current_dir(repo_dir).output() {
         if out.status.success() {
             let head = String::from_utf8_lossy(&out.stdout).trim().to_string();

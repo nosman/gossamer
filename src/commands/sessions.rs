@@ -275,7 +275,7 @@ fn tui_loop(
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
                 match result {
                     Ok(true) => return Some(Action::Quit),
-                    Err(_) => { flash = Some("  Transcript not found — run `gossamer index` to backfill  "); }
+                    Err(_) => { flash = Some("  Transcript not found — run `entire gossamer ingest` to backfill  "); }
                     Ok(false) => {}
                 }
             }
@@ -456,7 +456,7 @@ fn draw(
     }
 
     let base = format!(
-        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: new session   n: new worktree   t: tidy   / search   q: quit  ",
+        "  {} sessions   ↑↓/jk navigate   space: view   r: resume   d: delete   s: launch   n: new worktree   t: tidy   / search   q: quit  ",
         sessions.len()
     );
     let bar = if let Some(msg) = flash {
