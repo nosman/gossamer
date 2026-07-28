@@ -1,0 +1,9 @@
+how do i delete some repos from gossamer? i want to remove them so that i can parse them again for a demo. i also want to avoid printing out all the indexed sessions when i run gossamer index
+
+---
+
+When we call "entire gossamer" for the first time, and no repos are registered, it prints to use gossamer init to register repos. change the message to suggest using entire gossamer discover --dry-run to find repos that you may want to track.
+
+---
+
+Actually, make the message write both, suggest entire gossamer discover, or entire gossamer init to add repos individually
