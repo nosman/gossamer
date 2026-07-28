@@ -69,7 +69,7 @@ pub fn run(json: bool) -> Result<bool> {
     }
 
     if repos.is_empty() {
-        println!("No repositories tracked. Run `entire gossamer init` in a git repo to get started.");
+        println!("No repositories tracked. Run `entire gossamer discover --dry-run` to find repos you may want to track, or `entire gossamer init` in a git repo to add one individually.");
         return Ok(false);
     }
 
@@ -512,7 +512,14 @@ fn draw_sessions(
     // ── Sessions ─────────────────────────────────────────────────────────────
     let sessions_start = row;
     let sessions_h = content_h.saturating_sub(sessions_start);
-    let scroll = if sel >= sessions_h { sel + 1 - sessions_h } else { 0 };
+    // One row of sessions_h is consumed by the "session / branch / ..." header
+    // drawn below, so only sessions_h - 1 rows are actually available for
+    // entries. Without this, the scroll math thinks one more row is visible
+    // than actually is, so the entry at the bottom edge computes as in view
+    // but gets drawn past content_h and is dropped by the `row >= content_h`
+    // break below — the highlighted row can end up off-screen.
+    let entries_h = sessions_h.saturating_sub(1);
+    let scroll = if sel >= entries_h { sel + 1 - entries_h } else { 0 };
 
     if sessions.is_empty() {
         if row < content_h {

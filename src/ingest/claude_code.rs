@@ -534,7 +534,6 @@ fn ingest_repo(
         };
 
         let content = String::from_utf8_lossy(&jsonl_bytes);
-        eprintln!("{jsonl_path}");
 
         match ingest_session(db, &session_id, &content, "") {
             Ok((n, custom_title)) => {

@@ -62,8 +62,14 @@ pub fn scan_candidates(known_dirs: &HashSet<String>) -> Vec<CandidateRepo> {
         else { continue };
         if !out.status.success() { continue; }
 
-        let root = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if root.is_empty() || seen_roots.contains(&root) { continue; }
+        let toplevel = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if toplevel.is_empty() { continue; }
+
+        // If `cwd` is inside a linked worktree, `--show-toplevel` gives the
+        // worktree's own directory rather than the original repo. Resolve
+        // back to the main worktree so we suggest tracking that instead.
+        let root = resolve_main_root(&cwd).unwrap_or(toplevel);
+        if seen_roots.contains(&root) { continue; }
         seen_roots.insert(root.clone());
         if known_dirs.contains(&root) { continue; }
 
@@ -85,6 +91,31 @@ pub fn scan_candidates(known_dirs: &HashSet<String>) -> Vec<CandidateRepo> {
 
     candidates.sort_by(|a, b| a.name.cmp(&b.name));
     candidates
+}
+
+/// Resolve `dir` to the main worktree's root directory, even when `dir` is
+/// itself a linked worktree. `--git-common-dir` always points at the shared
+/// `.git` directory in the main worktree, regardless of which worktree it's
+/// run from, so its parent is the original repo root.
+fn resolve_main_root(dir: &str) -> Option<String> {
+    let out = Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+
+    let common = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if common.is_empty() { return None; }
+    let common_path = if std::path::Path::new(&common).is_absolute() {
+        PathBuf::from(&common)
+    } else {
+        PathBuf::from(dir).join(&common)
+    };
+
+    let root = common_path.parent()?;
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    Some(root.to_string_lossy().to_string())
 }
 
 fn extract_cwd(path: &std::path::Path) -> Option<String> {
