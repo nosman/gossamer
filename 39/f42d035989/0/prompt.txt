@@ -1,0 +1,6 @@
+The entire-gossamer command doesn't resolve workspaces back to their original git directories. can you make it so that if the discover command finds a session in a worktree, it will infer the root directory 
+and suggest that instead?
+
+---
+
+there is a small bug in the session list navigation- if the session list if bigger than the viewport, and we scroll down, the highlighted session row is outside of the viewport, even though the list itself moves correctly
