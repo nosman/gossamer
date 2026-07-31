@@ -1,0 +1,147 @@
+{
+  "cli_version": "0.9.0",
+  "checkpoint_id": "459ef0d5028c",
+  "session_id": "52165cac-a22b-4ce6-875c-e80c2da2a49a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-31T06:28:22.295982Z",
+  "branch": "main",
+  "checkpoints_count": 10,
+  "save_step_count": 8,
+  "files_touched": [
+    "src/commands/show.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-sonnet-5",
+  "turn_id": "08eaf5af5065",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 142,
+    "cache_creation_tokens": 141237,
+    "cache_read_tokens": 8221387,
+    "output_tokens": 77488,
+    "api_call_count": 71
+  },
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-31T06:28:22.263922Z",
+    "agent_lines": 60,
+    "agent_removed": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 60,
+    "total_lines_changed": 62,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 463,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude-plugin/plugin.json": 7,
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88,
+        ".idea/.gitignore": 10,
+        ".idea/encodings.xml": 4,
+        ".idea/gossamer.iml": 12,
+        ".idea/modules.xml": 8,
+        ".idea/vcs.xml": 6,
+        "install.js": 75,
+        "package.json": 25
+      }
+    },
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 182,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 182,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 182,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 5,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 182,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 6,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 207,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 7,
+      "user_lines_added": 316,
+      "user_lines_removed": 0,
+      "agent_lines_added": 207,
+      "agent_lines_removed": 2,
+      "user_added_per_file": {
+        ".claude/settings.local.json": 30,
+        ".claude/skills/gossamer-guide/SKILL.md": 129,
+        ".claude/skills/gossamer-new-session/SKILL.md": 69,
+        ".claude/skills/gossamer-resume/SKILL.md": 88
+      }
+    },
+    {
+      "checkpoint_number": 8,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

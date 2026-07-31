@@ -1,0 +1,33 @@
+entire gossamer resume failed with exec failed: No such file or directory (os error 2). can you please check why? i was trying to resume someone else's session on my computer
+
+---
+
+you fool- it failed when i ran it in the TUI!
+
+---
+
+yes fix it. this used to work.
+
+---
+
+do i have to reinstall gossamer into entire separately?
+
+---
+
+Ok well now it's also just taking forever and then fails with the same message
+
+---
+
+they basically all do, but here is one:  Next feedback item: On entiredb (Go, ~2,  feat/search-graph-ranking             Thomas Dohmke           69k  0f469ab8  07/22/26
+
+---
+
+you stupid fuck- the documentation for "entire session resume" is: Switch to a branch, restore latest checkpointed session metadata, and show command(s). why did we lose that functionality? entire session resume is based off of the brand.
+
+---
+
+What's the point of its algorithm? why can't it restore the session just based on the branch? why does it matter where head is pointing?
+
+---
+
+that doesn't make much sense tho. why can't i load the context i care about into claude even if there is no code past main? Also what if i want to resume from main?
