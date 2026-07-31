@@ -1327,7 +1327,15 @@ fn resume_via_entire(dir: &str, branch: &str) {
     entire.args(["session", "resume"]).current_dir(&launch_dir);
     if !branch.is_empty() { entire.arg(branch); }
 
-    let Ok(out) = entire.output() else { eprintln!("entire session resume failed"); return; };
+    let out = match entire.output() {
+        Ok(out) => out,
+        Err(e) => { eprintln!("entire session resume failed: {e}"); return; }
+    };
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        eprintln!("entire session resume failed: {}", stderr.trim());
+        return;
+    }
 
     let cmd_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if cmd_str.is_empty() { eprintln!("entire resume returned no command"); return; }
@@ -1335,8 +1343,33 @@ fn resume_via_entire(dir: &str, branch: &str) {
     let mut parts = cmd_str.split_whitespace();
     let Some(prog) = parts.next() else { return; };
     let args: Vec<&str> = parts.collect();
+
+    // `entire session resume` prints a command to run only on success; on
+    // failure (branch has no checkpointed commit, etc.) it exits 0 but prints
+    // a plain-English message on stdout instead. Blindly exec'ing that as
+    // `prog args...` produces a misleading ENOENT — check it actually
+    // resolves to a real executable first, and surface entire's own message
+    // otherwise.
+    if !command_exists(prog) {
+        eprintln!("{cmd_str}");
+        return;
+    }
+
     let err = std::process::Command::new(prog).args(&args).current_dir(&launch_dir).exec();
     eprintln!("exec failed: {err}");
+}
+
+/// Whether `prog` resolves to a runnable executable, either as a path
+/// (absolute or containing `/`) or by name via `$PATH`.
+fn command_exists(prog: &str) -> bool {
+    if prog.contains('/') {
+        return std::fs::metadata(prog).map(|m| !m.is_dir()).unwrap_or(false);
+    }
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| {
+            std::fs::metadata(dir.join(prog)).map(|m| !m.is_dir()).unwrap_or(false)
+        })
+    })
 }
 
 /// Find a Claude session by ID. Returns `(cwd, git_branch)` from the JSONL if found,
@@ -1383,8 +1416,28 @@ fn do_resume(_agent: &str, session_id: &str, session_branch: &str, session_cwd: 
     resume_session(session_id, &dir);
 }
 
+/// Resolve a session's local repo directory + branch from the gossamer DB.
+/// Used when there's no local Claude Code transcript for the session (e.g.
+/// it was authored on someone else's machine and only reached us via the
+/// checkpoint branch) — in that case `sessions.cwd` is the *foreign*
+/// machine's path and useless locally, but `sessions.repo_id` was already
+/// resolved to a repo tracked on *this* machine (see `RepoResolver` in
+/// `commands/index.rs`, which matches cross-machine cwds via git remote /
+/// path-suffix heuristics), and `sessions.branch` holds the real branch name.
+fn db_session_repo_and_branch(session_id: &str) -> Option<(String, String)> {
+    let conn = crate::db::connect().ok()?;
+    conn.query_row(
+        "SELECT r.directory, COALESCE(s.branch, '')
+           FROM sessions s JOIN repositories r ON r.id = s.repo_id
+          WHERE s.session_id = ?1",
+        [session_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    ).ok()
+}
+
 /// Resume a session by ID, falling back to `entire resume` if the Claude JSONL is absent.
-/// `fallback_cwd` is used for `entire resume` if the Claude session isn't found.
+/// `fallback_cwd` is used for `entire resume` if the Claude session isn't found and no
+/// local repo/branch can be resolved from the DB either.
 pub fn resume_session(session_id: &str, fallback_cwd: &str) {
     use std::os::unix::process::CommandExt;
     if let Some((session_cwd, session_branch)) = find_claude_session_cwd(session_id) {
@@ -1401,6 +1454,11 @@ pub fn resume_session(session_id: &str, fallback_cwd: &str) {
         eprintln!("exec failed: {err}");
         // exec failed — fall back to entire resume, checking out the session branch first
         resume_via_entire(&launch_dir, &session_branch);
+    } else if let Some((repo_dir, branch)) = db_session_repo_and_branch(session_id) {
+        // No local Claude transcript — this session never ran on this machine.
+        // Use the locally-tracked repo directory and stored branch instead of
+        // whatever foreign cwd the caller passed as `fallback_cwd`.
+        resume_via_entire(&repo_dir, &branch);
     } else {
         resume_via_entire(fallback_cwd, "");
     }
