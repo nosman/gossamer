@@ -1,0 +1,5 @@
+can you make the codex turn tag a different color? claude is orange, codex should be lavender
+
+---
+
+Let's do one last UX improvement - when we get big messages, it's hard to show the whole message since moving the arrow keys just jumps to the next message. We want to be able to scroll around in the conversation and not just show the current selection.
