@@ -26,7 +26,7 @@ pub fn run(session_id: &str, agent: &str, force: bool, json: bool) -> Result<()>
     }
 
     let mut wc_db = ingest::open_search_db()?;
-    let turns = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
+    let turns = ingest::ingest_checkpoint_sessions(&mut wc_db)?;
     if turns > 0 {
         if !json { println!("{turns} turn(s) ingested."); }
         ingest::embed_and_index(&wc_db)?;

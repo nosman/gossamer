@@ -45,9 +45,19 @@ src/
     attach.rs          # `entire gossamer attach` — attach an existing entire session
     session_start.rs   # `entire gossamer session-start` — Claude Code SessionStart hook
     session_stop.rs    # `entire gossamer session-stop` — Claude Code Stop hook
+  parsers/
+    mod.rs             # dispatch_session/dispatch_shadow_session — pick a parser by agent
+    claude_code.rs     # Claude Code JSONL -> ParsedSession (session_id, cwd, name, branch, ...)
+    generic.rs         # Agnostic ParsedSession parser for every other agent (Codex, etc.)
+  scraper.rs           # Agent-agnostic transcript walker shared by parsers/generic.rs and
+                        # ingest/generic.rs — extracts user/assistant turns + tool calls by
+                        # structural signal (role/type fields, content/text/message keys),
+                        # not a per-format struct
   ingest/
-    mod.rs             # Search DB ingestion: sessions, repos, embed + index
-    claude_code.rs     # Ingest Claude Code session logs from checkpoint branch
+    mod.rs             # Search DB ingestion driver: ingest_checkpoint_sessions dispatches
+                        # per-session by agent, plus session names, repos, embed + index
+    claude_code.rs     # Claude Code JSONL -> search-DB chunks (bespoke, tuned parser)
+    generic.rs         # scraper-based search-DB chunks for every other agent
 tests/
   integration_test.rs  # Integration tests (binary invocation, isolated HOME)
 ```
@@ -102,9 +112,11 @@ Ingests all tracked repos' `entire/checkpoints/v1` branches into the local DB �
 Without `--incremental`, does a full re-ingest. For each repo:
 1. Optionally fetches the branch from a remote checkpoint URL (from `.entire/settings.json`).
 2. Runs `git ls-tree -r --name-only entire/checkpoints/v1` to find `metadata.json` files at paths matching `<x>/<session_id>/<number>/metadata.json`.
-3. Parses each session's metadata and JSONL transcript, upserts into the `sessions` table.
-4. Ingests session names, repo info, and Claude Code logs into the witchcraft search DB.
+3. Parses each session's metadata and JSONL transcript via `parsers::dispatch_session`, upserts into the `sessions` table.
+4. Ingests session names, repo info, and session transcripts into the witchcraft search DB via `ingest::ingest_checkpoint_sessions`.
 5. Embeds and indexes if witchcraft assets are configured.
+
+Both the `sessions`-table parse (step 3) and the search-DB chunking (step 4) dispatch per-session on `metadata.json`'s `agent` field: Claude Code gets its own bespoke, tuned parser (`parsers::claude_code` / `ingest::claude_code`); everything else (Codex today) goes through an agent-agnostic parser (`parsers::generic` / `ingest::generic`, built on `scraper::scan`) that recognizes user/assistant turns and tool calls by structural signal — a `role` field, known `type` synonyms, `text`/`message`/`content` keys — rather than a bespoke struct per format. Shadow branches (no `metadata.json`) instead sniff the JSONL's own shape (`scraper::looks_like_claude_shape`) to pick a parser.
 
 `--json` output: `{ "sessions_indexed", "log_turns", "session_names", "repos" }`
 
@@ -113,6 +125,8 @@ With `--incremental`, only processes commits on `entire/checkpoints/v1` since th
 ### `entire gossamer show <session-id-or-path>`
 
 Interactive TUI for reading a session transcript. Accepts a session UUID (looked up in DB and `~/.claude/projects/`) or a direct path to a JSONL file. Renders assistant messages as Markdown via `termimad`. Arrow keys navigate turns.
+
+`parse()` dispatches on the session's `agent_name` the same way `parsers::dispatch_session` does: Claude Code's per-line JSONL walk for Claude sessions, `scraper::scan` for everything else. Both paths build the same `Card` list (Header/UserMsg/AsstMsg/ToolRound/...) and share the same post-processing pipeline (merging consecutive assistant turns, splitting tool calls into interactive `ToolRound` cards), so tool calls render identically regardless of agent.
 
 ### `entire gossamer search <query...> [-n <top_k>]`
 

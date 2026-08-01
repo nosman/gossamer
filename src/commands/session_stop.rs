@@ -24,7 +24,7 @@ pub fn run() -> Result<()> {
         Err(_) => return Ok(()),
     };
 
-    let _ = ingest::claude_code::ingest_claude_code(&mut wc_db);
+    let _ = ingest::ingest_checkpoint_sessions(&mut wc_db);
     let _ = ingest::ingest_sessions(&mut wc_db);
     let _ = ingest::embed_and_index(&wc_db);
 

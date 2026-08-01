@@ -494,61 +494,11 @@ fn extract_from_checkpoint(session_id: &str) -> Option<PathBuf> {
 // ── Parsing ───────────────────────────────────────────────────────────────────
 
 fn parse(raw: &str, agent: &str) -> Vec<Card> {
-    let mut tool_names: HashMap<String, String> = HashMap::new();
-    for line in raw.lines() {
-        if let Ok(v) = serde_json::from_str::<Value>(line) {
-            if let Some(blocks) = v["message"]["content"].as_array() {
-                for b in blocks {
-                    if b["type"].as_str() == Some("tool_use") {
-                        if let (Some(id), Some(name)) = (b["id"].as_str(), b["name"].as_str()) {
-                            tool_names.insert(id.to_string(), name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut cards: Vec<Card> = Vec::new();
-    let mut first_cwd    = String::new();
-    let mut first_branch = String::new();
-    let mut first_ts     = String::new();
-    let mut title: Option<String> = None;
-
-    for line in raw.lines() {
-        if line.trim().is_empty() { continue; }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        let ts = v["timestamp"].as_str().unwrap_or("").to_string();
-        if first_ts.is_empty() && !ts.is_empty() { first_ts = ts.clone(); }
-
-        match v["type"].as_str() {
-            Some("custom-title") => {
-                title = v["customTitle"].as_str().map(str::to_string);
-            }
-            Some("system") => {
-                if let Some(c) = v["cwd"].as_str() { if first_cwd.is_empty() { first_cwd = c.to_string(); } }
-                let content = v["content"].as_str().unwrap_or("").to_string();
-                if !content.is_empty() {
-                    let subtype = v["subtype"].as_str().unwrap_or("system").replace('_', " ");
-                    cards.push(Card::System { ts, subtype, content });
-                }
-            }
-            Some("user") => {
-                if let Some(c) = v["cwd"].as_str()       { if first_cwd.is_empty()    { first_cwd    = c.to_string(); } }
-                if let Some(b) = v["gitBranch"].as_str() { if first_branch.is_empty() { first_branch = b.to_string(); } }
-                let parts = parse_user(&v["message"]["content"], &tool_names);
-                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts, author: None }); }
-            }
-            Some("assistant") => {
-                let parts = parse_asst(&v["message"]["content"]);
-                if !parts.is_empty() { cards.push(Card::AsstMsg { ts, parts }); }
-            }
-            _ => {}
-        }
-    }
-
-    let mut result = vec![Card::Header { title, cwd: first_cwd, branch: first_branch, ts: first_ts, agent: agent.to_string() }];
-    result.extend(cards);
+    let mut result = if crate::parsers::is_claude_agent(Some(agent)) {
+        parse_claude_lines(raw, agent)
+    } else {
+        parse_generic_lines(raw, agent)
+    };
 
     // Merge each pure tool-result UserMsg into the preceding AsstMsg.
     let mut i = 1;
@@ -627,6 +577,118 @@ fn parse(raw: &str, agent: &str) -> Vec<Card> {
         }
     }
 
+    result
+}
+
+/// Claude Code's per-line JSONL walk: `{"type":"user"|"assistant"|"system"|
+/// "custom-title", ...}`, with user/assistant content under `message.content`.
+/// Returns the Header card plus one card per JSONL line, before the
+/// shared post-processing pipeline in `parse` runs.
+fn parse_claude_lines(raw: &str, agent: &str) -> Vec<Card> {
+    let mut tool_names: HashMap<String, String> = HashMap::new();
+    for line in raw.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            if let Some(blocks) = v["message"]["content"].as_array() {
+                for b in blocks {
+                    if b["type"].as_str() == Some("tool_use") {
+                        if let (Some(id), Some(name)) = (b["id"].as_str(), b["name"].as_str()) {
+                            tool_names.insert(id.to_string(), name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut cards: Vec<Card> = Vec::new();
+    let mut first_cwd    = String::new();
+    let mut first_branch = String::new();
+    let mut first_ts     = String::new();
+    let mut title: Option<String> = None;
+
+    for line in raw.lines() {
+        if line.trim().is_empty() { continue; }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let ts = v["timestamp"].as_str().unwrap_or("").to_string();
+        if first_ts.is_empty() && !ts.is_empty() { first_ts = ts.clone(); }
+
+        match v["type"].as_str() {
+            Some("custom-title") => {
+                title = v["customTitle"].as_str().map(str::to_string);
+            }
+            Some("system") => {
+                if let Some(c) = v["cwd"].as_str() { if first_cwd.is_empty() { first_cwd = c.to_string(); } }
+                let content = v["content"].as_str().unwrap_or("").to_string();
+                if !content.is_empty() {
+                    let subtype = v["subtype"].as_str().unwrap_or("system").replace('_', " ");
+                    cards.push(Card::System { ts, subtype, content });
+                }
+            }
+            Some("user") => {
+                if let Some(c) = v["cwd"].as_str()       { if first_cwd.is_empty()    { first_cwd    = c.to_string(); } }
+                if let Some(b) = v["gitBranch"].as_str() { if first_branch.is_empty() { first_branch = b.to_string(); } }
+                let parts = parse_user(&v["message"]["content"], &tool_names);
+                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts, author: None }); }
+            }
+            Some("assistant") => {
+                let parts = parse_asst(&v["message"]["content"]);
+                if !parts.is_empty() { cards.push(Card::AsstMsg { ts, parts }); }
+            }
+            _ => {}
+        }
+    }
+
+    let mut result = vec![Card::Header { title, cwd: first_cwd, branch: first_branch, ts: first_ts, agent: agent.to_string() }];
+    result.extend(cards);
+    result
+}
+
+/// Agnostic path for every non-Claude agent, built on `scraper::scan`. One
+/// card per turn — the shared post-processing pipeline in `parse` merges
+/// consecutive assistant turns and splits tool calls into `ToolRound` cards,
+/// exactly as it does for Claude's per-line cards.
+fn parse_generic_lines(raw: &str, agent: &str) -> Vec<Card> {
+    let (info, turns) = crate::scraper::scan(raw.as_bytes());
+
+    let first_ts = turns.first().and_then(|t| t.timestamp.clone()).unwrap_or_default();
+    let mut cards: Vec<Card> = Vec::new();
+    for turn in &turns {
+        let ts = turn.timestamp.clone().unwrap_or_default();
+        match turn.role {
+            crate::scraper::Role::User => {
+                let parts: Vec<UserPart> = turn.parts.iter().filter_map(|p| match p {
+                    crate::scraper::Part::Text(s) => Some(UserPart::Text(s.clone())),
+                    // classify() only ever attributes tool calls to the
+                    // assistant role, so this shouldn't occur in practice.
+                    crate::scraper::Part::ToolCall { .. } => None,
+                }).collect();
+                if !parts.is_empty() { cards.push(Card::UserMsg { ts, parts, author: None }); }
+            }
+            crate::scraper::Role::Assistant => {
+                let parts: Vec<AsstPart> = turn.parts.iter().map(|p| match p {
+                    crate::scraper::Part::Text(s) => AsstPart::Text(s.clone()),
+                    crate::scraper::Part::ToolCall { id, name, input, result } => AsstPart::ToolCall {
+                        id: id.clone().unwrap_or_default(),
+                        name: name.clone(),
+                        input: input.clone(),
+                        // The scraper doesn't surface a success/failure signal
+                        // for generic agents, so results never render as errors.
+                        result: result.as_ref().map(|r| (r.clone(), false)),
+                    },
+                }).collect();
+                if !parts.is_empty() { cards.push(Card::AsstMsg { ts, parts }); }
+            }
+        }
+    }
+
+    let mut result = vec![Card::Header {
+        title: None,
+        cwd: info.cwd.unwrap_or_default(),
+        branch: info.branch.unwrap_or_default(),
+        ts: first_ts,
+        agent: agent.to_string(),
+    }];
+    result.extend(cards);
     result
 }
 
@@ -1892,4 +1954,63 @@ fn draw(
 
     stdout.write_all(&buf)?;
     stdout.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_dispatches_codex_sessions_through_the_scraper() {
+        let jsonl = r#"{"timestamp":"2026-07-14T15:39:15.0Z","type":"session_meta","payload":{"cwd":"/repo","originator":"Codex Desktop"}}
+{"timestamp":"2026-07-14T15:39:16.0Z","type":"event_msg","payload":{"type":"user_message","message":"fix the flaky test"}}
+{"timestamp":"2026-07-14T15:39:17.0Z","type":"event_msg","payload":{"type":"agent_message","message":"On it."}}
+{"timestamp":"2026-07-14T15:39:18.0Z","type":"response_item","payload":{"type":"function_call","name":"exec","arguments":"{\"cmd\":\"pytest\"}","call_id":"c1"}}
+{"timestamp":"2026-07-14T15:39:19.0Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"1 passed"}]}}"#;
+
+        let cards = parse(jsonl, "Codex");
+
+        let Card::Header { agent, cwd, .. } = &cards[0] else { panic!("expected Header first") };
+        assert_eq!(agent, "Codex");
+        assert_eq!(cwd, "/repo");
+
+        let user_texts: Vec<&str> = cards.iter().filter_map(|c| {
+            if let Card::UserMsg { parts, .. } = c {
+                parts.iter().find_map(|p| if let UserPart::Text(t) = p { Some(t.as_str()) } else { None })
+            } else { None }
+        }).collect();
+        assert_eq!(user_texts, vec!["fix the flaky test"]);
+
+        let asst_texts: Vec<&str> = cards.iter().filter_map(|c| {
+            if let Card::AsstMsg { parts, .. } = c {
+                parts.iter().find_map(|p| if let AsstPart::Text(t) = p { Some(t.as_str()) } else { None })
+            } else { None }
+        }).collect();
+        assert_eq!(asst_texts, vec!["On it."]);
+
+        // The lone function_call/function_call_output pair became its own
+        // turn, then the shared split-into-ToolRound pipeline peeled it off
+        // the merged assistant run into an interactive tool-call card.
+        let tool_round = cards.iter().find_map(|c| {
+            if let Card::ToolRound { parts } = c { Some(parts) } else { None }
+        }).expect("expected a ToolRound card");
+        assert_eq!(tool_round.len(), 1);
+        let AsstPart::ToolCall { name, input, result, .. } = &tool_round[0] else { panic!("expected a tool call") };
+        assert_eq!(name, "exec");
+        assert_eq!(input["cmd"].as_str(), Some("pytest"));
+        assert_eq!(result.as_ref().map(|(text, is_error)| (text.as_str(), *is_error)), Some(("1 passed", false)));
+    }
+
+    #[test]
+    fn parse_still_dispatches_claude_sessions_through_the_line_walker() {
+        let jsonl = r#"{"type":"user","timestamp":"2026-07-14T15:39:15.0Z","cwd":"/repo","message":{"role":"user","content":"hello"}}
+{"type":"assistant","timestamp":"2026-07-14T15:39:16.0Z","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}"#;
+
+        let cards = parse(jsonl, "Claude Code");
+        let Card::Header { agent, cwd, .. } = &cards[0] else { panic!("expected Header first") };
+        assert_eq!(agent, "Claude Code");
+        assert_eq!(cwd, "/repo");
+        assert!(cards.iter().any(|c| matches!(c, Card::UserMsg { .. })));
+        assert!(cards.iter().any(|c| matches!(c, Card::AsstMsg { .. })));
+    }
 }
