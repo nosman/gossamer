@@ -1616,6 +1616,27 @@ fn build_flat(
 // the CLI). `Quit` propagates a full-app exit so q from anywhere quits.
 enum PagerOutcome { Back, Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
+/// The furthest `scroll` can advance while still filling the screen with content.
+fn max_scroll(flat_len: usize, h: usize) -> usize {
+    flat_len.saturating_sub(h)
+}
+
+/// Bring the selected item into view: scroll up if its start is above the
+/// viewport, or down if its end is below it. Items taller than the screen
+/// scroll only as far as their start, so the header stays visible rather
+/// than jumping into the body — free scrolling past that point is up to
+/// the arrow/PageUp/PageDown handlers, not this snap.
+fn snap_scroll(scroll: &mut usize, sel: usize, starts: &[usize], flat_len: usize, h: usize) {
+    let s = starts[sel];
+    let e = starts.get(sel + 1).copied().unwrap_or(flat_len);
+    if s < *scroll {
+        *scroll = s;
+    } else if e > *scroll + h {
+        *scroll = e.saturating_sub(h);
+        if *scroll > s { *scroll = s; }
+    }
+}
+
 fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _hit_off: Option<u64>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
@@ -1701,18 +1722,16 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
     let mut flash:  Option<&str> = None;
     let mut awaiting_delete = false;
 
-    let result: Result<PagerOutcome> = loop {
-        let s = starts[sel];
-        let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
-        if s < scroll {
-            scroll = s;
-        } else if e > scroll + h {
-            scroll = e.saturating_sub(h);
-            // For items taller than the screen, prefer showing the start so the
-            // header is always visible rather than scrolling into the body.
-            if scroll > s { scroll = s; }
-        }
+    // Bring the initial selection into view. After this, `scroll` moves
+    // independently of `sel` — arrow keys and PageUp/PageDown scroll the
+    // viewport freely (needed to read a message taller than the screen),
+    // while j/k-style jumps re-snap the viewport to the newly selected
+    // message. Without that split, re-clamping to the selection on every
+    // frame meant an oversized message could never be scrolled past its
+    // first screenful.
+    snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
 
+    let result: Result<PagerOutcome> = loop {
         if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, selectables.len(), flash) {
             break Err(anyhow::anyhow!(err));
         }
@@ -1735,14 +1754,24 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         break Ok(PagerOutcome::Delete);
                     }
 
-                    (KeyCode::Down | KeyCode::Char('j'), _) => {
+                    // j/k jump between whole messages and snap the viewport to
+                    // show the newly selected one, top to bottom.
+                    (KeyCode::Char('j'), _) => {
                         if sel + 1 < selectables.len() { sel += 1; }
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                     }
-                    (KeyCode::Up | KeyCode::Char('k'), _) => {
+                    (KeyCode::Char('k'), _) => {
                         if sel > 0 { sel -= 1; }
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                     }
-                    (KeyCode::Char('g'), _) => { sel = 0; }
-                    (KeyCode::Char('G'), _) => { sel = selectables.len().saturating_sub(1); }
+                    (KeyCode::Char('g'), _) => {
+                        sel = 0;
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                    }
+                    (KeyCode::Char('G'), _) => {
+                        sel = selectables.len().saturating_sub(1);
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                    }
 
                     (KeyCode::Char(']'), _) => {
                         let is_cp = |s: &Selectable| match s {
@@ -1752,6 +1781,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         };
                         if let Some(i) = selectables.iter().enumerate().skip(sel + 1).find(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                         }
                     }
                     (KeyCode::Char('['), _) => {
@@ -1762,16 +1792,26 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         };
                         if let Some(i) = selectables.iter().enumerate().take(sel).rfind(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                         }
+                    }
+
+                    // Arrow keys scroll the viewport by a line at a time,
+                    // independent of which message is selected — this is what
+                    // lets you read all the way through a message taller than
+                    // the screen instead of always snapping back to its top.
+                    (KeyCode::Down, _) => {
+                        scroll = (scroll + 1).min(max_scroll(flat.len(), h));
+                    }
+                    (KeyCode::Up, _) => {
+                        scroll = scroll.saturating_sub(1);
                     }
 
                     (KeyCode::Char('u'), _) | (KeyCode::PageUp, _) => {
                         scroll = scroll.saturating_sub(h / 2);
-                        sel = flat[scroll].0;
                     }
                     (KeyCode::PageDown, _) => {
-                        scroll = (scroll + h / 2).min(flat.len().saturating_sub(h));
-                        sel = flat[scroll].0;
+                        scroll = (scroll + h / 2).min(max_scroll(flat.len(), h));
                     }
 
                     (KeyCode::Char('y'), _) | (KeyCode::Char('c'), _) => {
@@ -1822,6 +1862,9 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                                 ns.iter().position(|s| *s == Selectable::Card(card_idx))
                             }.unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
+                            // Rebuilding re-lays-out every line, so the old `scroll`
+                            // line index no longer means anything — resync it.
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                         } else if let Selectable::CheckpointFile(ci, fi) = &selectables[sel] {
                             let key = (*ci, *fi);
                             if expanded_files.contains(&key) {
@@ -1842,6 +1885,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                             sel = ns.iter().position(|s| *s == target)
                                 .unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                         } else if let Selectable::Card(ci) = &selectables[sel] {
                             match &cards[*ci] {
                                 Card::RepoLink { dir, .. } => {
@@ -1878,6 +1922,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                 h = (new_h as usize).saturating_sub(1);
                 let (nf, ns, nst) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
                 flat = nf; selectables = ns; starts = nst;
+                snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
             Ok(_) => {}
@@ -1937,7 +1982,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k next/prev  ↑↓ scroll  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
@@ -1959,6 +2004,44 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_scroll_pins_oversized_items_to_their_start() {
+        // Three selectables: [0,5), [5,50) (45 lines — taller than the
+        // h=10 screen), [50,60).
+        let starts = vec![0, 5, 50];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 60, 10);
+        // A naive "scroll down to show the end" would land on 40; pinning to
+        // the start instead keeps the item's header on screen.
+        assert_eq!(scroll, 5);
+    }
+
+    #[test]
+    fn snap_scroll_is_a_noop_when_the_item_already_fits_on_screen() {
+        // A 5-line item at [5,10) is already fully inside a 10-line viewport
+        // starting at 0 — nothing should move.
+        let starts = vec![0, 5, 10];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 15, 10);
+        assert_eq!(scroll, 0);
+    }
+
+    #[test]
+    fn snap_scroll_scrolls_down_for_forward_navigation() {
+        // A short item [10,15) sits below an 8-line viewport starting at 0 —
+        // scroll down just enough to reveal all of it.
+        let starts = vec![0, 10];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 15, 8);
+        assert_eq!(scroll, 7);
+    }
+
+    #[test]
+    fn max_scroll_stops_at_the_last_screenful() {
+        assert_eq!(max_scroll(100, 20), 80);
+        assert_eq!(max_scroll(10, 20), 0);
+    }
 
     #[test]
     fn parse_dispatches_codex_sessions_through_the_scraper() {
