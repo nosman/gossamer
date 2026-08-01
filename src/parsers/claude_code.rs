@@ -6,31 +6,12 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use serde_json::Value;
 
-use super::ParsedSession;
+use super::{CheckpointMetadata, ParsedSession};
 
 pub fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8]) -> Result<ParsedSession> {
-    #[derive(Deserialize)]
-    struct SessionMetadata {
-        session_id: String,
-        agent: Option<String>,
-        created_at: Option<String>,
-        branch: Option<String>,
-        summary: Option<Summary>,
-        token_usage: Option<TokenUsage>,
-    }
-    #[derive(Deserialize)]
-    struct Summary {
-        intent: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct TokenUsage {
-        output_tokens: Option<i64>,
-    }
-
-    let meta: SessionMetadata = serde_json::from_slice(meta_bytes)
+    let meta: CheckpointMetadata = serde_json::from_slice(meta_bytes)
         .context("failed to parse metadata.json")?;
 
     let created_at: DateTime<Utc> = meta
@@ -44,7 +25,7 @@ pub fn parse_session(meta_bytes: &[u8], jsonl_bytes: &[u8]) -> Result<ParsedSess
         .summary
         .and_then(|s| s.intent)
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| format!("session:{}", &meta.session_id[..8]));
+        .unwrap_or_else(|| format!("session:{}", &meta.session_id[..meta.session_id.len().min(8)]));
 
     let agent_name = meta.agent.unwrap_or_else(|| "Claude Code".to_string());
     let meta_branch = meta.branch.unwrap_or_default();
@@ -224,7 +205,7 @@ fn extract_user_text(content: &Value) -> Option<String> {
 /// Prompts whose first line is just a wrapper tag carry no user intent —
 /// they're slash-command metadata, bash output captured by Claude Code, task
 /// notifications, etc. Skip these when deciding the session's display name.
-fn is_wrapper_prompt(text: &str) -> bool {
+pub(crate) fn is_wrapper_prompt(text: &str) -> bool {
     let first_line = text.lines().next().unwrap_or("").trim_start();
     const TAGS: &[&str] = &[
         "<command-message",

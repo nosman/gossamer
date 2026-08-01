@@ -331,11 +331,11 @@ pub fn run(json: bool) -> Result<()> {
     if !json { println!("\n{} session(s) indexed.", grand_total); }
 
     if !json { println!("\nIndexing into search DB..."); }
-    // Full re-index: clear per-repo watermarks so ingest_claude_code processes
-    // every session, not just ones added since the last run.
+    // Full re-index: clear per-repo watermarks so ingest_checkpoint_sessions
+    // processes every session, not just ones added since the last run.
     let _ = conn.execute("UPDATE repositories SET last_search_commit = NULL", []);
     let mut wc_db = ingest::open_search_db()?;
-    let turns    = ingest::claude_code::ingest_claude_code(&mut wc_db)?;
+    let turns    = ingest::ingest_checkpoint_sessions(&mut wc_db)?;
     let sessions = ingest::ingest_sessions(&mut wc_db).unwrap_or(0);
     let repos_n  = ingest::ingest_repos(&mut wc_db).unwrap_or(0);
     if !json { println!("{turns} log turn(s), {sessions} session name(s), {repos_n} repo(s) indexed."); }

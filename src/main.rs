@@ -7,6 +7,7 @@ mod db;
 mod entity;
 mod ingest;
 mod parsers;
+mod scraper;
 mod theme;
 mod watermark;
 
