@@ -1637,6 +1637,15 @@ fn snap_scroll(scroll: &mut usize, sel: usize, starts: &[usize], flat_len: usize
     }
 }
 
+/// The selectable that owns a given line of `flat`, found via `starts`
+/// (each selectable's first line index, in ascending order). Used to keep
+/// the border highlight following a persistent line `cursor` as it moves —
+/// see the comment on `cursor` in `pager` for why that's a separate concept
+/// from `scroll`.
+fn selectable_at_line(line: usize, starts: &[usize]) -> usize {
+    starts.partition_point(|&s| s <= line).saturating_sub(1)
+}
+
 fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _hit_off: Option<u64>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
@@ -1719,20 +1728,23 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
+    // `cursor` is a persistent line index — "the line I'm logically on" —
+    // separate from `scroll` (the viewport's top line). j/k and friends jump
+    // it (and `sel`) to the top of a whole new message, snapping the
+    // viewport to show that message. Arrow keys/PageUp/PageDown instead move
+    // `cursor` a line (or half-screen) at a time and just keep it visible,
+    // so `sel` (and the border highlight) always tracks whichever turn the
+    // cursor line actually belongs to — even mid-scroll through an oversized
+    // message — instead of whatever happens to be at the top of the screen.
+    let mut cursor: usize = starts[sel];
     let mut flash:  Option<&str> = None;
     let mut awaiting_delete = false;
 
-    // Bring the initial selection into view. After this, `scroll` moves
-    // independently of `sel` — arrow keys and PageUp/PageDown scroll the
-    // viewport freely (needed to read a message taller than the screen),
-    // while j/k-style jumps re-snap the viewport to the newly selected
-    // message. Without that split, re-clamping to the selection on every
-    // frame meant an oversized message could never be scrolled past its
-    // first screenful.
+    // Bring the initial selection into view.
     snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
 
     let result: Result<PagerOutcome> = loop {
-        if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, selectables.len(), flash) {
+        if let Err(err) = draw(&mut stdout, &flat, &starts, sel, cursor, scroll, h, w, selectables.len(), flash) {
             break Err(anyhow::anyhow!(err));
         }
 
@@ -1754,23 +1766,27 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         break Ok(PagerOutcome::Delete);
                     }
 
-                    // j/k jump between whole messages and snap the viewport to
-                    // show the newly selected one, top to bottom.
+                    // j/k jump between whole messages and snap the viewport
+                    // to show the newly selected one, top to bottom.
                     (KeyCode::Char('j'), _) => {
                         if sel + 1 < selectables.len() { sel += 1; }
                         snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
                     (KeyCode::Char('k'), _) => {
                         if sel > 0 { sel -= 1; }
                         snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
                     (KeyCode::Char('g'), _) => {
                         sel = 0;
                         snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
                     (KeyCode::Char('G'), _) => {
                         sel = selectables.len().saturating_sub(1);
                         snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
 
                     (KeyCode::Char(']'), _) => {
@@ -1782,6 +1798,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         if let Some(i) = selectables.iter().enumerate().skip(sel + 1).find(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
                             snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         }
                     }
                     (KeyCode::Char('['), _) => {
@@ -1793,25 +1810,36 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         if let Some(i) = selectables.iter().enumerate().take(sel).rfind(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
                             snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         }
                     }
 
-                    // Arrow keys scroll the viewport by a line at a time,
-                    // independent of which message is selected — this is what
-                    // lets you read all the way through a message taller than
-                    // the screen instead of always snapping back to its top.
+                    // Arrow keys move the line `cursor` one line at a time
+                    // (independent of message boundaries, so an oversized
+                    // message can be read all the way through) and just keep
+                    // it visible; `sel` re-syncs to whichever message the
+                    // cursor line now falls in, so the border highlight
+                    // tracks the actual turn you're on rather than lagging
+                    // behind until the whole previous message scrolls off.
                     (KeyCode::Down, _) => {
-                        scroll = (scroll + 1).min(max_scroll(flat.len(), h));
+                        if cursor + 1 < flat.len() { cursor += 1; }
+                        if cursor >= scroll + h { scroll = cursor + 1 - h; }
+                        sel = selectable_at_line(cursor, &starts);
                     }
                     (KeyCode::Up, _) => {
-                        scroll = scroll.saturating_sub(1);
+                        cursor = cursor.saturating_sub(1);
+                        if cursor < scroll { scroll = cursor; }
+                        sel = selectable_at_line(cursor, &starts);
                     }
-
                     (KeyCode::Char('u'), _) | (KeyCode::PageUp, _) => {
                         scroll = scroll.saturating_sub(h / 2);
+                        cursor = scroll;
+                        sel = selectable_at_line(cursor, &starts);
                     }
                     (KeyCode::PageDown, _) => {
                         scroll = (scroll + h / 2).min(max_scroll(flat.len(), h));
+                        cursor = scroll;
+                        sel = selectable_at_line(cursor, &starts);
                     }
 
                     (KeyCode::Char('y'), _) | (KeyCode::Char('c'), _) => {
@@ -1865,6 +1893,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                             // Rebuilding re-lays-out every line, so the old `scroll`
                             // line index no longer means anything — resync it.
                             snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         } else if let Selectable::CheckpointFile(ci, fi) = &selectables[sel] {
                             let key = (*ci, *fi);
                             if expanded_files.contains(&key) {
@@ -1886,6 +1915,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                                 .unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
                             snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         } else if let Selectable::Card(ci) = &selectables[sel] {
                             match &cards[*ci] {
                                 Card::RepoLink { dir, .. } => {
@@ -1923,6 +1953,7 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                 let (nf, ns, nst) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
                 flat = nf; selectables = ns; starts = nst;
                 snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                cursor = starts[sel];
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
             Ok(_) => {}
@@ -1939,6 +1970,7 @@ fn draw(
     flat:   &[(usize, String)],
     starts: &[usize],
     sel:    usize,
+    cursor_line: usize,
     scroll: usize,
     h:      usize,
     w:      usize,
@@ -1946,7 +1978,15 @@ fn draw(
     flash:  Option<&str>,
 ) -> io::Result<()> {
     use crossterm::queue;
-    let accent = crate::theme::get().accent;
+    let t = crate::theme::get();
+    let accent = t.accent;
+    // The exact cursor line gets its own color, distinct from the accent bar
+    // that marks the rest of the selected turn — otherwise, scrolled deep
+    // into a multi-line turn, every visible line looks identically
+    // highlighted and there's no way to tell which one you're actually on.
+    // Bolded (and a full block instead of a half block) so it reads as
+    // unmistakably brighter than the plain accent bar.
+    let cursor_accent = format!("1;{}", t.fresh);
 
     let end = (scroll + h).min(flat.len());
 
@@ -1964,11 +2004,12 @@ fn draw(
             if *card_idx == sel {
                 let is_first = flat_idx == 0 || flat[flat_idx - 1].0 != sel;
                 if is_first {
-                    let t = crate::theme::get();
                     let bg = t.sel_bg;
                     let colored = super::with_bg(line, bg);
                     let pad = w.saturating_sub(2 + super::visible_width(line));
                     write!(buf, "\x1b[{bg}m  {colored}{}\x1b[0m", " ".repeat(pad))?;
+                } else if flat_idx == cursor_line {
+                    write!(buf, "\x1b[{}m█\x1b[0m {line}", cursor_accent)?;
                 } else {
                     write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
                 }
