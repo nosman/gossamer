@@ -1,0 +1,25 @@
+Undo the previous mouse toggling. let's make a simple update to the individual repos view- show the name of the agent that is being used in the session. Use the same color coding as in the individual sessions viwe
+
+---
+
+The color coding does not work tho!
+
+---
+
+I discovered a problem, the up down j/k navigation changes in the individual session view broke the checkpoint view! i can no longer expand a file to show its diff
+
+---
+
+hey you stupid fuck that's not what i meant! up/down should still only go line by line. however, the border highlighting should highlight the WHOLE TURN that i'm on wether i reached that turn using up/down or j/k. DO YOU UNDERSTAND?
+
+---
+
+Still a bunch of problems- [Image #1]. when i jump to the next turn using j, it's fine. i can expand the checkpoint. but when i use the down arrow to go to a specific line, the border is highlighted on the wrong turn, and it also doesn't let me open a single file change, although going there with the k key does
+
+---
+
+make the border highlight of the currently selected line a different color so that we can actually see which precise line we're on
+
+---
+
+can you make the cursor highlight even brighter?
