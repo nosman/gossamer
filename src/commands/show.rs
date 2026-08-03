@@ -1616,6 +1616,36 @@ fn build_flat(
 // the CLI). `Quit` propagates a full-app exit so q from anywhere quits.
 enum PagerOutcome { Back, Quit, Resume, Delete, GoToSessions, GoToRepo(String) }
 
+/// The furthest `scroll` can advance while still filling the screen with content.
+fn max_scroll(flat_len: usize, h: usize) -> usize {
+    flat_len.saturating_sub(h)
+}
+
+/// Bring the selected item into view: scroll up if its start is above the
+/// viewport, or down if its end is below it. Items taller than the screen
+/// scroll only as far as their start, so the header stays visible rather
+/// than jumping into the body — free scrolling past that point is up to
+/// the arrow/PageUp/PageDown handlers, not this snap.
+fn snap_scroll(scroll: &mut usize, sel: usize, starts: &[usize], flat_len: usize, h: usize) {
+    let s = starts[sel];
+    let e = starts.get(sel + 1).copied().unwrap_or(flat_len);
+    if s < *scroll {
+        *scroll = s;
+    } else if e > *scroll + h {
+        *scroll = e.saturating_sub(h);
+        if *scroll > s { *scroll = s; }
+    }
+}
+
+/// The selectable that owns a given line of `flat`, found via `starts`
+/// (each selectable's first line index, in ascending order). Used to keep
+/// the border highlight following a persistent line `cursor` as it moves —
+/// see the comment on `cursor` in `pager` for why that's a separate concept
+/// from `scroll`.
+fn selectable_at_line(line: usize, starts: &[usize]) -> usize {
+    starts.partition_point(|&s| s <= line).saturating_sub(1)
+}
+
 fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _hit_off: Option<u64>) -> Result<PagerOutcome> {
     let (term_w, term_h) = terminal::size().unwrap_or((120, 40));
     let mut w = term_w as usize;
@@ -1698,22 +1728,23 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
 
     let mut sel: usize = initial_sel;
     let mut scroll: usize = 0;
+    // `cursor` is a persistent line index — "the line I'm logically on" —
+    // separate from `scroll` (the viewport's top line). j/k and friends jump
+    // it (and `sel`) to the top of a whole new message, snapping the
+    // viewport to show that message. Arrow keys/PageUp/PageDown instead move
+    // `cursor` a line (or half-screen) at a time and just keep it visible,
+    // so `sel` (and the border highlight) always tracks whichever turn the
+    // cursor line actually belongs to — even mid-scroll through an oversized
+    // message — instead of whatever happens to be at the top of the screen.
+    let mut cursor: usize = starts[sel];
     let mut flash:  Option<&str> = None;
     let mut awaiting_delete = false;
 
-    let result: Result<PagerOutcome> = loop {
-        let s = starts[sel];
-        let e = starts.get(sel + 1).copied().unwrap_or(flat.len());
-        if s < scroll {
-            scroll = s;
-        } else if e > scroll + h {
-            scroll = e.saturating_sub(h);
-            // For items taller than the screen, prefer showing the start so the
-            // header is always visible rather than scrolling into the body.
-            if scroll > s { scroll = s; }
-        }
+    // Bring the initial selection into view.
+    snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
 
-        if let Err(err) = draw(&mut stdout, &flat, &starts, sel, scroll, h, w, selectables.len(), flash) {
+    let result: Result<PagerOutcome> = loop {
+        if let Err(err) = draw(&mut stdout, &flat, &starts, sel, cursor, scroll, h, w, selectables.len(), flash) {
             break Err(anyhow::anyhow!(err));
         }
 
@@ -1735,14 +1766,28 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         break Ok(PagerOutcome::Delete);
                     }
 
-                    (KeyCode::Down | KeyCode::Char('j'), _) => {
+                    // j/k jump between whole messages and snap the viewport
+                    // to show the newly selected one, top to bottom.
+                    (KeyCode::Char('j'), _) => {
                         if sel + 1 < selectables.len() { sel += 1; }
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
-                    (KeyCode::Up | KeyCode::Char('k'), _) => {
+                    (KeyCode::Char('k'), _) => {
                         if sel > 0 { sel -= 1; }
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
                     }
-                    (KeyCode::Char('g'), _) => { sel = 0; }
-                    (KeyCode::Char('G'), _) => { sel = selectables.len().saturating_sub(1); }
+                    (KeyCode::Char('g'), _) => {
+                        sel = 0;
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
+                    }
+                    (KeyCode::Char('G'), _) => {
+                        sel = selectables.len().saturating_sub(1);
+                        snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                        cursor = starts[sel];
+                    }
 
                     (KeyCode::Char(']'), _) => {
                         let is_cp = |s: &Selectable| match s {
@@ -1752,6 +1797,8 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         };
                         if let Some(i) = selectables.iter().enumerate().skip(sel + 1).find(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         }
                     }
                     (KeyCode::Char('['), _) => {
@@ -1762,16 +1809,37 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                         };
                         if let Some(i) = selectables.iter().enumerate().take(sel).rfind(|(_, s)| is_cp(s)).map(|(i, _)| i) {
                             sel = i;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         }
                     }
 
+                    // Arrow keys move the line `cursor` one line at a time
+                    // (independent of message boundaries, so an oversized
+                    // message can be read all the way through) and just keep
+                    // it visible; `sel` re-syncs to whichever message the
+                    // cursor line now falls in, so the border highlight
+                    // tracks the actual turn you're on rather than lagging
+                    // behind until the whole previous message scrolls off.
+                    (KeyCode::Down, _) => {
+                        if cursor + 1 < flat.len() { cursor += 1; }
+                        if cursor >= scroll + h { scroll = cursor + 1 - h; }
+                        sel = selectable_at_line(cursor, &starts);
+                    }
+                    (KeyCode::Up, _) => {
+                        cursor = cursor.saturating_sub(1);
+                        if cursor < scroll { scroll = cursor; }
+                        sel = selectable_at_line(cursor, &starts);
+                    }
                     (KeyCode::Char('u'), _) | (KeyCode::PageUp, _) => {
                         scroll = scroll.saturating_sub(h / 2);
-                        sel = flat[scroll].0;
+                        cursor = scroll;
+                        sel = selectable_at_line(cursor, &starts);
                     }
                     (KeyCode::PageDown, _) => {
-                        scroll = (scroll + h / 2).min(flat.len().saturating_sub(h));
-                        sel = flat[scroll].0;
+                        scroll = (scroll + h / 2).min(max_scroll(flat.len(), h));
+                        cursor = scroll;
+                        sel = selectable_at_line(cursor, &starts);
                     }
 
                     (KeyCode::Char('y'), _) | (KeyCode::Char('c'), _) => {
@@ -1822,6 +1890,10 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                                 ns.iter().position(|s| *s == Selectable::Card(card_idx))
                             }.unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
+                            // Rebuilding re-lays-out every line, so the old `scroll`
+                            // line index no longer means anything — resync it.
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         } else if let Selectable::CheckpointFile(ci, fi) = &selectables[sel] {
                             let key = (*ci, *fi);
                             if expanded_files.contains(&key) {
@@ -1842,6 +1914,8 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                             sel = ns.iter().position(|s| *s == target)
                                 .unwrap_or_else(|| sel.min(ns.len().saturating_sub(1)));
                             selectables = ns;
+                            snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                            cursor = starts[sel];
                         } else if let Selectable::Card(ci) = &selectables[sel] {
                             match &cards[*ci] {
                                 Card::RepoLink { dir, .. } => {
@@ -1878,6 +1952,8 @@ fn pager(cards: &[Card], start_ts: Option<&str>, checkpoint_id: Option<&str>, _h
                 h = (new_h as usize).saturating_sub(1);
                 let (nf, ns, nst) = build_flat(&cards, w, &collapsed, &expanded_files, &diff_cache);
                 flat = nf; selectables = ns; starts = nst;
+                snap_scroll(&mut scroll, sel, &starts, flat.len(), h);
+                cursor = starts[sel];
                 execute!(stdout, terminal::Clear(ClearType::All)).ok();
             }
             Ok(_) => {}
@@ -1894,6 +1970,7 @@ fn draw(
     flat:   &[(usize, String)],
     starts: &[usize],
     sel:    usize,
+    cursor_line: usize,
     scroll: usize,
     h:      usize,
     w:      usize,
@@ -1901,7 +1978,15 @@ fn draw(
     flash:  Option<&str>,
 ) -> io::Result<()> {
     use crossterm::queue;
-    let accent = crate::theme::get().accent;
+    let t = crate::theme::get();
+    let accent = t.accent;
+    // The exact cursor line gets its own color, distinct from the accent bar
+    // that marks the rest of the selected turn — otherwise, scrolled deep
+    // into a multi-line turn, every visible line looks identically
+    // highlighted and there's no way to tell which one you're actually on.
+    // Bolded (and a full block instead of a half block) so it reads as
+    // unmistakably brighter than the plain accent bar.
+    let cursor_accent = format!("1;{}", t.fresh);
 
     let end = (scroll + h).min(flat.len());
 
@@ -1919,11 +2004,12 @@ fn draw(
             if *card_idx == sel {
                 let is_first = flat_idx == 0 || flat[flat_idx - 1].0 != sel;
                 if is_first {
-                    let t = crate::theme::get();
                     let bg = t.sel_bg;
                     let colored = super::with_bg(line, bg);
                     let pad = w.saturating_sub(2 + super::visible_width(line));
                     write!(buf, "\x1b[{bg}m  {colored}{}\x1b[0m", " ".repeat(pad))?;
+                } else if flat_idx == cursor_line {
+                    write!(buf, "\x1b[{}m█\x1b[0m {line}", cursor_accent)?;
                 } else {
                     write!(buf, "\x1b[{}m▌\x1b[0m {line}", accent)?;
                 }
@@ -1937,7 +2023,7 @@ fn draw(
     // Status bar
     let sel_end = starts.get(sel + 1).copied().unwrap_or(flat.len());
     let base = format!(
-        "  {}/{} msgs  lines {}-{}  j/k ↑↓ navigate  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
+        "  {}/{} msgs  lines {}-{}  j/k next/prev  ↑↓ scroll  ]/[ checkpoint  u/PgDn page  g/G ends  y/c copy  r resume  d delete  / search  q quit  ",
         sel + 1, total, starts[sel] + 1, sel_end,
     );
     let bar = if let Some(msg) = flash {
@@ -1959,6 +2045,44 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snap_scroll_pins_oversized_items_to_their_start() {
+        // Three selectables: [0,5), [5,50) (45 lines — taller than the
+        // h=10 screen), [50,60).
+        let starts = vec![0, 5, 50];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 60, 10);
+        // A naive "scroll down to show the end" would land on 40; pinning to
+        // the start instead keeps the item's header on screen.
+        assert_eq!(scroll, 5);
+    }
+
+    #[test]
+    fn snap_scroll_is_a_noop_when_the_item_already_fits_on_screen() {
+        // A 5-line item at [5,10) is already fully inside a 10-line viewport
+        // starting at 0 — nothing should move.
+        let starts = vec![0, 5, 10];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 15, 10);
+        assert_eq!(scroll, 0);
+    }
+
+    #[test]
+    fn snap_scroll_scrolls_down_for_forward_navigation() {
+        // A short item [10,15) sits below an 8-line viewport starting at 0 —
+        // scroll down just enough to reveal all of it.
+        let starts = vec![0, 10];
+        let mut scroll = 0;
+        snap_scroll(&mut scroll, 1, &starts, 15, 8);
+        assert_eq!(scroll, 7);
+    }
+
+    #[test]
+    fn max_scroll_stops_at_the_last_screenful() {
+        assert_eq!(max_scroll(100, 20), 80);
+        assert_eq!(max_scroll(10, 20), 0);
+    }
 
     #[test]
     fn parse_dispatches_codex_sessions_through_the_scraper() {

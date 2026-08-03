@@ -529,6 +529,7 @@ fn draw_sessions(
         }
     } else {
         let name_w   = sessions.iter().map(|s| s.session_name.trim().chars().count()).max().unwrap_or(0).min(40);
+        let agent_w  = sessions.iter().map(|s| s.agent_name.chars().count()).max().unwrap_or(0);
         let branch_w = sessions.iter().map(|s| s.branch.chars().count()).max().unwrap_or(0);
         let author_w = sessions.iter().map(|s| s.author.chars().count()).max().unwrap_or(0);
         let tokens_w = {
@@ -539,6 +540,7 @@ fn draw_sessions(
         if row < content_h {
             let dm = t.text_dim;
             let mut hdr = format!("  {:<name_w$}", "session");
+            if agent_w > 0 { hdr.push_str(&format!("  {:<agent_w$}", "agent")); }
             if branch_w > 0 { hdr.push_str(&format!("  {:<branch_w$}", "branch")); }
             if author_w > 0 { hdr.push_str(&format!("  {:<author_w$}", "author")); }
             if tokens_w > 0 { hdr.push_str(&format!("  {:>tokens_w$}", "tokens")); }
@@ -579,6 +581,13 @@ fn draw_sessions(
 
             let name_padded = format!("{:<name_w$}", name);
             let mut line = format!("\x1b[{dot_col}m{dot_char}\x1b[0m \x1b[{name_col}m{name_padded}\x1b[0m");
+
+            if agent_w > 0 {
+                let ac = super::agent_color(&s.agent_name);
+                let a: String = s.agent_name.chars().take(agent_w).collect();
+                let pad = " ".repeat(agent_w - a.chars().count());
+                line.push_str(&format!("  \x1b[38;5;{ac}m{a}{pad}\x1b[0m"));
+            }
 
             if branch_w > 0 {
                 let b: String = s.branch.chars().take(branch_w).collect();

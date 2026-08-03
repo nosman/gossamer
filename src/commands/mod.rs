@@ -123,8 +123,12 @@ pub(super) fn collect_search_query(stdout: &mut impl Write, w: usize, h: usize) 
     collect_text_input(stdout, "  / ", w, h)
 }
 
-pub fn agent_color(_name: &str) -> u8 {
-    214 // Claude Code orange
+pub fn agent_color(name: &str) -> u8 {
+    if name.to_lowercase().contains("codex") {
+        183 // Codex lavender
+    } else {
+        214 // Claude Code orange
+    }
 }
 
 /// Deterministic per-author color so the same human always renders the same
