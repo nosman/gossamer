@@ -22,7 +22,7 @@ Gossamer ships as the binary `entire-gossamer`, invoked as `entire gossamer ...`
 
 ### Semantic search (`entire gossamer search`)
 
-<!-- screenshot: docs/screenshots/search.png -->
+https://github.com/user-attachments/assets/d82c8fcf-ac47-4392-83f3-5a90fb100eac
 
 ## Installation
 
