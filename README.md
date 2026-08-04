@@ -17,6 +17,9 @@ Gossamer ships as the binary `entire-gossamer`, invoked as `entire gossamer ...`
 
 <img width="1182" height="567" alt="ClaudeSessionExample" src="https://github.com/user-attachments/assets/ab5c0db0-3de5-4c75-bd1e-0c20a3d8684f" />
 
+Checkpoint view: gossamer shows entire checkpoints within the sessions they occurred in. You can also see the file change sets for the given checkpoint.
+
+<img width="1182" height="791" alt="Screenshot 2026-08-04 at 12 29 32 AM" src="https://github.com/user-attachments/assets/f79751cb-1c03-4199-8758-e325958fbd80" />
 
 
 
@@ -42,16 +45,6 @@ entire plugin install ./target/release/entire-gossamer --force
 # 3. Verify
 entire gossamer --help
 entire gossamer          # opens the repo browser TUI
-```
-
-Entire plugins are local executables, not a hosted marketplace: `entire gossamer` works because Entire finds an `entire-gossamer` binary in its managed plugin directory or on `$PATH`. `entire plugin install` symlinks the binary you point it at into that managed directory (`~/.local/share/entire/plugins/bin` on macOS/Linux by default); Entire itself prepends that directory to `$PATH` for the subprocesses it spawns, but your interactive shell won't see it unless you add it yourself. So `entire gossamer ...` is the reliable invocation from any shell; calling `entire-gossamer ...` directly also works, but only once that directory (or wherever else you installed the binary) is actually on your shell's `$PATH`.
-
-If you're using the npm-packaged skill (installs the gossamer Claude Code skill into `~/.claude/plugins` — a separate, unrelated plugin system from Entire's):
-
-```bash
-npm install -g .
-# or, after publishing:
-npx gossamer-skill
 ```
 
 ## Commands
