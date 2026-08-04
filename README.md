@@ -8,11 +8,17 @@ Gossamer ships as the binary `entire-gossamer`, invoked as `entire gossamer ...`
 
 ### Repo browser (`entire gossamer repo`)
 
-<!-- screenshot: docs/screenshots/repo.png -->
+<img width="1182" height="245" alt="GossamerRepos" src="https://github.com/user-attachments/assets/4a6c10fa-4dc4-45b0-bcbb-74c36acc9373" />
+
+<img width="1182" height="567" alt="Screenshot 2026-08-02 at 11 59 04 PM" src="https://github.com/user-attachments/assets/fbcf0684-a5d8-44b9-9f3a-87749823d1b6" />
+
 
 ### Session transcript viewer (`entire gossamer show`)
 
-<!-- screenshot: docs/screenshots/show.png -->
+<img width="1182" height="567" alt="ClaudeSessionExample" src="https://github.com/user-attachments/assets/ab5c0db0-3de5-4c75-bd1e-0c20a3d8684f" />
+
+
+
 
 ### Semantic search (`entire gossamer search`)
 
