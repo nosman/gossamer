@@ -10,6 +10,8 @@ Gossamer ships as the binary `entire-gossamer`, invoked as `entire gossamer ...`
 
 <img width="1182" height="245" alt="GossamerRepos" src="https://github.com/user-attachments/assets/4a6c10fa-4dc4-45b0-bcbb-74c36acc9373" />
 
+See all sessions within a repo.
+
 <img width="1182" height="567" alt="Screenshot 2026-08-02 at 11 59 04 PM" src="https://github.com/user-attachments/assets/fbcf0684-a5d8-44b9-9f3a-87749823d1b6" />
 
 
@@ -22,6 +24,9 @@ Checkpoint view: gossamer shows entire checkpoints within the sessions they occu
 <img width="1182" height="791" alt="Screenshot 2026-08-04 at 12 29 32 AM" src="https://github.com/user-attachments/assets/f79751cb-1c03-4199-8758-e325958fbd80" />
 
 
+### Session launcher (`entire gossamer launch`)
+
+https://github.com/user-attachments/assets/77f936fd-fd25-4953-be79-73a77deef65e
 
 ### Semantic search (`entire gossamer search`)
 
